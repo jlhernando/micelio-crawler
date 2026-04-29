@@ -1,0 +1,35 @@
+#!/bin/bash
+# Micelio macOS App Launcher
+# Starts the web server and opens the dashboard in the default browser.
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+BINARY="$DIR/micelio"
+PORT=3100
+LOG_FILE="$HOME/Library/Logs/Micelio/micelio.log"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+# Kill any existing Micelio process on the same port
+lsof -ti :"$PORT" 2>/dev/null | xargs kill 2>/dev/null
+sleep 1
+# Force-kill if still alive
+lsof -ti :"$PORT" 2>/dev/null | xargs kill -9 2>/dev/null
+sleep 0.5
+
+# Start the server in the background
+"$BINARY" ui --port "$PORT" >>"$LOG_FILE" 2>&1 &
+SERVER_PID=$!
+
+# Wait for the server to be ready (up to 10 seconds)
+for i in $(seq 1 20); do
+    if curl -s -o /dev/null "http://localhost:$PORT" 2>/dev/null; then
+        break
+    fi
+    sleep 0.5
+done
+
+# Open the dashboard in the default browser
+open "http://localhost:$PORT"
+
+# Wait for the server process — when the app is quit, this exits too
+wait $SERVER_PID

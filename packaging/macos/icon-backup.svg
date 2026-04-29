@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f3460"/>
+      <stop offset="100%" style="stop-color:#533483"/>
+    </linearGradient>
+    <linearGradient id="node" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#e94560"/>
+      <stop offset="100%" style="stop-color:#ff6b6b"/>
+    </linearGradient>
+    <linearGradient id="link" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f3460;stop-opacity:0.8"/>
+      <stop offset="100%" style="stop-color:#533483;stop-opacity:0.6"/>
+    </linearGradient>
+  </defs>
+  <!-- Background rounded square -->
+  <rect width="1024" height="1024" rx="200" fill="url(#bg)"/>
+  <!-- Inner glow -->
+  <rect x="40" y="40" width="944" height="944" rx="170" fill="url(#glow)" opacity="0.3"/>
+  <!-- Network edges (mycelium connections) -->
+  <g stroke="url(#link)" stroke-width="4" fill="none" opacity="0.7">
+    <!-- Central hub connections -->
+    <path d="M512 420 L340 300" stroke-width="5"/>
+    <path d="M512 420 L680 280" stroke-width="5"/>
+    <path d="M512 420 L280 500" stroke-width="4"/>
+    <path d="M512 420 L750 480" stroke-width="4"/>
+    <path d="M512 420 L400 620" stroke-width="5"/>
+    <path d="M512 420 L650 600" stroke-width="5"/>
+    <path d="M512 420 L512 700" stroke-width="3"/>
+    <!-- Secondary connections -->
+    <path d="M340 300 L220 220" stroke-width="3"/>
+    <path d="M340 300 L280 500" stroke-width="3"/>
+    <path d="M680 280 L800 200" stroke-width="3"/>
+    <path d="M680 280 L750 480" stroke-width="3"/>
+    <path d="M280 500 L180 620" stroke-width="2"/>
+    <path d="M750 480 L850 580" stroke-width="2"/>
+    <path d="M400 620 L300 750" stroke-width="3"/>
+    <path d="M650 600 L760 720" stroke-width="3"/>
+    <path d="M400 620 L512 700" stroke-width="2"/>
+    <path d="M650 600 L512 700" stroke-width="2"/>
+    <!-- Tertiary -->
+    <path d="M220 220 L160 340" stroke-width="2" opacity="0.5"/>
+    <path d="M800 200 L860 330" stroke-width="2" opacity="0.5"/>
+    <path d="M300 750 L380 830" stroke-width="2" opacity="0.5"/>
+    <path d="M760 720 L700 820" stroke-width="2" opacity="0.5"/>
+    <path d="M512 700 L512 810" stroke-width="2" opacity="0.5"/>
+  </g>
+  <!-- Central node (largest) -->
+  <circle cx="512" cy="420" r="40" fill="url(#node)"/>
+  <circle cx="512" cy="420" r="30" fill="#e94560" opacity="0.8"/>
+  <!-- Primary nodes -->
+  <circle cx="340" cy="300" r="22" fill="#e94560" opacity="0.9"/>
+  <circle cx="680" cy="280" r="24" fill="#e94560" opacity="0.9"/>
+  <circle cx="280" cy="500" r="18" fill="#e94560" opacity="0.8"/>
+  <circle cx="750" cy="480" r="20" fill="#e94560" opacity="0.8"/>
+  <circle cx="400" cy="620" r="22" fill="#e94560" opacity="0.9"/>
+  <circle cx="650" cy="600" r="20" fill="#e94560" opacity="0.9"/>
+  <circle cx="512" cy="700" r="16" fill="#e94560" opacity="0.7"/>
+  <!-- Secondary nodes -->
+  <circle cx="220" cy="220" r="12" fill="#ff6b6b" opacity="0.7"/>
+  <circle cx="800" cy="200" r="14" fill="#ff6b6b" opacity="0.7"/>
+  <circle cx="180" cy="620" r="10" fill="#ff6b6b" opacity="0.6"/>
+  <circle cx="850" cy="580" r="12" fill="#ff6b6b" opacity="0.6"/>
+  <circle cx="300" cy="750" r="14" fill="#ff6b6b" opacity="0.7"/>
+  <circle cx="760" cy="720" r="12" fill="#ff6b6b" opacity="0.7"/>
+  <!-- Tertiary nodes -->
+  <circle cx="160" cy="340" r="8" fill="#ff6b6b" opacity="0.4"/>
+  <circle cx="860" cy="330" r="8" fill="#ff6b6b" opacity="0.4"/>
+  <circle cx="380" cy="830" r="8" fill="#ff6b6b" opacity="0.4"/>
+  <circle cx="700" cy="820" r="8" fill="#ff6b6b" opacity="0.4"/>
+  <circle cx="512" cy="810" r="8" fill="#ff6b6b" opacity="0.4"/>
+</svg>

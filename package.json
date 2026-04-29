@@ -1,0 +1,48 @@
+{
+  "name": "micelio",
+  "version": "1.0.0",
+  "description": "High-performance Node.js technical SEO crawler",
+  "type": "module",
+  "main": "dist/cli.js",
+  "bin": {
+    "micelio": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:ui": "cd dashboard && npm run build",
+    "dev:ui": "cd dashboard && npm run dev",
+    "start": "tsx src/cli.ts",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "seo",
+    "crawler",
+    "audit",
+    "technical-seo"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@google-analytics/data": "^5.2.1",
+    "@google-cloud/bigquery": "^8.1.1",
+    "better-sqlite3": "^12.6.2",
+    "cheerio": "^1.0.0",
+    "commander": "^12.1.0",
+    "fast-csv": "^5.0.2",
+    "googleapis": "^171.4.0",
+    "p-limit": "^6.2.0",
+    "playwright": "^1.58.2",
+    "robots-parser": "^3.0.1",
+    "undici": "^7.2.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  }
+}

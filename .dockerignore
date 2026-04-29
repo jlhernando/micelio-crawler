@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.claude
+.mcp.json
+.playwright-mcp
+docs
+*.png
+*.jsonl
+*.html
+*.db
+CLAUDE.md
+BACKLOG.md

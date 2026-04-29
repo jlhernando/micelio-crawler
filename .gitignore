@@ -1,0 +1,48 @@
+.DS_Store
+node_modules/
+dist/
+!cmd/micelio/dashboard/dist/
+!cmd/micelio/dashboard/dist/.gitkeep
+*.jsonl
+*.csv
+output.*
+*.html
+!src/**/*.html
+!dashboard/index.html
+.env
+.claude/
+.mcp.json
+.playwright-mcp/
+*.png
+!docs/*.png
+!dashboard/public/*.png
+review-*.md
+
+# Internal / private files
+CLAUDE.md
+BACKLOG.md
+Public-release.md
+todo.md
+designs/
+docs/BOTIFY-*.md
+docs/GO-*.md
+docs/UI-tasks.md
+docs/botify-*.md
+docs/competitive-*.md
+docs/crawl-speed-*.md
+docs/optimization-*.md
+docs/research-*.md
+
+# Crawl artifacts
+*.db
+!dashboard/*.db
+*-summary.json
+*-audit*
+
+# Stress test artifacts
+coverage.out
+metrics-recorder.sh
+stress-test-*.log
+
+# Go binary
+/micelio

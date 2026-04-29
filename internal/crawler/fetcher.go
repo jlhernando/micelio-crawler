@@ -636,6 +636,8 @@ func platformFromUA(ua string) string {
 	switch {
 	case strings.Contains(ua, "Windows"):
 		return "Windows"
+	case strings.Contains(ua, "Macintosh"):
+		return "macOS"
 	case strings.Contains(ua, "Linux") && !strings.Contains(ua, "Android"):
 		return "Linux"
 	case strings.Contains(ua, "Android"):

@@ -531,6 +531,22 @@ make sync
 make app
 ```
 
+## macOS App
+
+Micelio can be packaged as a native macOS `.app` bundle that launches the web dashboard automatically.
+
+```bash
+# Build the .app bundle (includes dashboard + Go binary)
+make app
+# Output: dist/Micelio.app
+
+# Double-click to launch, or run from terminal:
+open dist/Micelio.app
+# Opens http://localhost:3100 in your browser
+```
+
+> **Note:** The app is unsigned. On first launch, go to **System Settings > Privacy & Security** and click **Open Anyway**, or run `xattr -d com.apple.quarantine dist/Micelio.app` from Terminal.
+
 ## License
 
-MIT
+[MIT](LICENSE)

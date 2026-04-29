@@ -430,10 +430,41 @@ func (a *aggregator) finalize() *LogStats {
 	// Build bot heatmaps for top 5 bots
 	a.stats.BotHeatmap = a.buildBotHeatmaps()
 
-	// Crawl waste analysis
-	a.stats.Waste = AnalyzeWaste(a.stats.TopURLs, totalBot)
+	// Crawl waste analysis (uses full URL map, not just top URLs)
+	a.stats.Waste = a.analyzeWasteFromAllURLs(totalBot)
 
 	return &a.stats
+}
+
+// analyzeWasteFromAllURLs iterates the full in-memory URL map for comprehensive
+// crawl-waste analysis rather than only the top-N displayed URLs.
+func (a *aggregator) analyzeWasteFromAllURLs(totalBotHits int64) *WasteAnalysis {
+	wa := &WasteAnalysis{
+		TotalBotHits: totalBotHits,
+		ByType:       make(map[WasteType]*WasteEntry),
+	}
+	for path, u := range a.urlHits {
+		wt := ClassifyWaste(path)
+		if wt == "" {
+			continue
+		}
+		e, ok := wa.ByType[wt]
+		if !ok {
+			e = &WasteEntry{Type: wt}
+			wa.ByType[wt] = e
+		}
+		e.Hits += u.hits
+		e.BotHits += u.botHits
+		e.URLs++
+		if len(e.TopURLs) < 5 {
+			e.TopURLs = append(e.TopURLs, path)
+		}
+		wa.WasteHits += u.botHits
+	}
+	if totalBotHits > 0 {
+		wa.WasteRatio = float64(wa.WasteHits) / float64(totalBotHits)
+	}
+	return wa
 }
 
 func (a *aggregator) buildBotHeatmaps() map[string][7][24]int64 {

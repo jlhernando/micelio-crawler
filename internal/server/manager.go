@@ -1300,7 +1300,7 @@ func (m *CrawlManager) runLogAnalysis(jobID, filePath, filename string, formatHi
 
 	m.store.UpdateLogJob(jobID, map[string]interface{}{
 		"status": "completed", "completedAt": now, "durationMs": elapsed,
-		"totalLines": stats.TotalLines, "format": string(format),
+		"totalLines": stats.TotalLines, "processedLines": stats.TotalLines, "format": string(format),
 	})
 
 	m.emit(ProgressEvent{
@@ -1461,7 +1461,7 @@ func (m *CrawlManager) runLogAnalysisMulti(jobID string, filePaths, filenames []
 	m.store.UpdateLogJob(jobID, map[string]interface{}{
 		"status": "completed", "completedAt": now, "durationMs": elapsed,
 		"parseMs": parseMs, "analysisMs": analysisMs,
-		"totalLines": stats.TotalLines, "format": string(format),
+		"totalLines": stats.TotalLines, "processedLines": stats.TotalLines, "format": string(format),
 		"files": perFile,
 	})
 

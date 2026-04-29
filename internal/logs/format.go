@@ -494,7 +494,7 @@ func parseCloudflare(line string) (*LogEntry, error) {
 	}
 	var respTime float64
 	if obj.EdgeEndTimestamp > 0 && obj.EdgeStartTimestamp > 0 {
-		respTime = float64(obj.EdgeEndTimestamp-obj.EdgeStartTimestamp) / 1e9
+		respTime = cloudflareTimestampDeltaSeconds(obj.EdgeStartTimestamp, obj.EdgeEndTimestamp)
 	}
 	return &LogEntry{
 		IP:           obj.ClientIP,
@@ -507,6 +507,19 @@ func parseCloudflare(line string) (*LogEntry, error) {
 		UserAgent:    obj.ClientRequestUserAgent,
 		ResponseTime: respTime,
 	}, nil
+}
+
+// cloudflareTimestampDeltaSeconds computes the response time in seconds from
+// Cloudflare start/end timestamps, handling both nanosecond and second formats.
+func cloudflareTimestampDeltaSeconds(start, end int64) float64 {
+	if end <= start {
+		return 0
+	}
+	delta := end - start
+	if start > 1e15 || end > 1e15 {
+		return float64(delta) / 1e9
+	}
+	return float64(delta)
 }
 
 // parseALB handles AWS ALB/ELB access log format.

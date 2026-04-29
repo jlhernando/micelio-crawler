@@ -343,6 +343,46 @@ func TestParseCloudflare(t *testing.T) {
 	}
 }
 
+func TestParseCloudflareUnixSecondsResponseTime(t *testing.T) {
+	line := `{"ClientIP":"66.249.66.1","ClientRequestMethod":"GET","ClientRequestURI":"/about","EdgeResponseStatus":200,"EdgeResponseBytes":8000,"ClientRequestUserAgent":"Googlebot/2.1","EdgeStartTimestamp":1776643088,"EdgeEndTimestamp":1776643090}`
+	e, err := ParseLine(line, FormatCloudflare)
+	if err != nil {
+		t.Fatalf("ParseLine cloudflare error: %v", err)
+	}
+	if e.ResponseTime != 2 {
+		t.Errorf("ResponseTime = %f, want 2", e.ResponseTime)
+	}
+}
+
+func TestParseFileDoesNotDropLineAfterSample(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cloudflare.log")
+	var b strings.Builder
+	for i := 0; i < sampleLines+5; i++ {
+		fmt.Fprintf(&b, `{"ClientIP":"66.249.66.1","ClientRequestMethod":"GET","ClientRequestURI":"/page-%d","EdgeResponseStatus":200,"EdgeResponseBytes":100,"ClientRequestUserAgent":"Googlebot/2.1","EdgeStartTimestamp":1776643088}`+"\n", i)
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0644); err != nil {
+		t.Fatalf("write temp log: %v", err)
+	}
+	var entries int
+	format, total, err := ParseFileWithFormat(path, "", func(*LogEntry) {
+		entries++
+	}, nil)
+	if err != nil {
+		t.Fatalf("ParseFileWithFormat error: %v", err)
+	}
+	want := int64(sampleLines + 5)
+	if format != FormatCloudflare {
+		t.Errorf("format = %s, want %s", format, FormatCloudflare)
+	}
+	if total != want {
+		t.Errorf("total lines = %d, want %d", total, want)
+	}
+	if int64(entries) != want {
+		t.Errorf("entries = %d, want %d", entries, want)
+	}
+}
+
 // --- ALB ---
 
 func TestDetectFormatALB(t *testing.T) {
@@ -662,6 +702,23 @@ func TestAnalyzeWaste(t *testing.T) {
 	}
 	if wa.ByType[WasteSearch] == nil {
 		t.Error("missing search waste type")
+	}
+}
+
+func TestAggregatorWasteUsesAllURLs(t *testing.T) {
+	a := newAggregator()
+	bot := &BotInfo{Name: "Googlebot", Category: "search_engine"}
+	for i := 0; i < maxTopURLs+100; i++ {
+		a.add(&LogEntry{Path: fmt.Sprintf("/images/%d.jpg", i), Status: 200, Bot: bot})
+		a.add(&LogEntry{Path: fmt.Sprintf("/pages/%d", i), Status: 200, Bot: bot})
+	}
+	stats := a.finalize()
+	want := int64(maxTopURLs + 100)
+	if stats.Waste.WasteHits != want {
+		t.Errorf("WasteHits = %d, want %d", stats.Waste.WasteHits, want)
+	}
+	if stats.Waste.ByType[WasteResources].URLs != int(want) {
+		t.Errorf("resource waste URLs = %d, want %d", stats.Waste.ByType[WasteResources].URLs, want)
 	}
 }
 

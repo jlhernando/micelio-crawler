@@ -12,7 +12,7 @@ import (
 
 const maxTopURLs = 500
 const maxBotURLs = 100_000
-const maxBotIPs  = 10_000
+const maxBotIPs = 10_000
 
 // URLStatsFlusher is called by the aggregator to persist URL stats in batches.
 // Called whenever the in-memory URL map exceeds a threshold, and once at the
@@ -23,8 +23,8 @@ type URLStatsFlusher func(batch []URLStat) error
 type AnalysisResult struct {
 	Stats      *LogStats
 	Format     Format
-	BotIPs     map[string]map[string]struct{}    // bot name -> set of IPs
-	AllURLs    []URLStat                         // legacy: materialized URL list
+	BotIPs     map[string]map[string]struct{}     // bot name -> set of IPs
+	AllURLs    []URLStat                          // legacy: materialized URL list
 	StreamURLs func(fn func(URLStat) error) error // streams sorted bot URLs without materializing
 }
 
@@ -101,9 +101,9 @@ func newAggregator() *aggregator {
 			BotHourlyHits:      make(map[string]map[string]int64),
 			HourlyHitsTimeline: make(map[string]int64),
 		},
-		urlHits:    make(map[string]*urlAccum),
-		botURLSets: make(map[string]map[uint64]struct{}),
-		botURLCaps: make(map[string]bool),
+		urlHits:     make(map[string]*urlAccum),
+		botURLSets:  make(map[string]map[uint64]struct{}),
+		botURLCaps:  make(map[string]bool),
 		botIPs:      make(map[string]map[string]struct{}),
 		botIPCaps:   make(map[string]bool),
 		botHeatmaps: make(map[string]*[7][24]int64),
@@ -431,9 +431,68 @@ func (a *aggregator) finalize() *LogStats {
 	a.stats.BotHeatmap = a.buildBotHeatmaps()
 
 	// Crawl waste analysis
-	a.stats.Waste = AnalyzeWaste(a.stats.TopURLs, totalBot)
+	a.stats.Waste = a.analyzeWaste(totalBot)
 
 	return &a.stats
+}
+
+type wasteTopURL struct {
+	path    string
+	hits    int64
+	botHits int64
+}
+
+func (a *aggregator) analyzeWaste(totalBotHits int64) *WasteAnalysis {
+	wa := &WasteAnalysis{
+		TotalBotHits: totalBotHits,
+		ByType:       make(map[WasteType]*WasteEntry),
+	}
+	topByType := make(map[WasteType][]wasteTopURL)
+
+	for path, u := range a.urlHits {
+		wt := ClassifyWaste(path)
+		if wt == "" {
+			continue
+		}
+		e, ok := wa.ByType[wt]
+		if !ok {
+			e = &WasteEntry{Type: wt}
+			wa.ByType[wt] = e
+		}
+		e.Hits += u.hits
+		e.BotHits += u.botHits
+		e.URLs++
+		wa.WasteHits += u.botHits
+		topByType[wt] = addWasteTopURL(topByType[wt], wasteTopURL{path: path, hits: u.hits, botHits: u.botHits})
+	}
+
+	for wt, top := range topByType {
+		e := wa.ByType[wt]
+		for _, item := range top {
+			e.TopURLs = append(e.TopURLs, item.path)
+		}
+	}
+	if totalBotHits > 0 {
+		wa.WasteRatio = float64(wa.WasteHits) / float64(totalBotHits)
+	}
+	return wa
+}
+
+func addWasteTopURL(top []wasteTopURL, item wasteTopURL) []wasteTopURL {
+	top = append(top, item)
+	sort.Slice(top, func(i, j int) bool {
+		if top[i].botHits != top[j].botHits {
+			return top[i].botHits > top[j].botHits
+		}
+		if top[i].hits != top[j].hits {
+			return top[i].hits > top[j].hits
+		}
+		return top[i].path < top[j].path
+	})
+	if len(top) > 5 {
+		top = top[:5]
+	}
+	return top
 }
 
 func (a *aggregator) buildBotHeatmaps() map[string][7][24]int64 {
@@ -461,16 +520,16 @@ func (a *aggregator) buildBotHeatmaps() map[string][7][24]int64 {
 
 // MultiProgress describes per-file progress during a multi-file parse.
 type MultiProgress struct {
-	FileIndex    int
-	Filename     string
-	Processed    int64 // lines processed in this file
-	BytesRead    int64 // bytes read from this file
-	FileSize     int64 // total size of this file
-	FilesTotal   int
-	FilesDone    int   // files that have finished parsing
-	TotalBytes   int64 // aggregate bytesRead across all files
-	TotalSize    int64 // aggregate fileSize across all files
-	TotalLines   int64 // aggregate processed lines across all files
+	FileIndex  int
+	Filename   string
+	Processed  int64 // lines processed in this file
+	BytesRead  int64 // bytes read from this file
+	FileSize   int64 // total size of this file
+	FilesTotal int
+	FilesDone  int   // files that have finished parsing
+	TotalBytes int64 // aggregate bytesRead across all files
+	TotalSize  int64 // aggregate fileSize across all files
+	TotalLines int64 // aggregate processed lines across all files
 }
 
 // MultiProgressFunc receives per-file progress events from AnalyzeMulti.
@@ -478,12 +537,12 @@ type MultiProgressFunc func(MultiProgress)
 
 // FileResult holds the per-file outcome of a multi-file analysis.
 type FileResult struct {
-	Path       string
-	Filename   string
-	Size       int64
-	Lines      int64
-	Format     Format
-	Error      string
+	Path     string
+	Filename string
+	Size     int64
+	Lines    int64
+	Format   Format
+	Error    string
 }
 
 // MultiAnalysisResult is the combined output of AnalyzeMulti.
@@ -492,7 +551,7 @@ type MultiAnalysisResult struct {
 	Format     Format
 	Files      []FileResult
 	BotIPs     map[string]map[string]struct{}
-	AllURLs    []URLStat                       // populated only when no flusher was provided (legacy)
+	AllURLs    []URLStat                          // populated only when no flusher was provided (legacy)
 	StreamURLs func(fn func(URLStat) error) error // streams sorted bot URLs without materializing; nil if flusher was used
 }
 
@@ -887,4 +946,3 @@ func statusGroup(code int) string {
 		return "other"
 	}
 }
-

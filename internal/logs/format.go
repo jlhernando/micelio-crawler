@@ -464,17 +464,17 @@ func decodePlus(s string) string {
 // parseCloudflare handles Cloudflare JSON log format (one JSON object per line).
 func parseCloudflare(line string) (*LogEntry, error) {
 	var obj struct {
-		ClientIP        string `json:"ClientIP"`
-		ClientRequestHost string `json:"ClientRequestHost"`
-		ClientRequestMethod string `json:"ClientRequestMethod"`
-		ClientRequestURI string `json:"ClientRequestURI"`
-		ClientRequestPath string `json:"ClientRequestPath"`
-		EdgeResponseStatus int `json:"EdgeResponseStatus"`
-		EdgeResponseBytes int64 `json:"EdgeResponseBytes"`
-		ClientRequestReferer string `json:"ClientRequestReferer"`
+		ClientIP               string `json:"ClientIP"`
+		ClientRequestHost      string `json:"ClientRequestHost"`
+		ClientRequestMethod    string `json:"ClientRequestMethod"`
+		ClientRequestURI       string `json:"ClientRequestURI"`
+		ClientRequestPath      string `json:"ClientRequestPath"`
+		EdgeResponseStatus     int    `json:"EdgeResponseStatus"`
+		EdgeResponseBytes      int64  `json:"EdgeResponseBytes"`
+		ClientRequestReferer   string `json:"ClientRequestReferer"`
 		ClientRequestUserAgent string `json:"ClientRequestUserAgent"`
-		EdgeStartTimestamp int64 `json:"EdgeStartTimestamp"`
-		EdgeEndTimestamp int64 `json:"EdgeEndTimestamp"`
+		EdgeStartTimestamp     int64  `json:"EdgeStartTimestamp"`
+		EdgeEndTimestamp       int64  `json:"EdgeEndTimestamp"`
 	}
 	if err := json.Unmarshal([]byte(line), &obj); err != nil {
 		return nil, err
@@ -494,7 +494,7 @@ func parseCloudflare(line string) (*LogEntry, error) {
 	}
 	var respTime float64
 	if obj.EdgeEndTimestamp > 0 && obj.EdgeStartTimestamp > 0 {
-		respTime = float64(obj.EdgeEndTimestamp-obj.EdgeStartTimestamp) / 1e9
+		respTime = cloudflareTimestampDeltaSeconds(obj.EdgeStartTimestamp, obj.EdgeEndTimestamp)
 	}
 	return &LogEntry{
 		IP:           obj.ClientIP,
@@ -507,6 +507,17 @@ func parseCloudflare(line string) (*LogEntry, error) {
 		UserAgent:    obj.ClientRequestUserAgent,
 		ResponseTime: respTime,
 	}, nil
+}
+
+func cloudflareTimestampDeltaSeconds(start, end int64) float64 {
+	if end <= start {
+		return 0
+	}
+	delta := end - start
+	if start > 1e15 || end > 1e15 {
+		return float64(delta) / 1e9
+	}
+	return float64(delta)
 }
 
 // parseALB handles AWS ALB/ELB access log format.

@@ -86,7 +86,7 @@ func ParseFileWithState(path string, formatHint Format, state *ParseState, onEnt
 	var sample []string
 	var firstLines []string
 	headerCaptured := false
-	for scanner.Scan() && len(sample) < sampleLines {
+	for len(sample) < sampleLines && scanner.Scan() {
 		line := scanner.Text()
 		// Strip a BOM on the very first line (common in Windows-exported CSVs).
 		trimmed := stripBOM(strings.TrimSpace(line))

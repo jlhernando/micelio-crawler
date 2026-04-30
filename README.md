@@ -54,7 +54,7 @@ The Svelte 5 dashboard is embedded in the Go binary via `go:embed`. No separate 
 |------|-------------|
 | **New Crawl** | Configure and start crawls with 5 presets and 10+ config sections. User-agent dropdown with Chrome DevTools-inspired presets (Desktop, Mobile, Bots). Recent sites quick-start. |
 | **Monitor** | Real-time progress via WebSocket — status codes, response times, error log, pause/resume/cancel, stop & analyze, per-pattern excluded URL counters |
-| **Results** | 7 tabs: Issues, Performance, Content, Links, Signals, AI Visibility, All Pages. Interactive link graph (WebGL), directory tree, anchor cloud. Template-based filtering with filtered stats and CSV export. |
+| **Results** | 7 tabs: Issues, Performance, Content, Links, Signals, AI Visibility, All Pages. Link Explorer (progressive drill-down graph) + Full Graph (WebGL), directory tree, anchor cloud. Template-based filtering with filtered stats and CSV export. |
 | **History** | Crawl history with side-by-side diff comparison, active crawls sidebar, status filters |
 | **Diff** | Side-by-side comparison with visibility, segments, lifecycle tracking, topic evolution, and cannibalization detection |
 | **Logs** | Server log analysis — parallel multi-file processing with per-file aggregation, 6 formats (Apache, Nginx, CloudFront, Cloudflare, ALB/ELB, W3C/IIS), zero-alloc bot detection (100+ signatures), crawl budget/waste analysis, AI bot trends, heatmaps, log-to-crawl merge with 7-segment classification, per-phase timing |
@@ -400,7 +400,8 @@ document.querySelector('h1')?.textContent
 - **Googlebot truncation risk detection**: flags pages where uncompressed HTML exceeds Googlebot's 2MB fetch limit and identifies critical SEO elements (title, canonical, meta description, JSON-LD, h1, main/article, pagination, Open Graph, internal links) that fall beyond the cutoff
 
 ### Link Intelligence
-- Interactive WebGL link graph (Sigma.js + Cosmos.gl, up to 50K pages)
+- **Graph Explorer**: Progressive drill-down visualization — start from the homepage and expand one level at a time by clicking nodes. Instant load even on 700K+ page crawls (reads directly from SQLite, no full graph needed in memory). Breadcrumb navigation, server-side search, 4 color modes (Depth, Authority, Hub, PageRank), expand/collapse with ForceAtlas2 incremental layout. Coverage progress bar shows percentage explored vs total.
+- **Full Graph**: WebGL link graph (Sigma.js + Cosmos.gl, up to 50K pages) for whole-site overview
 - Centrality scores (PageRank, authority, hub, betweenness, closeness)
 - Orphan page detection
 - Link suggestions based on semantic similarity

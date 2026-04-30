@@ -190,6 +190,144 @@ func copyPages(pages []*types.PageData) []*types.PageData {
 	return out
 }
 
+func TestSubGraphBasicDepth1(t *testing.T) {
+	// a → b, c; b → d; c → d; d → (nothing)
+	pages := []*types.PageData{
+		{URL: "https://example.com/a", InternalLinks: []string{"https://example.com/b", "https://example.com/c"}},
+		{URL: "https://example.com/b", InternalLinks: []string{"https://example.com/d"}},
+		{URL: "https://example.com/c", InternalLinks: []string{"https://example.com/d"}},
+		{URL: "https://example.com/d"},
+	}
+	graph := BuildAdjacencyList(pages)
+
+	// SubGraph from a at depth 1 should include a, b, c (not d)
+	sub := graph.SubGraph(0, 1, 500)
+	if len(sub.Nodes) != 3 {
+		t.Fatalf("Expected 3 nodes, got %d", len(sub.Nodes))
+	}
+
+	nodeSet := make(map[int]bool)
+	for _, n := range sub.Nodes {
+		nodeSet[n.Index] = true
+	}
+	if !nodeSet[0] || !nodeSet[1] || !nodeSet[2] {
+		t.Errorf("Expected nodes {0,1,2}, got %v", nodeSet)
+	}
+
+	// Edges within subgraph: a→b, a→c (b→d and c→d excluded since d not in subgraph)
+	if len(sub.Edges) != 2 {
+		t.Errorf("Expected 2 edges, got %d", len(sub.Edges))
+	}
+}
+
+func TestSubGraphDepth2(t *testing.T) {
+	pages := []*types.PageData{
+		{URL: "https://example.com/a", InternalLinks: []string{"https://example.com/b"}},
+		{URL: "https://example.com/b", InternalLinks: []string{"https://example.com/c"}},
+		{URL: "https://example.com/c", InternalLinks: []string{"https://example.com/d"}},
+		{URL: "https://example.com/d"},
+	}
+	graph := BuildAdjacencyList(pages)
+
+	sub := graph.SubGraph(0, 2, 500)
+	if len(sub.Nodes) != 3 {
+		t.Fatalf("Expected 3 nodes (a,b,c) at depth 2, got %d", len(sub.Nodes))
+	}
+}
+
+func TestSubGraphMaxNodesCap(t *testing.T) {
+	// Star graph: a → b,c,d,e,f
+	pages := []*types.PageData{
+		{URL: "https://example.com/a", InternalLinks: []string{
+			"https://example.com/b", "https://example.com/c", "https://example.com/d",
+			"https://example.com/e", "https://example.com/f",
+		}},
+		{URL: "https://example.com/b"},
+		{URL: "https://example.com/c"},
+		{URL: "https://example.com/d"},
+		{URL: "https://example.com/e"},
+		{URL: "https://example.com/f"},
+	}
+	graph := BuildAdjacencyList(pages)
+
+	// Cap at 3 nodes — should get a + 2 of its neighbors
+	sub := graph.SubGraph(0, 1, 3)
+	if len(sub.Nodes) != 3 {
+		t.Fatalf("Expected exactly 3 nodes (capped), got %d", len(sub.Nodes))
+	}
+}
+
+func TestSubGraphOutOfBounds(t *testing.T) {
+	pages := []*types.PageData{
+		{URL: "https://example.com/a"},
+	}
+	graph := BuildAdjacencyList(pages)
+
+	sub := graph.SubGraph(-1, 1, 500)
+	if len(sub.Nodes) != 0 {
+		t.Errorf("Expected empty result for negative root, got %d nodes", len(sub.Nodes))
+	}
+
+	sub = graph.SubGraph(100, 1, 500)
+	if len(sub.Nodes) != 0 {
+		t.Errorf("Expected empty result for OOB root, got %d nodes", len(sub.Nodes))
+	}
+}
+
+func TestSubGraphExpandableFlag(t *testing.T) {
+	// a → b → c
+	pages := []*types.PageData{
+		{URL: "https://example.com/a", InternalLinks: []string{"https://example.com/b"}},
+		{URL: "https://example.com/b", InternalLinks: []string{"https://example.com/c"}},
+		{URL: "https://example.com/c"},
+	}
+	graph := BuildAdjacencyList(pages)
+
+	// Depth 1 from a: nodes a, b. b has outlinks to c (not in subgraph) → expandable
+	sub := graph.SubGraph(0, 1, 500)
+	for _, n := range sub.Nodes {
+		if n.Index == 1 && !n.Expandable {
+			t.Error("Node b should be expandable (links to c, which is outside subgraph)")
+		}
+		if n.Index == 0 && n.Expandable {
+			t.Error("Node a should NOT be expandable (all outlinks are in subgraph)")
+		}
+	}
+}
+
+func TestSubGraphDisconnected(t *testing.T) {
+	// a → b; c (isolated)
+	pages := []*types.PageData{
+		{URL: "https://example.com/a", InternalLinks: []string{"https://example.com/b"}},
+		{URL: "https://example.com/b"},
+		{URL: "https://example.com/c"},
+	}
+	graph := BuildAdjacencyList(pages)
+
+	// SubGraph from a: should only include a, b (not c)
+	sub := graph.SubGraph(0, 5, 500)
+	if len(sub.Nodes) != 2 {
+		t.Fatalf("Expected 2 nodes (disconnected c excluded), got %d", len(sub.Nodes))
+	}
+}
+
+func TestSubGraphTotalOutlinks(t *testing.T) {
+	pages := []*types.PageData{
+		{URL: "https://example.com/a", InternalLinks: []string{"https://example.com/b", "https://example.com/c", "https://example.com/d"}},
+		{URL: "https://example.com/b"},
+		{URL: "https://example.com/c"},
+		{URL: "https://example.com/d"},
+	}
+	graph := BuildAdjacencyList(pages)
+
+	sub := graph.SubGraph(0, 1, 500)
+	for _, n := range sub.Nodes {
+		if n.Index == 0 && n.TotalOutlinks != 3 {
+			t.Errorf("Node a should have TotalOutlinks=3, got %d", n.TotalOutlinks)
+		}
+	}
+}
+
 func TestBuildAdjacencyListTrailingSlashResolution(t *testing.T) {
 	pages := []*types.PageData{
 		{URL: "https://example.com/a", InternalLinks: []string{"https://example.com/b/"}},

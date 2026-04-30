@@ -109,7 +109,7 @@
     loading = true;
     message = 'Loading graph explorer...';
     try {
-      const data = await api.getCrawlSubgraph(crawlId, undefined, 2, 500);
+      const data = await api.getCrawlSubgraph(crawlId, undefined, 2, 2000);
       if (destroyed) return;
       if (data.meta?.pending) {
         message = 'Link analysis is still running. Explorer will appear automatically when complete.';
@@ -305,7 +305,7 @@
     loading = true;
 
     try {
-      const data = await api.getCrawlSubgraph(crawlId, nodeURL, 1, 300);
+      const data = await api.getCrawlSubgraph(crawlId, nodeURL, 1, 500);
       if (destroyed || !graphInstance || !sigmaRenderer) return;
 
       // Get position of expanded node for seeded placement
@@ -410,7 +410,7 @@
     try {
       // Start fresh from root
       const rootURL = breadcrumbs[0]?.url || '';
-      const data = await api.getCrawlSubgraph(crawlId, rootURL || undefined, 2, 500);
+      const data = await api.getCrawlSubgraph(crawlId, rootURL || undefined, 2, 2000);
       if (destroyed) return;
 
       let allNodes = new Map<string, GraphNode>();
@@ -422,7 +422,7 @@
       // Re-expand nodes in parallel
       const expandURLs = [...expandedNodes].filter(u => u !== rootURL);
       const results = await Promise.allSettled(
-        expandURLs.map(u => api.getCrawlSubgraph(crawlId, u, 1, 300))
+        expandURLs.map(u => api.getCrawlSubgraph(crawlId, u, 1, 500))
       );
       for (const result of results) {
         if (result.status === 'fulfilled') {
@@ -479,7 +479,7 @@
     // Otherwise, load it as a new root expansion
     loading = true;
     try {
-      const data = await api.getCrawlSubgraph(crawlId, result.id, 1, 300);
+      const data = await api.getCrawlSubgraph(crawlId, result.id, 1, 500);
       if (destroyed) return;
       // Batch merge new nodes
       const newNodes: GraphNode[] = [];

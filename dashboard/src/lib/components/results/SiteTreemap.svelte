@@ -53,6 +53,7 @@
 
   let currentNode = $derived(zoomStack.length > 0 ? zoomStack[zoomStack.length - 1] : tree);
   let dirCount = $derived(tree ? countDirs(tree) : 0);
+  let hasPageRank = $derived(tree ? tree.avgPageRank > 0 || (tree.children ?? []).some(c => c.avgPageRank > 0) : false);
 
   function countDirs(node: TreeNode): number {
     let count = node.children && node.children.length > 0 ? 1 : 0;
@@ -377,7 +378,7 @@
           <div class="flex rounded-lg border border-border overflow-hidden text-[10px]">
             <button class="px-2 py-0.5 {colorMode === 'depth' ? 'bg-accent text-white' : 'bg-surface-3 text-fg-2 hover:bg-surface-1'}" onclick={() => colorMode = 'depth'}>Depth</button>
             <button class="px-2 py-0.5 {colorMode === 'indexability' ? 'bg-accent text-white' : 'bg-surface-3 text-fg-2 hover:bg-surface-1'}" onclick={() => colorMode = 'indexability'}>Indexability</button>
-            <button class="px-2 py-0.5 {colorMode === 'pagerank' ? 'bg-accent text-white' : 'bg-surface-3 text-fg-2 hover:bg-surface-1'}" onclick={() => colorMode = 'pagerank'}>PageRank</button>
+            <button class="px-2 py-0.5 {colorMode === 'pagerank' ? 'bg-accent text-white' : 'bg-surface-3 text-fg-2 hover:bg-surface-1'} {!hasPageRank ? 'opacity-40 cursor-not-allowed' : ''}" onclick={() => { if (hasPageRank) colorMode = 'pagerank'; }} title={!hasPageRank ? 'PageRank data not available (requires Link Intelligence)' : ''}>PageRank</button>
             <button class="px-2 py-0.5 {colorMode === 'status' ? 'bg-accent text-white' : 'bg-surface-3 text-fg-2 hover:bg-surface-1'}" onclick={() => colorMode = 'status'}>Status</button>
           </div>
           {#if zoomStack.length > 0}

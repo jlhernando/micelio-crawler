@@ -2341,8 +2341,9 @@ func buildSubgraphFromDB(dbPath string, rootURL string, depth, maxNodes int) map
 	visited[rootURL] = true
 	frontier := []string{rootURL}
 	edgePairs := make(map[string][]string) // source → targets
+	capped := false
 
-	for hop := 0; hop < depth && len(frontier) > 0; hop++ {
+	for hop := 0; hop < depth && len(frontier) > 0 && !capped; hop++ {
 		var nextFrontier []string
 		for _, pageURL := range frontier {
 			links, err := cs.GetPageInternalLinks(pageURL)
@@ -2356,16 +2357,19 @@ func buildSubgraphFromDB(dbPath string, rootURL string, depth, maxNodes int) map
 					nextFrontier = append(nextFrontier, link)
 					if len(visited) >= maxNodes {
 						targets = append(targets, link)
-						goto done
+						capped = true
+						break
 					}
 				}
 				targets = append(targets, link)
 			}
 			edgePairs[pageURL] = targets
+			if capped {
+				break
+			}
 		}
 		frontier = nextFrontier
 	}
-done:
 
 	// Get metadata for all visited URLs from page_index
 	visitedURLs := make([]string, 0, len(visited))

@@ -7,6 +7,7 @@
   import PagesTable from '../lib/components/results/PagesTable.svelte';
   import LinkGraph from '../lib/components/results/LinkGraph.svelte';
   import GraphExplorer from '../lib/components/results/GraphExplorer.svelte';
+  import SiteTreemap from '../lib/components/results/SiteTreemap.svelte';
   import DirectoryTree from '../lib/components/results/DirectoryTree.svelte';
   import AnchorCloud from '../lib/components/results/AnchorCloud.svelte';
   import SeoFunnel from '../lib/components/results/SeoFunnel.svelte';
@@ -40,7 +41,7 @@
 
   // Active tab
   let activeTab = $state<'pages' | 'issues' | 'performance' | 'content' | 'links' | 'signals' | 'ai-visibility'>('pages');
-  let graphSubTab = $state<'explorer' | 'full'>('explorer');
+  let graphSubTab = $state<'explorer' | 'full' | 'treemap'>('explorer');
 
   // Filters passed from SummaryHeader clicks
   let initialFilterStatus = $state('all');
@@ -505,12 +506,20 @@
             >
               Full Graph
             </button>
+            <button
+              class="px-3 py-1 text-xs rounded-lg {graphSubTab === 'treemap' ? 'bg-accent text-white' : 'bg-surface-3 text-fg-2 hover:bg-surface-1'}"
+              onclick={() => graphSubTab = 'treemap'}
+            >
+              Treemap
+            </button>
             <span class="text-[10px] text-fg-2/50 ml-2">
-              {graphSubTab === 'explorer' ? 'Drill-down — start from homepage, expand one level at a time' : 'All nodes at once (may be slow for large crawls)'}
+              {graphSubTab === 'explorer' ? 'Drill-down — start from homepage, expand one level at a time' : graphSubTab === 'treemap' ? 'Full-site overview — directories sized by page count' : 'All nodes at once (may be slow for large crawls)'}
             </span>
           </div>
           {#if graphSubTab === 'explorer'}
             <GraphExplorer crawlId={id} />
+          {:else if graphSubTab === 'treemap'}
+            <SiteTreemap crawlId={id} />
           {:else}
             <LinkGraph crawlId={id} />
           {/if}

@@ -371,7 +371,31 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager) http.Handler {
 	})
 
 	mux.HandleFunc("GET /api/crawl/{id}/directory-tree", func(w http.ResponseWriter, r *http.Request) {
-		results := manager.GetOrLoadResults(r.PathValue("id"))
+		crawlID := r.PathValue("id")
+		// Fast path: check cached results (non-blocking)
+		if results := manager.GetCachedResults(crawlID); results != nil {
+			if results.DirTree != nil {
+				jsonOK(w, results.DirTree)
+				return
+			}
+			if results.Pages != nil {
+				jsonOK(w, buildDirectoryTree(results.Pages))
+				return
+			}
+		}
+		// Fallback: build from page_index in DB (instant even for 742K pages)
+		dbPath := ""
+		if job, err := store.GetCrawlJob(crawlID); err == nil && job != nil {
+			dbPath = job.DBPath
+		}
+		if dbPath != "" {
+			if tree := buildDirectoryTreeFromDB(dbPath); tree != nil {
+				jsonOK(w, tree)
+				return
+			}
+		}
+		// Last resort: block and load
+		results := manager.GetOrLoadResults(crawlID)
 		if results == nil {
 			jsonError(w, "results not available", http.StatusNotFound)
 			return
@@ -2462,6 +2486,119 @@ func buildGraphSearchFromDB(dbPath string, query string, limit int) map[string]i
 	}
 
 	return map[string]interface{}{"results": matches}
+}
+
+// buildDirectoryTreeFromDB constructs a directory tree from the page_index table.
+// Used as a fallback when pages haven't been fully loaded into memory.
+func buildDirectoryTreeFromDB(dbPath string) map[string]interface{} {
+	cs, err := storage.NewCrawlStore(dbPath)
+	if err != nil {
+		return nil
+	}
+	defer cs.Close()
+
+	entries, err := cs.GetPageIndex()
+	if err != nil || len(entries) == 0 {
+		return nil
+	}
+
+	type dirNode struct {
+		Name             string             `json:"name"`
+		Path             string             `json:"path"`
+		Pages            int                `json:"pages"`
+		Children         []*dirNode         `json:"children,omitempty"`
+		StatusCodes      map[int]int        `json:"statusCodes"`
+		Depth            int                `json:"depth"`
+		IsPage           bool               `json:"isPage"`
+		Indexable        int                `json:"indexable"`
+		NonIndexable     int                `json:"nonIndexable"`
+		TotalInlinks     int                `json:"totalInlinks"`
+		TotalPageRank    float64            `json:"totalPageRank"`
+		AvgPageRank      float64            `json:"avgPageRank"`
+		AvgInternalLinks float64            `json:"avgInternalLinks"`
+		AvgResponseTime  int                `json:"avgResponseTime"`
+		childMap         map[string]*dirNode
+	}
+
+	root := &dirNode{Name: "/", Path: "/", StatusCodes: map[int]int{}, childMap: map[string]*dirNode{}}
+
+	for _, e := range entries {
+		u, parseErr := url.Parse(e.URL)
+		if parseErr != nil {
+			continue
+		}
+		segments := strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(segments) == 1 && segments[0] == "" {
+			segments = nil
+		}
+
+		current := root
+		pathSoFar := ""
+		for i, seg := range segments {
+			if i >= 3 {
+				break
+			}
+			pathSoFar += "/" + seg
+			child, ok := current.childMap[seg]
+			if !ok {
+				child = &dirNode{Name: seg, Path: pathSoFar, StatusCodes: map[int]int{}, Depth: i + 1, childMap: map[string]*dirNode{}}
+				current.childMap[seg] = child
+			}
+			current = child
+		}
+
+		current.Pages++
+		current.IsPage = true
+		current.StatusCodes[e.StatusCode]++
+		current.TotalInlinks += e.Inlinks
+		if e.Indexable {
+			current.Indexable++
+		} else {
+			current.NonIndexable++
+		}
+	}
+
+	var finalize func(n *dirNode)
+	finalize = func(n *dirNode) {
+		n.Children = make([]*dirNode, 0, len(n.childMap))
+		for _, child := range n.childMap {
+			finalize(child)
+			n.Children = append(n.Children, child)
+			n.Pages += child.Pages
+			n.Indexable += child.Indexable
+			n.NonIndexable += child.NonIndexable
+			n.TotalInlinks += child.TotalInlinks
+			for code, count := range child.StatusCodes {
+				n.StatusCodes[code] += count
+			}
+		}
+		if n.Pages > 0 {
+			n.AvgPageRank = n.TotalPageRank / float64(n.Pages)
+		}
+		sort.Slice(n.Children, func(i, j int) bool {
+			return n.Children[i].Pages > n.Children[j].Pages
+		})
+		if len(n.Children) > 20 {
+			other := &dirNode{Name: "other", Path: n.Path + "/other", StatusCodes: map[int]int{}, Depth: n.Depth + 1}
+			for _, child := range n.Children[20:] {
+				other.Pages += child.Pages
+				other.Indexable += child.Indexable
+				other.NonIndexable += child.NonIndexable
+				other.TotalInlinks += child.TotalInlinks
+				for code, count := range child.StatusCodes {
+					other.StatusCodes[code] += count
+				}
+			}
+			n.Children = append(n.Children[:20], other)
+		}
+		n.childMap = nil
+	}
+	finalize(root)
+
+	return map[string]interface{}{
+		"tree":       root,
+		"totalPages": root.Pages,
+	}
 }
 
 // ── Anchor Stats ──

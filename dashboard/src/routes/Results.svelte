@@ -6,6 +6,7 @@
   import IssueCards from '../lib/components/results/IssueCards.svelte';
   import PagesTable from '../lib/components/results/PagesTable.svelte';
   import LinkGraph from '../lib/components/results/LinkGraph.svelte';
+  import GraphExplorer from '../lib/components/results/GraphExplorer.svelte';
   import DirectoryTree from '../lib/components/results/DirectoryTree.svelte';
   import AnchorCloud from '../lib/components/results/AnchorCloud.svelte';
   import SeoFunnel from '../lib/components/results/SeoFunnel.svelte';
@@ -39,6 +40,7 @@
 
   // Active tab
   let activeTab = $state<'pages' | 'issues' | 'performance' | 'content' | 'links' | 'signals' | 'ai-visibility'>('pages');
+  let graphSubTab = $state<'explorer' | 'full'>('explorer');
 
   // Filters passed from SummaryHeader clicks
   let initialFilterStatus = $state('all');
@@ -489,7 +491,30 @@
         <DirectoryTree crawlId={id} />
 
         <!-- Internal Link Graph -->
-        <LinkGraph crawlId={id} />
+        <div class="rounded-md border border-border bg-surface-2 p-4">
+          <div class="flex items-center gap-1 mb-4">
+            <button
+              class="px-3 py-1 text-xs rounded-lg {graphSubTab === 'explorer' ? 'bg-accent text-white' : 'bg-surface-3 text-fg-2 hover:bg-surface-1'}"
+              onclick={() => graphSubTab = 'explorer'}
+            >
+              Explorer
+            </button>
+            <button
+              class="px-3 py-1 text-xs rounded-lg {graphSubTab === 'full' ? 'bg-accent text-white' : 'bg-surface-3 text-fg-2 hover:bg-surface-1'}"
+              onclick={() => graphSubTab = 'full'}
+            >
+              Full Graph
+            </button>
+            <span class="text-[10px] text-fg-2/50 ml-2">
+              {graphSubTab === 'explorer' ? 'Drill-down — start from homepage, expand one level at a time' : 'All nodes at once (may be slow for large crawls)'}
+            </span>
+          </div>
+          {#if graphSubTab === 'explorer'}
+            <GraphExplorer crawlId={id} />
+          {:else}
+            <LinkGraph crawlId={id} />
+          {/if}
+        </div>
 
         <!-- Dead End Pages Detail -->
         {#if linkAnalysis && (linkAnalysis.deadEndPages?.length ?? 0) > 0}

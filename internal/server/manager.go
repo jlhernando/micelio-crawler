@@ -867,6 +867,15 @@ func (m *CrawlManager) emit(event ProgressEvent) {
 	}
 }
 
+// GetCachedResults returns results only if they're already in-memory cache.
+// Returns nil if the result hasn't been loaded yet. Non-blocking.
+func (m *CrawlManager) GetCachedResults(crawlID string) *CrawlResults {
+	m.mu.RLock()
+	r := m.results[crawlID]
+	m.mu.RUnlock()
+	return r
+}
+
 // GetOrLoadResults returns cached results, loading from DB if needed.
 // If pages have been evicted from memory but stats exist, reload from crawl DB.
 func (m *CrawlManager) GetOrLoadResults(crawlID string) *CrawlResults {
@@ -894,6 +903,7 @@ func (m *CrawlManager) GetOrLoadResults(crawlID string) *CrawlResults {
 	var anchorStats, dirTree map[string]interface{}
 	var tmplTypes []string
 	var inlinkIdx map[string][]string
+	var graph *analysis.AdjacencyGraph
 	if job.DBPath != "" {
 		cs, csErr := storage.NewCrawlStore(job.DBPath)
 		if csErr == nil {
@@ -905,13 +915,22 @@ func (m *CrawlManager) GetOrLoadResults(crawlID string) *CrawlResults {
 			}
 			// Assign PageRank scores from persisted stats to pages
 			assignPageRankFromStatsMap(pages, statsMap)
-			// Pre-compute aggregations before stripping
+			// Pre-compute aggregations before stripping (InternalLinks still available)
 			anchorStats = buildAnchorStats(pages)
 			dirTree = buildDirectoryTree(pages)
 			tmplTypes = collectTemplateTypes(pages)
 			inlinkIdx = buildInlinkIndex(pages)
 			assignInlinksFromIndex(pages, inlinkIdx)
 			stripPagesForCache(pages)
+			// Build adjacency graph from DB (pages' InternalLinks were already
+			// stripped by GetAllPages, so we read edges directly from the DB).
+			cs2, cs2Err := storage.NewCrawlStore(job.DBPath)
+			if cs2Err == nil {
+				graph = analysis.BuildAdjacencyListFromDisk(pages, func(fn func(source string, targets []string)) error {
+					return cs2.IterateInternalLinks(fn)
+				})
+				cs2.Close()
+			}
 		} else {
 			log.Printf("lazy load: open crawl store for %s: %v", crawlID, csErr)
 		}
@@ -920,6 +939,7 @@ func (m *CrawlManager) GetOrLoadResults(crawlID string) *CrawlResults {
 	result := &CrawlResults{
 		Stats:       statsMap,
 		Pages:       pages,
+		Graph:       graph,
 		AnchorStats: anchorStats,
 		DirTree:     dirTree,
 		TemplateTypes: tmplTypes,

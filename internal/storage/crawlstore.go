@@ -433,6 +433,46 @@ func (s *CrawlStore) GetAllPagesWithProgress(ctx context.Context, onProgress fun
 	return pages, err
 }
 
+// IterateInternalLinks reads each page blob from the DB and yields
+// (sourceURL, internalLinks) pairs via callback. Only URL and InternalLinks
+// are extracted; other fields are discarded. Used to build the adjacency
+// graph from a completed crawl without loading full page data into memory.
+func (s *CrawlStore) IterateInternalLinks(fn func(source string, targets []string)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return sqlitex.Execute(s.conn,
+		`SELECT data FROM pages ORDER BY rowid`,
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				var jsonData []byte
+				colType := stmt.ColumnType(0)
+				if colType == sqlite.TypeBlob {
+					blob := make([]byte, stmt.ColumnLen(0))
+					stmt.ColumnBytes(0, blob)
+					var err error
+					jsonData, err = decompressBlob(blob)
+					if err != nil {
+						return fmt.Errorf("decompress page data: %w", err)
+					}
+				} else {
+					jsonData = []byte(stmt.ColumnText(0))
+				}
+				var partial struct {
+					URL           string   `json:"url"`
+					InternalLinks []string `json:"internalLinks"`
+				}
+				if err := json.Unmarshal(jsonData, &partial); err != nil {
+					return err
+				}
+				if len(partial.InternalLinks) > 0 {
+					fn(partial.URL, partial.InternalLinks)
+				}
+				return nil
+			},
+		},
+	)
+}
+
 // StreamPages iterates over all stored pages one at a time, calling fn for each.
 // Unlike GetAllPages, this does not accumulate pages in memory — each page is
 // deserialized, passed to fn, and then eligible for GC. This is critical for
@@ -661,6 +701,104 @@ func (s *CrawlStore) HasPageIndex() bool {
 			},
 		})
 	return count > 0
+}
+
+// GetPageInternalLinks reads a single page from the DB and returns its internal links.
+// Returns nil if the URL is not found or has no internal links.
+func (s *CrawlStore) GetPageInternalLinks(pageURL string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var links []string
+	err := sqlitex.Execute(s.conn,
+		`SELECT data FROM pages WHERE url = ?`,
+		&sqlitex.ExecOptions{
+			Args: []interface{}{pageURL},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				var jsonData []byte
+				colType := stmt.ColumnType(0)
+				if colType == sqlite.TypeBlob {
+					blob := make([]byte, stmt.ColumnLen(0))
+					stmt.ColumnBytes(0, blob)
+					var err error
+					jsonData, err = decompressBlob(blob)
+					if err != nil {
+						return fmt.Errorf("decompress page data: %w", err)
+					}
+				} else {
+					jsonData = []byte(stmt.ColumnText(0))
+				}
+				var partial struct {
+					InternalLinks []string `json:"internalLinks"`
+				}
+				if err := json.Unmarshal(jsonData, &partial); err != nil {
+					return err
+				}
+				links = partial.InternalLinks
+				return nil
+			},
+		},
+	)
+	return links, err
+}
+
+// GetPageIndexByURLs returns page_index entries for a set of URLs.
+func (s *CrawlStore) GetPageIndexByURLs(urls []string) (map[string]PageIndexEntry, error) {
+	if len(urls) == 0 {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	result := make(map[string]PageIndexEntry, len(urls))
+
+	// Use batched lookups to avoid huge IN clauses
+	const batchSize = 200
+	for start := 0; start < len(urls); start += batchSize {
+		end := start + batchSize
+		if end > len(urls) {
+			end = len(urls)
+		}
+		batch := urls[start:end]
+
+		// Build placeholders
+		placeholders := make([]byte, 0, len(batch)*2)
+		args := make([]interface{}, len(batch))
+		for i, u := range batch {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args[i] = u
+		}
+
+		query := fmt.Sprintf(
+			`SELECT url, status_code, indexable, canonical, depth, inlinks, word_count, title, has_noindex, is_redirect FROM page_index WHERE url IN (%s)`,
+			string(placeholders),
+		)
+		err := sqlitex.Execute(s.conn, query, &sqlitex.ExecOptions{
+			Args: args,
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				e := PageIndexEntry{
+					URL:        stmt.ColumnText(0),
+					StatusCode: stmt.ColumnInt(1),
+					Indexable:  stmt.ColumnInt(2) != 0,
+					Canonical:  stmt.ColumnText(3),
+					Depth:      stmt.ColumnInt(4),
+					Inlinks:    stmt.ColumnInt(5),
+					WordCount:  stmt.ColumnInt(6),
+					Title:      stmt.ColumnText(7),
+					HasNoindex: stmt.ColumnInt(8) != 0,
+					IsRedirect: stmt.ColumnInt(9) != 0,
+				}
+				result[e.URL] = e
+				return nil
+			},
+		})
+		if err != nil {
+			return result, err
+		}
+	}
+	return result, nil
 }
 
 // Enqueue adds a URL to the queue with status 'pending'.

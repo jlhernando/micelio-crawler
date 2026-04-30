@@ -46,6 +46,87 @@ func (g *AdjacencyGraph) HasEdge(src, dst int) bool {
 	return i < len(edges) && edges[i] == target
 }
 
+// SubGraphNode holds a node in a subgraph result with expansion metadata.
+type SubGraphNode struct {
+	Index        int  // node index in the parent graph
+	Expandable   bool // has outlinks not included in this subgraph
+	TotalOutlinks int  // total outlink count in the full graph
+}
+
+// SubGraphResult is the result of a BFS subgraph extraction.
+type SubGraphResult struct {
+	Nodes []SubGraphNode // nodes in the subgraph
+	Edges [][2]int       // [source, target] index pairs (indices into parent graph)
+}
+
+// SubGraph extracts a subgraph via BFS from rootIdx, traversing up to maxHops levels.
+// Returns at most maxNodes nodes. Each node includes whether it has outlinks beyond the subgraph.
+func (g *AdjacencyGraph) SubGraph(rootIdx int, maxHops int, maxNodes int) SubGraphResult {
+	if rootIdx < 0 || rootIdx >= g.N {
+		return SubGraphResult{}
+	}
+	if maxNodes <= 0 {
+		maxNodes = 500
+	}
+	if maxHops < 0 {
+		maxHops = 1
+	}
+
+	visited := make(map[int]struct{}, maxNodes)
+	visited[rootIdx] = struct{}{}
+	frontier := []int{rootIdx}
+
+	for hop := 0; hop < maxHops && len(frontier) > 0; hop++ {
+		var nextFrontier []int
+		for _, idx := range frontier {
+			neighbors := g.Neighbors(idx)
+			for _, ni := range neighbors {
+				nIdx := int(ni)
+				if _, seen := visited[nIdx]; seen {
+					continue
+				}
+				visited[nIdx] = struct{}{}
+				nextFrontier = append(nextFrontier, nIdx)
+				if len(visited) >= maxNodes {
+					goto done
+				}
+			}
+		}
+		frontier = nextFrontier
+	}
+done:
+
+	// Build node list with expansion metadata
+	nodes := make([]SubGraphNode, 0, len(visited))
+	for idx := range visited {
+		outDeg := g.OutDegree(idx)
+		expandable := false
+		if outDeg > 0 {
+			// Check if any outlink is NOT in the visited set
+			for _, ni := range g.Neighbors(idx) {
+				if _, ok := visited[int(ni)]; !ok {
+					expandable = true
+					break
+				}
+			}
+		}
+		nodes = append(nodes, SubGraphNode{Index: idx, Expandable: expandable, TotalOutlinks: outDeg})
+	}
+
+	// Collect edges (only between visited nodes)
+	edges := make([][2]int, 0, len(visited)*4)
+	for idx := range visited {
+		for _, ni := range g.Neighbors(idx) {
+			nIdx := int(ni)
+			if _, ok := visited[nIdx]; ok {
+				edges = append(edges, [2]int{idx, nIdx})
+			}
+		}
+	}
+
+	return SubGraphResult{Nodes: nodes, Edges: edges}
+}
+
 // BuildAdjacencyList builds a deduplicated adjacency graph from pages' internal links.
 // Self-links are excluded. Handles trailing-slash variants and finalUrl redirects.
 func BuildAdjacencyList(pages []*types.PageData) *AdjacencyGraph {

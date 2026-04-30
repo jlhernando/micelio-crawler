@@ -477,6 +477,83 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager) http.Handler {
 		jsonGzip(w, r, graph)
 	})
 
+	mux.HandleFunc("GET /api/crawl/{id}/graph/subgraph", func(w http.ResponseWriter, r *http.Request) {
+		crawlID := r.PathValue("id")
+		rootURL := r.URL.Query().Get("root")
+		depth := 1
+		if d := r.URL.Query().Get("depth"); d != "" {
+			if v, err := strconv.Atoi(d); err == nil && v >= 0 && v <= 5 {
+				depth = v
+			}
+		}
+		maxNodes := 500
+		if m := r.URL.Query().Get("max"); m != "" {
+			if v, err := strconv.Atoi(m); err == nil && v > 0 && v <= 2000 {
+				maxNodes = v
+			}
+		}
+
+		// Fast path: check if in-memory graph is already loaded (non-blocking)
+		if results := manager.GetCachedResults(crawlID); results != nil && results.Graph != nil {
+			payload := buildSubgraphPayload(results, rootURL, depth, maxNodes)
+			jsonGzip(w, r, payload)
+			return
+		}
+
+		// Fallback: read from DB directly (instant, even for 742K-page crawls)
+		dbPath := ""
+		if job, err := store.GetCrawlJob(crawlID); err == nil && job != nil {
+			dbPath = job.DBPath
+		}
+		if dbPath != "" {
+			payload := buildSubgraphFromDB(dbPath, rootURL, depth, maxNodes)
+			if payload != nil {
+				jsonGzip(w, r, payload)
+				return
+			}
+		}
+
+		jsonOK(w, map[string]interface{}{
+			"nodes": []interface{}{},
+			"edges": []interface{}{},
+			"meta":  map[string]interface{}{"pending": true},
+		})
+	})
+
+	mux.HandleFunc("GET /api/crawl/{id}/graph/search", func(w http.ResponseWriter, r *http.Request) {
+		crawlID := r.PathValue("id")
+		q := strings.ToLower(r.URL.Query().Get("q"))
+		if q == "" {
+			jsonOK(w, map[string]interface{}{"results": []interface{}{}})
+			return
+		}
+		limit := 20
+		if l := r.URL.Query().Get("limit"); l != "" {
+			if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 100 {
+				limit = v
+			}
+		}
+		// Fast path: in-memory graph available (non-blocking)
+		if results := manager.GetCachedResults(crawlID); results != nil && results.Graph != nil {
+			payload := buildGraphSearchPayload(results, q, limit)
+			jsonOK(w, payload)
+			return
+		}
+		// Fallback: search via page_index in DB
+		dbPath := ""
+		if job, err := store.GetCrawlJob(crawlID); err == nil && job != nil {
+			dbPath = job.DBPath
+		}
+		if dbPath != "" {
+			payload := buildGraphSearchFromDB(dbPath, q, limit)
+			if payload != nil {
+				jsonOK(w, payload)
+				return
+			}
+		}
+		jsonOK(w, map[string]interface{}{"results": []interface{}{}})
+	})
+
 	mux.HandleFunc("GET /api/crawl/{id}/export/csv", func(w http.ResponseWriter, r *http.Request) {
 		results := manager.GetOrLoadResults(r.PathValue("id"))
 		if results == nil {
@@ -2055,6 +2132,336 @@ func buildGraphPayload(results *CrawlResults) map[string]interface{} {
 			"totalNodes":               totalNodes,
 		},
 	}
+}
+
+// buildSubgraphPayload constructs a subgraph response for progressive graph exploration.
+func buildSubgraphPayload(results *CrawlResults, rootURL string, depth, maxNodes int) map[string]interface{} {
+	graph := results.Graph
+	if graph == nil {
+		return map[string]interface{}{"nodes": []interface{}{}, "edges": []interface{}{}, "meta": map[string]interface{}{}}
+	}
+
+	// Build URL → page index for metadata lookup
+	pageIndex := make(map[string]*types.PageData, len(results.Pages))
+	for _, p := range results.Pages {
+		pageIndex[p.URL] = p
+	}
+
+	// Resolve root node
+	rootIdx := -1
+	if rootURL == "" {
+		// Find seed URL (depth 0)
+		for i, u := range graph.URLs {
+			if p, ok := pageIndex[u]; ok && p.Depth == 0 {
+				rootIdx = i
+				break
+			}
+		}
+		if rootIdx < 0 && graph.N > 0 {
+			rootIdx = 0
+		}
+	} else {
+		if idx, ok := graph.URLIndex[rootURL]; ok {
+			rootIdx = idx
+		}
+	}
+	if rootIdx < 0 {
+		return map[string]interface{}{"nodes": []interface{}{}, "edges": []interface{}{}, "meta": map[string]interface{}{"error": "root not found"}}
+	}
+
+	sub := graph.SubGraph(rootIdx, depth, maxNodes)
+
+	type subNode struct {
+		ID            string  `json:"id"`
+		Title         string  `json:"title"`
+		Depth         int     `json:"depth"`
+		Authority     float64 `json:"authority"`
+		Hub           float64 `json:"hub"`
+		Centrality    float64 `json:"centrality"`
+		Closeness     float64 `json:"closeness"`
+		InDegree      int     `json:"inDegree"`
+		OutDegree     int     `json:"outDegree"`
+		PageRank      float64 `json:"pageRank"`
+		Expandable    bool    `json:"expandable"`
+		TotalOutlinks int     `json:"totalOutlinks"`
+	}
+
+	// Compute in-degree within the subgraph
+	inDegMap := make(map[int]int, len(sub.Nodes))
+	for _, e := range sub.Edges {
+		inDegMap[e[1]]++
+	}
+
+	nodes := make([]subNode, 0, len(sub.Nodes))
+	for _, sn := range sub.Nodes {
+		u := graph.URLs[sn.Index]
+		n := subNode{
+			ID:            u,
+			Expandable:    sn.Expandable,
+			TotalOutlinks: sn.TotalOutlinks,
+			InDegree:      inDegMap[sn.Index],
+			OutDegree:     sn.TotalOutlinks,
+		}
+		if p, ok := pageIndex[u]; ok {
+			if p.Title != nil {
+				n.Title = p.Title.Text
+			}
+			n.Depth = p.Depth
+			n.PageRank = p.PageRank
+			if p.LinkIntelligence != nil {
+				n.Authority = p.LinkIntelligence.AuthorityScore
+				n.Hub = p.LinkIntelligence.HubScore
+				n.Centrality = p.LinkIntelligence.BetweennessCentrality
+				n.Closeness = p.LinkIntelligence.ClosenessCentrality
+			}
+		}
+		nodes = append(nodes, n)
+	}
+
+	type subEdge struct {
+		Source string `json:"source"`
+		Target string `json:"target"`
+	}
+	edges := make([]subEdge, 0, len(sub.Edges))
+	for _, e := range sub.Edges {
+		edges = append(edges, subEdge{Source: graph.URLs[e[0]], Target: graph.URLs[e[1]]})
+	}
+
+	return map[string]interface{}{
+		"nodes": nodes,
+		"edges": edges,
+		"meta": map[string]interface{}{
+			"rootURL":         graph.URLs[rootIdx],
+			"hops":            depth,
+			"totalNodesInGraph": graph.N,
+			"nodesInView":     len(nodes),
+		},
+	}
+}
+
+// buildGraphSearchPayload searches graph URLs for a substring match.
+func buildGraphSearchPayload(results *CrawlResults, query string, limit int) map[string]interface{} {
+	graph := results.Graph
+	if graph == nil {
+		return map[string]interface{}{"results": []interface{}{}}
+	}
+
+	pageIndex := make(map[string]*types.PageData, len(results.Pages))
+	for _, p := range results.Pages {
+		pageIndex[p.URL] = p
+	}
+
+	type searchResult struct {
+		ID       string  `json:"id"`
+		Title    string  `json:"title"`
+		Depth    int     `json:"depth"`
+		PageRank float64 `json:"pageRank"`
+	}
+
+	var matches []searchResult
+	for _, u := range graph.URLs {
+		if len(matches) >= limit {
+			break
+		}
+		uLower := strings.ToLower(u)
+		titleLower := ""
+		if p, ok := pageIndex[u]; ok && p.Title != nil {
+			titleLower = strings.ToLower(p.Title.Text)
+		}
+		if strings.Contains(uLower, query) || strings.Contains(titleLower, query) {
+			sr := searchResult{ID: u}
+			if p, ok := pageIndex[u]; ok {
+				if p.Title != nil {
+					sr.Title = p.Title.Text
+				}
+				sr.Depth = p.Depth
+				sr.PageRank = p.PageRank
+			}
+			matches = append(matches, sr)
+		}
+	}
+
+	return map[string]interface{}{"results": matches}
+}
+
+// buildSubgraphFromDB constructs a subgraph response by reading internal links
+// directly from the SQLite crawl database. Used as a fallback when the in-memory
+// graph hasn't been built yet (e.g. during lazy loading of large crawls).
+func buildSubgraphFromDB(dbPath string, rootURL string, depth, maxNodes int) map[string]interface{} {
+	cs, err := storage.NewCrawlStore(dbPath)
+	if err != nil {
+		return nil
+	}
+	defer cs.Close()
+
+	// Resolve seed URL from page_index if rootURL is empty
+	if rootURL == "" {
+		entries, err := cs.GetPageIndex()
+		if err != nil || len(entries) == 0 {
+			return nil
+		}
+		// Find depth-0 page
+		for _, e := range entries {
+			if e.Depth == 0 {
+				rootURL = e.URL
+				break
+			}
+		}
+		if rootURL == "" {
+			rootURL = entries[0].URL
+		}
+	}
+
+	// BFS from root, reading internal links from DB at each level
+	visited := make(map[string]bool, maxNodes)
+	visited[rootURL] = true
+	frontier := []string{rootURL}
+	edgePairs := make(map[string][]string) // source → targets
+
+	for hop := 0; hop < depth && len(frontier) > 0; hop++ {
+		var nextFrontier []string
+		for _, pageURL := range frontier {
+			links, err := cs.GetPageInternalLinks(pageURL)
+			if err != nil || len(links) == 0 {
+				continue
+			}
+			var targets []string
+			for _, link := range links {
+				if !visited[link] {
+					visited[link] = true
+					nextFrontier = append(nextFrontier, link)
+					if len(visited) >= maxNodes {
+						targets = append(targets, link)
+						goto done
+					}
+				}
+				targets = append(targets, link)
+			}
+			edgePairs[pageURL] = targets
+		}
+		frontier = nextFrontier
+	}
+done:
+
+	// Get metadata for all visited URLs from page_index
+	visitedURLs := make([]string, 0, len(visited))
+	for u := range visited {
+		visitedURLs = append(visitedURLs, u)
+	}
+	indexEntries, _ := cs.GetPageIndexByURLs(visitedURLs)
+
+	type subNode struct {
+		ID            string  `json:"id"`
+		Title         string  `json:"title"`
+		Depth         int     `json:"depth"`
+		Authority     float64 `json:"authority"`
+		Hub           float64 `json:"hub"`
+		Centrality    float64 `json:"centrality"`
+		Closeness     float64 `json:"closeness"`
+		InDegree      int     `json:"inDegree"`
+		OutDegree     int     `json:"outDegree"`
+		PageRank      float64 `json:"pageRank"`
+		Expandable    bool    `json:"expandable"`
+		TotalOutlinks int     `json:"totalOutlinks"`
+	}
+	type subEdge struct {
+		Source string `json:"source"`
+		Target string `json:"target"`
+	}
+
+	// Build nodes
+	nodes := make([]subNode, 0, len(visited))
+	for u := range visited {
+		n := subNode{ID: u}
+		if e, ok := indexEntries[u]; ok {
+			n.Title = e.Title
+			n.Depth = e.Depth
+			n.InDegree = e.Inlinks
+		}
+		// Check expandability: has outlinks we haven't included
+		if targets, ok := edgePairs[u]; ok {
+			n.TotalOutlinks = len(targets)
+			for _, t := range targets {
+				if !visited[t] {
+					n.Expandable = true
+					break
+				}
+			}
+		} else {
+			// We haven't read this node's links — it may have outlinks
+			n.Expandable = true
+		}
+		nodes = append(nodes, n)
+	}
+
+	// Build edges (only between visited nodes)
+	edges := make([]subEdge, 0, len(visited)*4)
+	edgeSet := make(map[string]bool)
+	for source, targets := range edgePairs {
+		for _, target := range targets {
+			if visited[target] {
+				key := source + "\x00" + target
+				if !edgeSet[key] {
+					edgeSet[key] = true
+					edges = append(edges, subEdge{Source: source, Target: target})
+				}
+			}
+		}
+	}
+
+	// Estimate total nodes in graph
+	totalNodes := len(visited)
+	if idx, err := cs.GetPageIndex(); err == nil {
+		totalNodes = len(idx)
+	}
+
+	return map[string]interface{}{
+		"nodes": nodes,
+		"edges": edges,
+		"meta": map[string]interface{}{
+			"rootURL":           rootURL,
+			"hops":              depth,
+			"totalNodesInGraph": totalNodes,
+			"nodesInView":       len(nodes),
+		},
+	}
+}
+
+// buildGraphSearchFromDB searches the page_index table in the crawl DB.
+func buildGraphSearchFromDB(dbPath string, query string, limit int) map[string]interface{} {
+	cs, err := storage.NewCrawlStore(dbPath)
+	if err != nil {
+		return nil
+	}
+	defer cs.Close()
+
+	entries, err := cs.GetPageIndex()
+	if err != nil {
+		return nil
+	}
+
+	type searchResult struct {
+		ID       string  `json:"id"`
+		Title    string  `json:"title"`
+		Depth    int     `json:"depth"`
+		PageRank float64 `json:"pageRank"`
+	}
+
+	var matches []searchResult
+	for _, e := range entries {
+		if len(matches) >= limit {
+			break
+		}
+		if strings.Contains(strings.ToLower(e.URL), query) || strings.Contains(strings.ToLower(e.Title), query) {
+			matches = append(matches, searchResult{
+				ID:    e.URL,
+				Title: e.Title,
+				Depth: e.Depth,
+			})
+		}
+	}
+
+	return map[string]interface{}{"results": matches}
 }
 
 // ── Anchor Stats ──

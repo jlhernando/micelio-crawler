@@ -120,6 +120,27 @@ export const api = {
       };
     }>('GET', `/api/crawl/${id}/graph`),
 
+  getCrawlSubgraph: (id: string, root?: string, depth: number = 1, max: number = 500) => {
+    const params = new URLSearchParams();
+    if (root) params.set('root', root);
+    params.set('depth', String(depth));
+    params.set('max', String(max));
+    return request<{
+      nodes: Array<{
+        id: string; depth: number | null; authority: number; hub: number;
+        centrality: number; closeness: number; inDegree: number; outDegree: number;
+        title: string; pageRank: number; expandable: boolean; totalOutlinks: number;
+      }>;
+      edges: Array<{ source: string; target: string }>;
+      meta: { rootURL: string; hops: number; totalNodesInGraph: number; nodesInView: number; pending?: boolean };
+    }>('GET', `/api/crawl/${id}/graph/subgraph?${params.toString()}`);
+  },
+
+  searchGraphNodes: (id: string, query: string, limit: number = 20) =>
+    request<{
+      results: Array<{ id: string; title: string; depth: number; pageRank: number }>;
+    }>('GET', `/api/crawl/${id}/graph/search?q=${encodeURIComponent(query)}&limit=${limit}`),
+
   getAnchorStats: (id: string) =>
     request<{
       anchors: Array<{ text: string; count: number; isInternal: boolean; isNonDescriptive: boolean }>;

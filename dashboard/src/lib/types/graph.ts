@@ -8,6 +8,9 @@ export interface GraphNode {
   inDegree: number;
   outDegree: number;
   title: string;
+  pageRank?: number;
+  expandable?: boolean;
+  totalOutlinks?: number;
 }
 
 export interface GraphEdge {
@@ -30,4 +33,19 @@ export interface BundledEdge {
   sourcePrefix: string;
   targetPrefix: string;
   count: number;
+}
+
+export interface SubgraphMeta {
+  rootURL: string;
+  hops: number;
+  totalNodesInGraph: number;
+  nodesInView: number;
+  pending?: boolean;
+}
+
+export interface GraphSearchResult {
+  id: string;
+  title: string;
+  depth: number;
+  pageRank: number;
 }

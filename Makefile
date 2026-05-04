@@ -57,7 +57,9 @@ release: clean-release
 		echo "Building $$os/$$arch..."; \
 		GOOS=$$os GOARCH=$$arch go build $(LDFLAGS) -o $$output ./cmd/micelio; \
 	done
-	@echo "Release binaries in dist/"
+	@echo "Generating checksums..."
+	@cd dist && shasum -a 256 micelio-* > checksums.txt
+	@echo "Release binaries + checksums.txt in dist/"
 
 clean-release:
 	rm -rf dist/
@@ -81,12 +83,16 @@ sync: build
 APP_NAME := Micelio.app
 APP_DIR := dist/$(APP_NAME)
 MACOS_DIR := packaging/macos
+# Strip leading "v" so plutil gets a version like "1.0.0", not "v1.0.0".
+APP_VERSION := $(patsubst v%,%,$(VERSION))
 
 app: build-with-dashboard
 	@echo "Building $(APP_NAME)..."
 	@rm -rf "$(APP_DIR)"
 	@mkdir -p "$(APP_DIR)/Contents/MacOS" "$(APP_DIR)/Contents/Resources"
 	@cp "$(MACOS_DIR)/Info.plist" "$(APP_DIR)/Contents/"
+	@plutil -replace CFBundleVersion -string "$(APP_VERSION)" "$(APP_DIR)/Contents/Info.plist"
+	@plutil -replace CFBundleShortVersionString -string "$(APP_VERSION)" "$(APP_DIR)/Contents/Info.plist"
 	@cp "$(MACOS_DIR)/launcher" "$(APP_DIR)/Contents/MacOS/"
 	@cp "$(BINARY)" "$(APP_DIR)/Contents/MacOS/"
 	@if [ -f "$(MACOS_DIR)/AppIcon.icns" ]; then \
@@ -94,7 +100,7 @@ app: build-with-dashboard
 	else \
 		echo "No icon found — run: bash $(MACOS_DIR)/create-icns.sh"; \
 	fi
-	@echo "Created $(APP_DIR)"
+	@echo "Created $(APP_DIR) (version $(APP_VERSION))"
 	@echo "Install: cp -r $(APP_DIR) /Applications/"
 
 clean-app:

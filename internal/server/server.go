@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	_ "net/http/pprof" // register pprof handlers on default mux
+	"os"
 	"os/signal"
 	"path"
 	"strings"
@@ -18,7 +19,13 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/micelio/micelio/internal/updater"
 )
+
+// UpdaterRepo is the GitHub "owner/repo" auto-update polls. Hardcoded to the
+// upstream so the macOS .app and any user-installed binary always points at
+// the canonical release stream.
+const UpdaterRepo = "jlhernando/micelio-crawler"
 
 const wsReadTimeout = 5 * time.Minute
 const wsPingInterval = 2 * time.Minute
@@ -42,11 +49,27 @@ type Server struct {
 	mu      sync.RWMutex
 }
 
+// newUpdater wires an Updater with the running binary's path. Returns a
+// configured Updater that defaults to "dev build" if version or executable
+// path are unavailable.
+func newUpdater(version string) *updater.Updater {
+	binPath, err := os.Executable()
+	if err != nil {
+		binPath = ""
+	}
+	stateDir := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		stateDir = home + "/.micelio/ui"
+	}
+	return updater.New(UpdaterRepo, version, binPath, stateDir)
+}
+
 // ServerOptions configures the web server.
 type ServerOptions struct {
 	Port      int
 	Host      string // bind address (default "127.0.0.1")
 	AuthToken string // bearer token for API auth (optional)
+	Version   string // application version, surfaced via /api/update/status
 }
 
 // StartUIServer initializes and starts the web server on the given port.
@@ -73,10 +96,12 @@ func StartUIServerWithOptions(opts ServerOptions, dashboardFS fs.FS) error {
 	}
 
 	manager := NewCrawlManager(store)
+
+	upd := newUpdater(opts.Version)
 	srv := &Server{
 		store:   store,
 		manager: manager,
-		api:     CreateAPIHandler(store, manager),
+		api:     CreateAPIHandler(store, manager, upd),
 		clients: make(map[*wsClient]struct{}),
 	}
 

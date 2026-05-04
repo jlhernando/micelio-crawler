@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
+  import { updates } from '../lib/stores/updates.svelte';
   import CollapsibleSection from '../lib/components/ui/CollapsibleSection.svelte';
   import Toast from '../lib/components/ui/Toast.svelte';
 
@@ -100,7 +101,41 @@
     }
     savedSnapshot = JSON.stringify(settings);
     loading = false;
+    updates.load();
   });
+
+  async function checkForUpdates() {
+    try {
+      await updates.load(true);
+    } catch { /* error shown via updates.error */ }
+  }
+
+  async function installUpdate() {
+    if (updates.installing) return;
+    try {
+      const res = await updates.install();
+      if (res?.installed) {
+        toast = { message: `Updated to ${updates.status?.current ?? ''}. Restart Micelio to use it.`, type: 'success' };
+      }
+    } catch (err) {
+      toast = { message: `Update failed: ${(err as Error).message}`, type: 'error' };
+    }
+  }
+
+  async function rollbackUpdate() {
+    if (updates.installing) return;
+    try {
+      await updates.rollback();
+      toast = { message: 'Rolled back to previous version. Restart Micelio to use it.', type: 'success' };
+    } catch (err) {
+      toast = { message: `Rollback failed: ${(err as Error).message}`, type: 'error' };
+    }
+  }
+
+  function formatTimestamp(ts?: string): string {
+    if (!ts) return '—';
+    try { return new Date(ts).toLocaleString(); } catch { return ts; }
+  }
 
   // Warn on page/tab close when there are unsaved changes
   $effect(() => {
@@ -195,6 +230,88 @@
         {@render actionButtons()}
       </div>
     </div>
+
+    <!-- Updates -->
+    <CollapsibleSection title="Updates">
+      {#if updates.status}
+        <div class="space-y-3 text-sm">
+          <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+            <div>
+              <div class="text-xs text-fg-2">Current version</div>
+              <div class="font-medium font-mono">{updates.status.current || 'unknown'}</div>
+            </div>
+            <div>
+              <div class="text-xs text-fg-2">Latest release</div>
+              <div class="font-medium font-mono">
+                {#if updates.status.latest}
+                  {updates.status.latest}
+                  {#if updates.status.releaseUrl}
+                    <a href={updates.status.releaseUrl} target="_blank" rel="noopener noreferrer" class="text-accent hover:underline ml-2 text-xs">notes</a>
+                  {/if}
+                {:else}
+                  —
+                {/if}
+              </div>
+            </div>
+            <div>
+              <div class="text-xs text-fg-2">Platform</div>
+              <div class="font-mono">{updates.status.platform}</div>
+            </div>
+            <div>
+              <div class="text-xs text-fg-2">Last checked</div>
+              <div>{formatTimestamp(updates.status.lastCheckedAt)}</div>
+            </div>
+          </div>
+
+          {#if updates.status.notes}
+            <div class="text-xs text-fg-2 italic">{updates.status.notes}</div>
+          {/if}
+
+          {#if updates.status.isDevBuild}
+            <div class="text-xs text-fg-2">
+              Auto-update is disabled for development builds. Build a tagged release (<span class="font-mono">v1.2.3</span>) to enable in-app updates.
+            </div>
+          {:else if updates.status.updateAvailable && !updates.status.downloadable}
+            <div class="text-xs text-amber-400">
+              A new release ({updates.status.latest}) is available, but no asset matches your platform ({updates.status.platform}). You'll need to update manually.
+            </div>
+          {/if}
+
+          <div class="flex flex-wrap gap-2 pt-1">
+            <button
+              type="button"
+              class="px-3 py-1.5 rounded-md bg-surface-3 hover:bg-surface-2 text-xs font-medium cursor-pointer disabled:opacity-50"
+              onclick={checkForUpdates}
+              disabled={updates.loading}
+            >{updates.loading && !updates.installing ? 'Checking...' : 'Check now'}</button>
+            {#if updates.status.updateAvailable && updates.status.downloadable && !updates.status.isDevBuild}
+              <button
+                type="button"
+                class="px-3 py-1.5 rounded-md bg-accent text-white text-xs font-medium hover:brightness-110 cursor-pointer disabled:opacity-50"
+                onclick={installUpdate}
+                disabled={updates.installing}
+              >{updates.installing ? 'Installing...' : `Install ${updates.status.latest}`}</button>
+            {/if}
+            {#if updates.status.canRollback}
+              <button
+                type="button"
+                class="px-3 py-1.5 rounded-md bg-surface-3 hover:bg-surface-2 text-xs font-medium cursor-pointer disabled:opacity-50"
+                onclick={rollbackUpdate}
+                disabled={updates.installing}
+              >Rollback to previous</button>
+            {/if}
+          </div>
+
+          {#if updates.error}
+            <div class="text-xs text-red-400">{updates.error}</div>
+          {/if}
+        </div>
+      {:else if updates.loading}
+        <p class="text-xs text-fg-2">Loading update status...</p>
+      {:else}
+        <p class="text-xs text-fg-2">Update status unavailable.</p>
+      {/if}
+    </CollapsibleSection>
 
     <!-- Default Crawl Settings -->
     <CollapsibleSection title="Default Crawl Settings" open={true}>

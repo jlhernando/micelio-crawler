@@ -1,5 +1,27 @@
 /** Fetch wrapper for REST API calls */
 
+export interface UpdateStatus {
+  current: string;
+  latest?: string;
+  updateAvailable: boolean;
+  isDevBuild: boolean;
+  downloadable: boolean;
+  assetName?: string;
+  releaseUrl?: string;
+  releaseName?: string;
+  publishedAt?: string;
+  lastCheckedAt?: string;
+  repo: string;
+  platform: string;
+  notes?: string;
+}
+
+export interface InstallResult {
+  installed: boolean;
+  restartRequired: boolean;
+  status: UpdateStatus;
+}
+
 export interface ScheduleState {
   id: string;
   url: string;
@@ -280,4 +302,14 @@ export const api = {
 
   deleteLog: (id: string) =>
     request<{ deleting: boolean }>('DELETE', `/api/logs/${id}`),
+
+  // Auto-update
+  getUpdateStatus: () =>
+    request<UpdateStatus>('GET', '/api/update/status'),
+
+  forceUpdateCheck: () =>
+    request<UpdateStatus>('POST', '/api/update/check'),
+
+  installUpdate: () =>
+    request<InstallResult>('POST', '/api/update/install'),
 };

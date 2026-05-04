@@ -13,7 +13,7 @@ func newTestAPI(t *testing.T) (http.Handler, *UiStore, *CrawlManager) {
 	t.Helper()
 	s := newTestStore(t)
 	m := NewCrawlManager(s)
-	return CreateAPIHandler(s, m), s, m
+	return CreateAPIHandler(s, m, nil), s, m
 }
 
 func TestGetPresets(t *testing.T) {

@@ -24,6 +24,7 @@ import (
 	"github.com/micelio/micelio/internal/scheduler"
 	"github.com/micelio/micelio/internal/storage"
 	"github.com/micelio/micelio/internal/types"
+	"github.com/micelio/micelio/internal/updater"
 	"github.com/micelio/micelio/internal/webhook"
 )
 
@@ -69,8 +70,9 @@ var envFallbacks = map[string]string{
 }
 
 // CreateAPIHandler returns an http.Handler for all /api/* routes.
-func CreateAPIHandler(store *UiStore, manager *CrawlManager) http.Handler {
+func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Updater) http.Handler {
 	mux := http.NewServeMux()
+	registerUpdateRoutes(mux, upd)
 
 	mux.HandleFunc("POST /api/crawl/start", func(w http.ResponseWriter, r *http.Request) {
 		config, err := readJSON(r)

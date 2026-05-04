@@ -628,6 +628,7 @@ func uiCmd() *cobra.Command {
 				Port:      port,
 				Host:      host,
 				AuthToken: authToken,
+				Version:   version,
 			}, dashboardFS())
 		},
 	}

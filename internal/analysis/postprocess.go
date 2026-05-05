@@ -53,10 +53,11 @@ func RunCoreAnalysis(ctx context.Context, pages []*types.PageData, cfg PostProce
 
 	// Run core reporter (always)
 	reportCfg := ReportConfig{
-		SeedURL:          cfg.SeedURL,
-		SegmentRules:     segments,
-		SitemapEntries:   cfg.SitemapEntries,
-		TotalSitemapURLs: len(cfg.SitemapEntries),
+		SeedURL:           cfg.SeedURL,
+		SegmentRules:      segments,
+		SitemapEntries:    cfg.SitemapEntries,
+		TotalSitemapURLs:  len(cfg.SitemapEntries),
+		InternalLinksIter: cfg.InternalLinksIter,
 	}
 	stats := GenerateReport(pages, cfg.CrawlDurationMs, reportCfg)
 

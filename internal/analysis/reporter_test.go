@@ -108,6 +108,62 @@ func TestGenerateReportOrphanPages(t *testing.T) {
 	}
 }
 
+// Mirrors the production crawl path: pages have InternalLinks=nil (stripped after
+// streaming to disk) and edges are supplied via InternalLinksIter. Without the
+// iterator wired into orphan detection, every non-seed page would be flagged.
+func TestGenerateReportOrphanPagesWithIterator(t *testing.T) {
+	pages := []*types.PageData{
+		{
+			URL:               "https://example.com/",
+			StatusCode:        200,
+			Depth:             0,
+			InternalLinkCount: 2,
+			Indexability:      types.IndexabilityData{Indexable: true},
+		},
+		{
+			URL:               "https://example.com/a",
+			StatusCode:        200,
+			Depth:             1,
+			InternalLinkCount: 1,
+			Indexability:      types.IndexabilityData{Indexable: true},
+		},
+		{
+			URL:               "https://example.com/b",
+			StatusCode:        200,
+			Depth:             1,
+			InternalLinkCount: 0,
+			Indexability:      types.IndexabilityData{Indexable: true},
+		},
+		{
+			URL:               "https://example.com/orphan",
+			StatusCode:        200,
+			Depth:             2,
+			InternalLinkCount: 0,
+			Indexability:      types.IndexabilityData{Indexable: true},
+		},
+	}
+	edges := map[string][]string{
+		"https://example.com/":  {"https://example.com/a", "https://example.com/b"},
+		"https://example.com/a": {"https://example.com/b"},
+	}
+	iter := func(fn func(source string, targets []string)) error {
+		for src, tgts := range edges {
+			fn(src, tgts)
+		}
+		return nil
+	}
+	stats := GenerateReport(pages, 1000, ReportConfig{
+		SeedURL:           "https://example.com/",
+		InternalLinksIter: iter,
+	})
+	if len(stats.OrphanPages) != 1 {
+		t.Fatalf("OrphanPages = %d (%v), want 1", len(stats.OrphanPages), stats.OrphanPages)
+	}
+	if stats.OrphanPages[0] != "https://example.com/orphan" {
+		t.Errorf("OrphanPages[0] = %q, want orphan URL", stats.OrphanPages[0])
+	}
+}
+
 func TestGenerateReportPageRank(t *testing.T) {
 	pages := []*types.PageData{
 		{URL: "https://example.com/a", StatusCode: 200, InternalLinks: []string{"https://example.com/b"}},

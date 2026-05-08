@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"context"
 	"testing"
 
 	"github.com/micelio/micelio/internal/types"
@@ -9,24 +10,24 @@ import (
 func TestGenerateReportBasicStats(t *testing.T) {
 	pages := []*types.PageData{
 		{
-			URL:        "https://example.com/",
-			StatusCode: 200,
-			Title:      &types.TextLength{Text: "Home", Length: 4},
+			URL:             "https://example.com/",
+			StatusCode:      200,
+			Title:           &types.TextLength{Text: "Home", Length: 4},
 			MetaDescription: &types.TextLength{Text: "Welcome", Length: 7},
-			Headings:   types.HeadingData{H1: []string{"Welcome"}},
-			WordCount:  500,
-			Depth:      0,
-			ResponseTimeMs: 150,
-			InternalLinks:  []string{"https://example.com/about"},
-			Indexability:   types.IndexabilityData{Indexable: true},
+			Headings:        types.HeadingData{H1: []string{"Welcome"}},
+			WordCount:       500,
+			Depth:           0,
+			ResponseTimeMs:  150,
+			InternalLinks:   []string{"https://example.com/about"},
+			Indexability:    types.IndexabilityData{Indexable: true},
 		},
 		{
-			URL:        "https://example.com/about",
-			StatusCode: 200,
-			Title:      &types.TextLength{Text: "About", Length: 5},
-			Headings:   types.HeadingData{H1: []string{"About Us"}},
-			WordCount:  300,
-			Depth:      1,
+			URL:            "https://example.com/about",
+			StatusCode:     200,
+			Title:          &types.TextLength{Text: "About", Length: 5},
+			Headings:       types.HeadingData{H1: []string{"About Us"}},
+			WordCount:      300,
+			Depth:          1,
 			ResponseTimeMs: 200,
 			Indexability:   types.IndexabilityData{Indexable: true},
 		},
@@ -90,13 +91,13 @@ func TestGenerateReportOrphanPages(t *testing.T) {
 			URL:          "https://example.com/linked",
 			StatusCode:   200,
 			Depth:        1,
-			Indexability:  types.IndexabilityData{Indexable: true},
+			Indexability: types.IndexabilityData{Indexable: true},
 		},
 		{
 			URL:          "https://example.com/orphan",
 			StatusCode:   200,
 			Depth:        2,
-			Indexability:  types.IndexabilityData{Indexable: true},
+			Indexability: types.IndexabilityData{Indexable: true},
 		},
 	}
 	stats := GenerateReport(pages, 1000, ReportConfig{})
@@ -104,6 +105,62 @@ func TestGenerateReportOrphanPages(t *testing.T) {
 		t.Errorf("OrphanPages = %d, want 1", len(stats.OrphanPages))
 	}
 	if len(stats.OrphanPages) > 0 && stats.OrphanPages[0] != "https://example.com/orphan" {
+		t.Errorf("OrphanPages[0] = %q, want orphan URL", stats.OrphanPages[0])
+	}
+}
+
+// Mirrors the production crawl path: pages have InternalLinks=nil (stripped after
+// streaming to disk) and edges are supplied via InternalLinksIter. Without the
+// iterator wired into orphan detection, every non-seed page would be flagged.
+func TestGenerateReportOrphanPagesWithIterator(t *testing.T) {
+	pages := []*types.PageData{
+		{
+			URL:               "https://example.com/",
+			StatusCode:        200,
+			Depth:             0,
+			InternalLinkCount: 2,
+			Indexability:      types.IndexabilityData{Indexable: true},
+		},
+		{
+			URL:               "https://example.com/a",
+			StatusCode:        200,
+			Depth:             1,
+			InternalLinkCount: 1,
+			Indexability:      types.IndexabilityData{Indexable: true},
+		},
+		{
+			URL:               "https://example.com/b",
+			StatusCode:        200,
+			Depth:             1,
+			InternalLinkCount: 0,
+			Indexability:      types.IndexabilityData{Indexable: true},
+		},
+		{
+			URL:               "https://example.com/orphan",
+			StatusCode:        200,
+			Depth:             2,
+			InternalLinkCount: 0,
+			Indexability:      types.IndexabilityData{Indexable: true},
+		},
+	}
+	edges := map[string][]string{
+		"https://example.com/":  {"https://example.com/a", "https://example.com/b"},
+		"https://example.com/a": {"https://example.com/b"},
+	}
+	iter := func(fn func(source string, targets []string)) error {
+		for src, tgts := range edges {
+			fn(src, tgts)
+		}
+		return nil
+	}
+	stats := GenerateReport(pages, 1000, ReportConfig{
+		SeedURL:           "https://example.com/",
+		InternalLinksIter: iter,
+	})
+	if len(stats.OrphanPages) != 1 {
+		t.Fatalf("OrphanPages = %d (%v), want 1", len(stats.OrphanPages), stats.OrphanPages)
+	}
+	if stats.OrphanPages[0] != "https://example.com/orphan" {
 		t.Errorf("OrphanPages[0] = %q, want orphan URL", stats.OrphanPages[0])
 	}
 }
@@ -116,6 +173,80 @@ func TestGenerateReportPageRank(t *testing.T) {
 	stats := GenerateReport(pages, 1000, ReportConfig{})
 	if len(stats.PageRankScores) != 2 {
 		t.Errorf("PageRankScores has %d entries, want 2", len(stats.PageRankScores))
+	}
+}
+
+func TestGenerateReportPageRankWithIterator(t *testing.T) {
+	pages := []*types.PageData{
+		{URL: "https://example.com/", StatusCode: 200, InternalLinkCount: 1},
+		{URL: "https://example.com/mid", StatusCode: 200, InternalLinkCount: 1},
+		{URL: "https://example.com/sink", StatusCode: 200, InternalLinkCount: 0},
+	}
+	edges := map[string][]string{
+		"https://example.com/":    {"https://example.com/mid"},
+		"https://example.com/mid": {"https://example.com/sink"},
+	}
+	iter := func(fn func(source string, targets []string)) error {
+		for src, tgts := range edges {
+			fn(src, tgts)
+		}
+		return nil
+	}
+
+	stats := GenerateReport(pages, 1000, ReportConfig{
+		SeedURL:           "https://example.com/",
+		InternalLinksIter: iter,
+	})
+
+	home := stats.PageRankScores["https://example.com/"]
+	mid := stats.PageRankScores["https://example.com/mid"]
+	sink := stats.PageRankScores["https://example.com/sink"]
+	if !(home < mid && mid < sink) {
+		t.Fatalf("PageRank should use iterator edges: home=%f mid=%f sink=%f", home, mid, sink)
+	}
+}
+
+func TestRunDeferredAnalysisPreservesStrippedLinkCounts(t *testing.T) {
+	pages := []*types.PageData{
+		{
+			URL:           "https://example.com/",
+			StatusCode:    200,
+			InternalLinks: []string{"https://example.com/a"},
+			ExternalLinks: []string{"https://external.example/"},
+			WordCount:     500,
+			Indexability:  types.IndexabilityData{Indexable: true},
+		},
+		{
+			URL:          "https://example.com/a",
+			StatusCode:   200,
+			WordCount:    250,
+			Indexability: types.IndexabilityData{Indexable: true},
+		},
+	}
+	edges := map[string][]string{
+		"https://example.com/": {"https://example.com/a"},
+	}
+	iter := func(fn func(source string, targets []string)) error {
+		for src, tgts := range edges {
+			fn(src, tgts)
+		}
+		return nil
+	}
+	cfg := PostProcessConfig{
+		SeedURL:           "https://example.com/",
+		InternalLinksIter: iter,
+		LinkIntelligence:  true,
+		LINoCentrality:    true,
+	}
+
+	stats := RunCoreAnalysis(context.Background(), pages, cfg)
+	RunDeferredAnalysis(context.Background(), pages, cfg, &stats)
+
+	if pages[0].InternalLinkCount != 1 {
+		t.Fatalf("InternalLinkCount = %d, want 1", pages[0].InternalLinkCount)
+	}
+	if pages[0].ExternalLinkCount != 1 {
+		t.Fatalf("ExternalLinkCount = %d, want 1", pages[0].ExternalLinkCount)
 	}
 }
 

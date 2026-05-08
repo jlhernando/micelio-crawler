@@ -19,6 +19,11 @@ type ReportConfig struct {
 	TotalSitemapURLs       int
 	GscDays                int
 	Ga4Days                int
+	// InternalLinksIter, if non-nil, supplies internal-link edges from disk.
+	// Required for orphan detection when pages have InternalLinks stripped
+	// (always-on disk streaming during crawl). Without this, every non-seed
+	// page would be flagged as orphan.
+	InternalLinksIter func(fn func(source string, targets []string)) error
 }
 
 // SitemapExtCounts holds sitemap extension type counts.
@@ -396,6 +401,17 @@ func GenerateReport(pages []*types.PageData, durationMs int64, cfg ReportConfig)
 		}
 	}
 
+	// If pages had InternalLinks stripped (always-on disk streaming during crawl),
+	// inlinkCount is empty here — fall back to the disk iterator so orphan
+	// detection sees real edges instead of flagging every non-seed page.
+	if cfg.InternalLinksIter != nil && len(inlinkCount) == 0 {
+		_ = cfg.InternalLinksIter(func(_ string, targets []string) {
+			for _, link := range targets {
+				inlinkCount[normalizeTrailingSlash(link)]++
+			}
+		})
+	}
+
 	// Orphan pages: no internal links pointing to them (excluding seed URL)
 	seedNorm := normalizeTrailingSlash(cfg.SeedURL)
 	for _, p := range pages {
@@ -498,7 +514,11 @@ func GenerateReport(pages []*types.PageData, durationMs int64, cfg ReportConfig)
 	}
 
 	// PageRank
-	stats.PageRankScores = ComputePageRank(pages, PageRankOptions{})
+	if cfg.InternalLinksIter != nil {
+		stats.PageRankScores = ComputePageRankFromGraph(BuildAdjacencyListFromDisk(pages, cfg.InternalLinksIter), PageRankOptions{})
+	} else {
+		stats.PageRankScores = ComputePageRank(pages, PageRankOptions{})
+	}
 
 	// Delegate to builders
 	stats.RedirectStats = buildRedirectStats(pages)

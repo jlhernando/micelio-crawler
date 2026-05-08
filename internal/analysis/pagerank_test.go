@@ -54,6 +54,37 @@ func TestPageRankLinearChain(t *testing.T) {
 	}
 }
 
+func TestPageRankFromGraphMatchesPages(t *testing.T) {
+	pages := []*types.PageData{
+		{URL: "https://example.com/a", InternalLinks: []string{"https://example.com/b"}},
+		{URL: "https://example.com/b", InternalLinks: []string{"https://example.com/c"}},
+		{URL: "https://example.com/c"},
+	}
+
+	fromPages := ComputePageRank(pages, DefaultPageRankOptions())
+	fromGraph := ComputePageRankFromGraph(BuildAdjacencyList(pages), DefaultPageRankOptions())
+
+	for url, want := range fromPages {
+		if got := fromGraph[url]; got != want {
+			t.Errorf("PageRankFromGraph[%s] = %f, want %f", url, got, want)
+		}
+	}
+}
+
+func TestPageRankPartialOptionsUseDefaults(t *testing.T) {
+	pages := []*types.PageData{
+		{URL: "https://example.com/a", InternalLinks: []string{"https://example.com/b"}},
+		{URL: "https://example.com/b"},
+	}
+	result := ComputePageRank(pages, PageRankOptions{Damping: 0.85})
+	if result["https://example.com/b"] != 10 {
+		t.Errorf("B score = %f, want 10", result["https://example.com/b"])
+	}
+	if result["https://example.com/a"] >= result["https://example.com/b"] {
+		t.Errorf("A (%f) should be < B (%f)", result["https://example.com/a"], result["https://example.com/b"])
+	}
+}
+
 func TestPageRankCycle(t *testing.T) {
 	// Complete cycle: A -> B -> C -> A: all should have equal rank
 	pages := []*types.PageData{

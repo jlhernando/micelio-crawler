@@ -23,6 +23,20 @@ func DefaultPageRankOptions() PageRankOptions {
 	}
 }
 
+func normalizePageRankOptions(opts PageRankOptions) PageRankOptions {
+	defaults := DefaultPageRankOptions()
+	if opts.Damping == 0 {
+		opts.Damping = defaults.Damping
+	}
+	if opts.MaxIterations == 0 {
+		opts.MaxIterations = defaults.MaxIterations
+	}
+	if opts.Epsilon == 0 {
+		opts.Epsilon = defaults.Epsilon
+	}
+	return opts
+}
+
 // ComputePageRank computes internal PageRank scores for crawled pages.
 //
 // Uses the standard iterative PageRank algorithm:
@@ -33,37 +47,22 @@ func DefaultPageRankOptions() PageRankOptions {
 // Dangling nodes (pages with no outlinks) distribute rank evenly.
 // Scores are normalized to a 0–10 scale.
 func ComputePageRank(pages []*types.PageData, opts PageRankOptions) map[string]float64 {
-	n := len(pages)
-	if n == 0 {
+	if len(pages) == 0 {
 		return make(map[string]float64)
 	}
 
-	if opts.Damping == 0 {
-		opts = DefaultPageRankOptions()
-	}
+	return ComputePageRankFromGraph(BuildAdjacencyList(pages), opts)
+}
 
-	// Build URL → index mapping
-	urlIndex := make(map[string]int, n)
-	for i, p := range pages {
-		urlIndex[p.URL] = i
+// ComputePageRankFromGraph computes PageRank from an already-built adjacency
+// graph. This is used when links have been stripped from PageData and supplied
+// by a disk-backed iterator instead.
+func ComputePageRankFromGraph(graph *AdjacencyGraph, opts PageRankOptions) map[string]float64 {
+	if graph == nil || graph.N == 0 {
+		return make(map[string]float64)
 	}
-
-	// Build adjacency in CSR format: flat edges + offsets
-	offsets := make([]int32, n+1)
-	var edges []int32
-	for i, p := range pages {
-		seen := make(map[int32]struct{})
-		for _, link := range p.InternalLinks {
-			j, ok := urlIndex[link]
-			if ok && j != i {
-				seen[int32(j)] = struct{}{}
-			}
-		}
-		for j := range seen {
-			edges = append(edges, j)
-		}
-		offsets[i+1] = int32(len(edges))
-	}
+	opts = normalizePageRankOptions(opts)
+	n := graph.N
 
 	// Iterative PageRank
 	rank := make([]float64, n)
@@ -83,7 +82,7 @@ func ComputePageRank(pages []*types.PageData, opts PageRankOptions) map[string]f
 		// Dangling node rank (pages with 0 outlinks)
 		var danglingSum float64
 		for i := 0; i < n; i++ {
-			if offsets[i+1] == offsets[i] {
+			if graph.OutDegree(i) == 0 {
 				danglingSum += rank[i]
 			}
 		}
@@ -94,12 +93,12 @@ func ComputePageRank(pages []*types.PageData, opts PageRankOptions) map[string]f
 
 		// Distribute rank via outlinks
 		for i := 0; i < n; i++ {
-			deg := offsets[i+1] - offsets[i]
+			deg := graph.OutDegree(i)
 			if deg == 0 {
 				continue
 			}
 			share := (opts.Damping * rank[i]) / float64(deg)
-			for _, j := range edges[offsets[i]:offsets[i+1]] {
+			for _, j := range graph.Neighbors(i) {
 				next[j] += share
 			}
 		}
@@ -124,12 +123,12 @@ func ComputePageRank(pages []*types.PageData, opts PageRankOptions) map[string]f
 	}
 
 	result := make(map[string]float64, n)
-	for i, p := range pages {
+	for i, url := range graph.URLs {
 		score := 0.0
 		if maxRank > 0 {
 			score = (rank[i] / maxRank) * 10
 		}
-		result[p.URL] = math.Round(score*100) / 100
+		result[url] = math.Round(score*100) / 100
 	}
 	return result
 }

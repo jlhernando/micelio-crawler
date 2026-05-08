@@ -514,7 +514,11 @@ func GenerateReport(pages []*types.PageData, durationMs int64, cfg ReportConfig)
 	}
 
 	// PageRank
-	stats.PageRankScores = ComputePageRank(pages, PageRankOptions{})
+	if cfg.InternalLinksIter != nil {
+		stats.PageRankScores = ComputePageRankFromGraph(BuildAdjacencyListFromDisk(pages, cfg.InternalLinksIter), PageRankOptions{})
+	} else {
+		stats.PageRankScores = ComputePageRank(pages, PageRankOptions{})
+	}
 
 	// Delegate to builders
 	stats.RedirectStats = buildRedirectStats(pages)

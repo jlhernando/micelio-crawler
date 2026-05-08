@@ -21,7 +21,27 @@ export function computePageRank(
   if (n === 0) return new Map();
 
   const urlIndex = new Map<string, number>();
-  for (let i = 0; i < n; i++) urlIndex.set(urls[i], i);
+  const setIfMissing = (url: string | undefined, i: number) => {
+    if (url && !urlIndex.has(url)) urlIndex.set(url, i);
+  };
+  const setVariants = (url: string | undefined, i: number) => {
+    if (!url) return;
+    setIfMissing(url, i);
+    if (url.endsWith('/') && url.length > 1) {
+      setIfMissing(url.slice(0, -1), i);
+    } else {
+      setIfMissing(`${url}/`, i);
+    }
+  };
+
+  for (let i = 0; i < n; i++) {
+    urlIndex.set(pages[i].url, i);
+  }
+  for (let i = 0; i < n; i++) {
+    setIfMissing(pages[i].finalUrl, i);
+    setVariants(pages[i].url, i);
+    setVariants(pages[i].finalUrl, i);
+  }
 
   // Build adjacency: outlinks[i] = list of indices that page i links to (internal only, deduplicated)
   const outlinks: number[][] = new Array(n);

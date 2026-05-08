@@ -14,12 +14,12 @@ import (
 
 // PostProcessConfig holds options for post-crawl analysis.
 type PostProcessConfig struct {
-	NgramAnalyzer       *NgramAnalyzer
-	OnLIPhase           func(phase string) // Called before each LI phase (e.g. "click_depth", "hits", "centrality", "suggestions")
-	OnPersist           func()             // Called after each LI phase to persist intermediate results to DB
+	NgramAnalyzer *NgramAnalyzer
+	OnLIPhase     func(phase string) // Called before each LI phase (e.g. "click_depth", "hits", "centrality", "suggestions")
+	OnPersist     func()             // Called after each LI phase to persist intermediate results to DB
 	// InternalLinksIter, if non-nil, provides internal link edges from disk.
 	// Used by BuildAdjacencyList to avoid loading InternalLinks from pages (saves ~5GB at 1M pages).
-	InternalLinksIter func(fn func(source string, targets []string)) error
+	InternalLinksIter   func(fn func(source string, targets []string)) error
 	SeedURL             string
 	Language            string
 	EmbeddingModel      string
@@ -207,8 +207,12 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 	// Release InternalLinks/ExternalLinks now that the CSR graph has captured all edges.
 	// This frees ~3-4 GB for large crawls (37.7M URL strings for 93K pages).
 	for _, p := range pages {
-		p.InternalLinkCount = len(p.InternalLinks)
-		p.ExternalLinkCount = len(p.ExternalLinks)
+		if len(p.InternalLinks) > p.InternalLinkCount {
+			p.InternalLinkCount = len(p.InternalLinks)
+		}
+		if len(p.ExternalLinks) > p.ExternalLinkCount {
+			p.ExternalLinkCount = len(p.ExternalLinks)
+		}
 		p.InternalLinks = nil
 		p.ExternalLinks = nil
 	}

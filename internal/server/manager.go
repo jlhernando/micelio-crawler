@@ -931,6 +931,28 @@ func (m *CrawlManager) GetOrLoadResults(crawlID string) *CrawlResults {
 				})
 				cs2.Close()
 			}
+			// Backfill: recompute orphans from graph inDegree for old crawls
+			// that used the reporter's raw-URL matching (pre-graph methodology).
+			if graph != nil {
+				methodology, _ := statsMap["orphanMethodology"].(string)
+				if methodology != "graph" {
+					orphans := analysis.ComputeGraphOrphans(graph, job.SeedURL)
+					var oldCount int
+					if old, ok := statsMap["orphanPages"].([]interface{}); ok {
+						oldCount = len(old)
+					}
+					statsMap["orphanPages"] = orphans
+					statsMap["orphanMethodology"] = "graph"
+					log.Printf("backfill: recomputed orphans for crawl %s (%d → %d, methodology: graph)",
+						crawlID, oldCount, len(orphans))
+					// Persist updated stats
+					if updated, err := json.Marshal(statsMap); err == nil {
+						if persistErr := m.store.SaveCrawlStats(crawlID, updated); persistErr != nil {
+							log.Printf("backfill: persist orphan stats for crawl %s: %v", crawlID, persistErr)
+						}
+					}
+				}
+			}
 		} else {
 			log.Printf("lazy load: open crawl store for %s: %v", crawlID, csErr)
 		}
@@ -1013,7 +1035,7 @@ func (m *CrawlManager) GetQuickStats(crawlID string) *CrawlResults {
 	m.mu.Unlock()
 
 	// Start background page loading with cancellable context
-	go m.loadPagesInBackground(loadCtx, crawlID, result)
+	go m.loadPagesInBackground(loadCtx, crawlID, result, job.SeedURL)
 
 	return result
 }
@@ -1022,7 +1044,7 @@ func (m *CrawlManager) GetQuickStats(crawlID string) *CrawlResults {
 // updating loadingProgress atomically as pages are decompressed. When complete,
 // it fills in the pre-computed aggregations (anchors, dir tree, etc.) and sets PagesReady=true.
 // The context is cancelled when the result is evicted from the LRU cache.
-func (m *CrawlManager) loadPagesInBackground(ctx context.Context, crawlID string, result *CrawlResults) {
+func (m *CrawlManager) loadPagesInBackground(ctx context.Context, crawlID string, result *CrawlResults, seedURL string) {
 	if result.DBPath == "" {
 		result.mu.Lock()
 		result.PagesReady = true
@@ -1093,12 +1115,52 @@ func (m *CrawlManager) loadPagesInBackground(ctx context.Context, crawlID string
 
 	stripPagesForCache(pages)
 
+	// Build adjacency graph from DB
+	var graph *analysis.AdjacencyGraph
+	if result.DBPath != "" {
+		if csGraph, err := storage.NewCrawlStore(result.DBPath); err == nil {
+			graph = analysis.BuildAdjacencyListFromDisk(pages, func(fn func(source string, targets []string)) error {
+				return csGraph.IterateInternalLinks(fn)
+			})
+			csGraph.Close()
+		}
+	}
+
+	// Backfill orphans from graph
+	if graph != nil {
+		result.mu.RLock()
+		methodology, _ := result.Stats["orphanMethodology"].(string)
+		result.mu.RUnlock()
+
+		if methodology != "graph" && seedURL != "" {
+			orphans := analysis.ComputeGraphOrphans(graph, seedURL)
+			var oldCount int
+			result.mu.Lock()
+			if old, ok := result.Stats["orphanPages"].([]interface{}); ok {
+				oldCount = len(old)
+			}
+			result.Stats["orphanPages"] = orphans
+			result.Stats["orphanMethodology"] = "graph"
+			result.mu.Unlock()
+			log.Printf("backfill: recomputed orphans for crawl %s (%d → %d, methodology: graph)",
+				crawlID, oldCount, len(orphans))
+			if updated, err := json.Marshal(result.Stats); err == nil {
+				result.mu.RLock()
+				if persistErr := m.store.SaveCrawlStats(crawlID, updated); persistErr != nil {
+					log.Printf("backfill: persist orphan stats for crawl %s: %v", crawlID, persistErr)
+				}
+				result.mu.RUnlock()
+			}
+		}
+	}
+
 	result.mu.Lock()
 	result.Pages = pages
 	result.AnchorStats = anchorStats
 	result.DirTree = dirTree
 	result.TemplateTypes = tmplTypes
 	result.InlinkIndex = inlinkIdx
+	result.Graph = graph
 	result.PagesReady = true
 	result.PageCount = len(pages)
 	result.mu.Unlock()

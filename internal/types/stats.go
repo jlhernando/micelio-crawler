@@ -180,6 +180,7 @@ type CrawlStats struct {
 	HreflangIssues           []HreflangIssue        `json:"hreflangIssues"`
 	Soft404Pages             []string               `json:"soft404Pages"`
 	OrphanPages              []string               `json:"orphanPages"`
+	OrphanMethodology         string                 `json:"orphanMethodology,omitempty"` // "reporter" (basic) or "graph" (redirect-aware via link intelligence)
 	SlowPages                []URLResponseTime      `json:"slowPages"`
 	LinkAnalysis             LinkAnalysis           `json:"linkAnalysis"`
 	ResponseTimePercentiles  PercentileData         `json:"responseTimePercentiles"`

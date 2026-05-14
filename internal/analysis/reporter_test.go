@@ -106,6 +106,29 @@ func TestGenerateReportOrphanPages(t *testing.T) {
 	if len(stats.OrphanPages) > 0 && stats.OrphanPages[0] != "https://example.com/orphan" {
 		t.Errorf("OrphanPages[0] = %q, want orphan URL", stats.OrphanPages[0])
 	}
+	if stats.OrphanMethodology != "reporter" {
+		t.Errorf("OrphanMethodology = %q, want \"reporter\"", stats.OrphanMethodology)
+	}
+}
+
+func TestGraphOrphanResolvesRedirects(t *testing.T) {
+	// Build a graph where /a links to /b, but the reporter's raw-URL matching
+	// would miss it because the link target doesn't match /b exactly (e.g.
+	// trailing slash difference). The graph resolves this via FinalURL mapping.
+	pages := []*types.PageData{
+		{URL: "https://example.com/", StatusCode: 200, InternalLinks: []string{"https://example.com/b"}},
+		{URL: "https://example.com/b", StatusCode: 200},
+		{URL: "https://example.com/orphan", StatusCode: 200},
+	}
+	graph := BuildAdjacencyList(pages)
+	orphans := ComputeGraphOrphans(graph, "https://example.com/")
+	// /b has an inlink from /, so only /orphan should be orphan
+	if len(orphans) != 1 {
+		t.Fatalf("ComputeGraphOrphans = %d orphans, want 1", len(orphans))
+	}
+	if orphans[0] != "https://example.com/orphan" {
+		t.Errorf("orphan = %q, want https://example.com/orphan", orphans[0])
+	}
 }
 
 func TestGenerateReportPageRank(t *testing.T) {

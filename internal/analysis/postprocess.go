@@ -291,6 +291,25 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 		inDegree[j]++
 	}
 
+	// Recompute orphan pages using graph-derived inDegree.
+	// The graph resolves redirects (FinalURL → request URL mapping) and normalizes
+	// trailing slashes, so pages that receive inlinks through redirect chains are
+	// correctly counted as linked. This replaces the reporter's raw-URL orphan list.
+	seedNorm := normalizeTrailingSlash(cfg.SeedURL)
+	var graphOrphans []string
+	for i := 0; i < graph.N; i++ {
+		if graph.StatusCodes[i] != 200 {
+			continue
+		}
+		url := graph.URLs[i]
+		isSeed := seedNorm != "" && normalizeTrailingSlash(url) == seedNorm
+		if inDegree[i] == 0 && !isSeed {
+			graphOrphans = append(graphOrphans, url)
+		}
+	}
+	stats.OrphanPages = graphOrphans
+	stats.OrphanMethodology = "graph"
+
 	// --- Phase: click_depth ---
 	emitPhase("click_depth")
 	clickDepths := ComputeClickDepth(cfg.SeedURL, graph)

@@ -396,7 +396,10 @@ func GenerateReport(pages []*types.PageData, durationMs int64, cfg ReportConfig)
 		}
 	}
 
-	// Orphan pages: no internal links pointing to them (excluding seed URL)
+	// Orphan pages: no internal links pointing to them (excluding seed URL).
+	// This uses raw URL matching (trailing-slash normalization only).
+	// When link intelligence is enabled, RunDeferredAnalysis replaces this
+	// with graph-derived orphans that resolve redirects (FinalURL mapping).
 	seedNorm := normalizeTrailingSlash(cfg.SeedURL)
 	for _, p := range pages {
 		if p.RobotsBlocked || p.StatusCode != 200 {
@@ -408,6 +411,7 @@ func GenerateReport(pages []*types.PageData, durationMs int64, cfg ReportConfig)
 			stats.OrphanPages = append(stats.OrphanPages, p.URL)
 		}
 	}
+	stats.OrphanMethodology = "reporter"
 
 	// Populate FoundOn for broken links (skip if InternalLinks stripped at load)
 	if len(stats.BrokenLinks) > 0 && len(pages) > 0 && len(pages[0].InternalLinks) > 0 {
@@ -684,6 +688,31 @@ func buildTextToCodeStats(pages []*types.PageData) *types.TextToCodeStats {
 
 func normalizeTrailingSlash(u string) string {
 	return strings.TrimRight(u, "/")
+}
+
+// ComputeGraphOrphans returns orphan page URLs using the graph's redirect-aware
+// inDegree. Pages with zero inlinks (excluding the seed URL) are considered orphan.
+// This is used for backfilling old crawls that used the reporter's raw-URL matching.
+func ComputeGraphOrphans(graph *AdjacencyGraph, seedURL string) []string {
+	inDegree := make([]int, graph.N)
+	for _, j := range graph.Edges {
+		if int(j) < len(inDegree) {
+			inDegree[j]++
+		}
+	}
+	seedNorm := normalizeTrailingSlash(seedURL)
+	var orphans []string
+	for i := 0; i < graph.N; i++ {
+		if graph.StatusCodes[i] != 200 {
+			continue
+		}
+		url := graph.URLs[i]
+		isSeed := seedNorm != "" && normalizeTrailingSlash(url) == seedNorm
+		if inDegree[i] == 0 && !isSeed {
+			orphans = append(orphans, url)
+		}
+	}
+	return orphans
 }
 
 var nonDescriptiveTexts = map[string]bool{

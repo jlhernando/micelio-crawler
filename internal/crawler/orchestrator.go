@@ -105,8 +105,8 @@ func Crawl(ctx context.Context, config types.CrawlConfig, onProgress OnProgress,
 
 // CrawlWithOptions runs a crawl with the given configuration and options.
 func CrawlWithOptions(ctx context.Context, config types.CrawlConfig, onProgress OnProgress, store []CrawlStore, pauseFn PauseFunc, phaseFn PhaseFunc) (*CrawlResult, error) {
-	if config.SeedURL == "" && len(config.URLs) == 0 {
-		return nil, fmt.Errorf("no seed URL or URL list provided")
+	if config.SeedURL == "" && len(config.URLs) == 0 && len(config.SitemapURLs) == 0 {
+		return nil, fmt.Errorf("no seed URL, URL list, or sitemap provided")
 	}
 
 	s, err := newCrawlSession(ctx, config, onProgress, store)

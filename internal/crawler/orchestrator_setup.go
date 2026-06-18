@@ -127,14 +127,23 @@ func newCrawlSession(ctx context.Context, config types.CrawlConfig, onProgress O
 	s.setupNgrams()
 	s.setupRobotsAndDelay(ctx)
 	s.setupSitemapDiscovery(ctx)
+	if err := s.seedSitemapMode(ctx); err != nil {
+		return nil, err
+	}
 
 	ok = true
 	return s, nil
 }
 
 func (s *crawlSession) applyConfigDefaults() {
-	if s.config.SeedURL == "" && len(s.config.URLs) == 0 {
+	if s.config.SeedURL == "" && len(s.config.URLs) == 0 && len(s.config.SitemapURLs) == 0 {
 		return // validated in Crawl()
+	}
+	// SitemapURLs is only consumed by sitemap mode; if a caller supplied one
+	// without a mode, treat it as a sitemap crawl rather than silently crawling
+	// nothing.
+	if s.config.Mode == "" && len(s.config.SitemapURLs) > 0 {
+		s.config.Mode = types.ModeSitemap
 	}
 	if s.config.Concurrency <= 0 {
 		s.config.Concurrency = 5
@@ -232,6 +241,9 @@ func (s *crawlSession) setupQueue() error {
 		for _, u := range s.config.URLs {
 			s.queue.Enqueue(u, 0, nil)
 		}
+	} else if s.config.Mode == types.ModeSitemap {
+		// The seed is a sitemap file, not a crawlable page. The page URLs it
+		// lists are fetched and enqueued later by seedSitemapMode.
 	} else {
 		s.queue.Enqueue(s.seedURL, 0, nil)
 	}
@@ -266,11 +278,21 @@ func (s *crawlSession) setupResumption() error {
 			if s.onPhase != nil {
 				s.onPhase("resume_loading", 0, pageCount)
 			}
+			// In sitemap mode the queue has no seed URL, so its seed domain is
+			// empty here. Re-point it to a previously-crawled page before the
+			// pending queue is restored below, otherwise EnqueueEntry's
+			// internal-domain check would drop the restored cross-domain URLs.
+			nonSpiderSeedSet := s.queue.SeedDomain() != ""
 			streamErr := s.crawlDB.StreamPages(func(rp *types.PageData, idx int) error {
 				if s.config.Mode == types.ModeSpider || s.config.Mode == "" {
 					for _, link := range rp.InternalLinks {
 						ref := rp.URL
 						s.queue.Enqueue(link, rp.Depth+1, &ref)
+					}
+				} else if !nonSpiderSeedSet {
+					if p, perr := url.Parse(rp.URL); perr == nil && p.Hostname() != "" {
+						s.queue.UpdateSeedDomain(p.Hostname())
+						nonSpiderSeedSet = true
 					}
 				}
 				if s.intLinksDisk != nil && len(rp.InternalLinks) > 0 {
@@ -549,6 +571,127 @@ func (s *crawlSession) setupSitemapDiscovery(ctx context.Context) {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "  [sitemap-discovery] Found %d URLs in sitemaps, %d new URLs enqueued\n", len(urls), enqueued)
+}
+
+// seedSitemapMode fetches the configured sitemap(s), extracts their page URLs,
+// and enqueues them for crawling. Unlike setupSitemapDiscovery (a spider-mode
+// orphan-finder), this is the seed source for ModeSitemap: the sitemap file
+// itself is never crawled as a page, and discovered links are not followed
+// (enqueueLinks is gated to spider mode).
+//
+// Scope:
+//   - If config.AllowedDomains is set, it bounds the crawl: only page URLs on
+//     those hosts are kept (the sitemap cannot widen the user's scope).
+//   - Otherwise the sitemap's own page hosts define the scope. The sitemap is
+//     often hosted on a different domain than the pages it lists (e.g. an
+//     S3-hosted sitemap), so each discovered page host is registered as
+//     internal before its URLs are enqueued.
+//
+// URLs are normalized with the same NormalizeURL the queue uses, so the count,
+// the registered-domain set, and the queue all agree on what is a real page.
+// Each sitemap file is enqueued as it is parsed (only the dedup set is retained)
+// to bound memory on large sitemaps.
+func (s *crawlSession) seedSitemapMode(ctx context.Context) error {
+	if s.config.Mode != types.ModeSitemap {
+		return nil
+	}
+
+	sitemaps := s.config.SitemapURLs
+	if len(sitemaps) == 0 && s.seedURL != "" {
+		sitemaps = []string{s.seedURL}
+	}
+	if len(sitemaps) == 0 {
+		return fmt.Errorf("sitemap mode requires at least one sitemap URL")
+	}
+
+	// When the user scoped the crawl, the allow-list wins over sitemap contents.
+	var allowFilter map[string]bool
+	if len(s.config.AllowedDomains) > 0 {
+		allowFilter = make(map[string]bool, len(s.config.AllowedDomains))
+		for _, d := range s.config.AllowedDomains {
+			allowFilter[d] = true
+		}
+	}
+
+	ref := "sitemap"
+	seen := make(map[string]bool)
+	registered := make(map[string]bool)
+	seedDomainSet := false
+	var lastErr error
+	fetched, enqueued, skippedScope := 0, 0, 0
+
+	for _, sm := range sitemaps {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		urls, err := fetchSitemap(ctx, sm, s.fetchOpts.Client, s.config.UserAgent, 0)
+		if err != nil {
+			lastErr = err
+			fmt.Fprintf(os.Stderr, "  [sitemap] %s: %v\n", sm, err)
+			continue
+		}
+		fetched++
+		for _, u := range urls {
+			// NormalizeURL rejects non-http(s) schemes and matches the queue's
+			// own dedup key, so invalid locs never inflate counts or pollute
+			// the registered-domain set.
+			n := NormalizeURL(u)
+			if n == "" || seen[n] {
+				continue
+			}
+			seen[n] = true
+
+			p, perr := url.Parse(u)
+			if perr != nil || p.Hostname() == "" {
+				continue
+			}
+			host := p.Hostname()
+			if allowFilter != nil && !allowFilter[host] {
+				skippedScope++
+				continue
+			}
+			// Register the host as internal before enqueuing so enforceInternal
+			// admits it.
+			if !registered[host] {
+				registered[host] = true
+				if !seedDomainSet {
+					s.queue.UpdateSeedDomain(host)
+					s.seedURL = u
+					seedDomainSet = true
+				} else {
+					s.queue.AddAllowedDomains(host)
+				}
+			}
+			if s.queue.Enqueue(u, 0, &ref) {
+				enqueued++
+			}
+		}
+		urls = nil // release this file before fetching the next
+	}
+
+	if skippedScope > 0 {
+		fmt.Fprintf(os.Stderr, "  [sitemap] %d URL(s) skipped (outside AllowedDomains)\n", skippedScope)
+	}
+	fmt.Fprintf(os.Stderr, "  [sitemap] %d/%d sitemap(s) fetched → %d page URL(s) enqueued across %d host(s)\n",
+		fetched, len(sitemaps), enqueued, len(registered))
+
+	if enqueued == 0 {
+		// On resume there is already work in the restored queue/DB, so a
+		// transient sitemap outage must not abort the whole session.
+		if s.config.Resume && s.crawlDB != nil {
+			fmt.Fprintf(os.Stderr, "  [sitemap] no new URLs; continuing from resumed queue\n")
+			return nil
+		}
+		switch {
+		case lastErr != nil:
+			return fmt.Errorf("sitemap fetch failed for all sitemap(s): %w", lastErr)
+		case skippedScope > 0:
+			return fmt.Errorf("all %d sitemap URL(s) were outside AllowedDomains", skippedScope)
+		default:
+			return fmt.Errorf("no page URLs found in sitemap(s): %s", strings.Join(sitemaps, ", "))
+		}
+	}
+	return nil
 }
 
 func (s *crawlSession) shouldAbort() bool {

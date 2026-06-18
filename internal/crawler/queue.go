@@ -312,6 +312,23 @@ func (q *CrawlQueue) SeedDomain() string {
 	return q.seedDomain
 }
 
+// AddAllowedDomains registers additional hostnames as internal (e.g. when a
+// sitemap lists URLs across several domains). Duplicates are ignored.
+func (q *CrawlQueue) AddAllowedDomains(domains ...string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	existing := make(map[string]bool, len(q.allowedDomains))
+	for _, d := range q.allowedDomains {
+		existing[d] = true
+	}
+	for _, d := range domains {
+		if d != "" && !existing[d] {
+			q.allowedDomains = append(q.allowedDomains, d)
+			existing[d] = true
+		}
+	}
+}
+
 // Drain returns all pending entries (in-memory + disk) and empties the queue.
 func (q *CrawlQueue) Drain() []types.QueueEntry {
 	q.mu.Lock()

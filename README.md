@@ -229,11 +229,13 @@ micelio list urls.txt -c 10 --delay 100 -o results.jsonl
 
 ### sitemap
 
-Crawl all URLs found in XML sitemaps. Supports standard, news, video, and image extensions.
+Crawl all URLs found in XML sitemaps. Supports standard, news, video, and image extensions. Follows nested `<sitemapindex>` files and gzip-compressed sitemaps, and works when the sitemap is hosted on a different domain or CDN than the pages it lists (e.g. an S3-hosted sitemap). Crawls exactly the listed URLs — it does not spider out via on-page links.
 
 ```bash
 micelio sitemap https://example.com/sitemap.xml
 micelio sitemap https://example.com/sitemap.xml https://example.com/sitemap-news.xml -l 5000
+# Sitemap hosted on a CDN, pages on the main domain:
+micelio sitemap https://cdn.example.com/sitemaps/sitemap.xml
 ```
 
 ### head
@@ -425,6 +427,7 @@ document.querySelector('h1')?.textContent
 
 ### Sitemap Support
 - Standard, news, video, image XML sitemaps
+- Dedicated sitemap crawl mode that crawls exactly the listed URLs (nested `<sitemapindex>` + gzip; supports sitemaps hosted on a different domain/CDN than their pages; no spidering)
 - Automatic sitemap discovery from robots.txt during spider crawls
 - Orphan page detection from sitemap-discovered URLs
 - Sitemap generation from crawl results

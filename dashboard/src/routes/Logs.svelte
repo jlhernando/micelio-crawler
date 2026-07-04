@@ -24,6 +24,9 @@
     totalLines: number;
     processedLines: number;
     durationMs?: number;
+    uploadMs?: number;
+    parseMs?: number;
+    analysisMs?: number;
     errorMsg?: string;
     files?: LogJobFile[];
   }

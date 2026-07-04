@@ -138,6 +138,7 @@ export const api = {
         maxDepth: number;
         maxAuthority: number;
         maxHub: number;
+        maxInDegree: number;
         totalEdgesBeforeSampling: number;
         samplingApplied: boolean;
       };

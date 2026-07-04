@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { DirectedGraph } from 'graphology';
   import Sigma from 'sigma';
+  import type { NodeDisplayData } from 'sigma/types';
   import FA2Layout from 'graphology-layout-forceatlas2/worker';
   import forceAtlas2 from 'graphology-layout-forceatlas2';
   import type { GraphNode, GraphEdge, GraphMeta, BundledEdge } from '../../types/graph.js';
@@ -310,7 +311,7 @@
 
     // Node reducer for dynamic styling (search, depth filter, hover, zoom, bundles)
     // Optimized: avoids object spread when no mutations needed, caches lookups
-    sigmaRenderer.setSetting('nodeReducer', (key, data) => {
+    sigmaRenderer.setSetting('nodeReducer', (key: string, data: Partial<NodeDisplayData>) => {
       // Bundle meta-nodes: show only in bundled mode
       if (key.startsWith(BUNDLE_NODE_PREFIX)) {
         if (_edgeMode !== 'bundled') return { ...data, hidden: true };

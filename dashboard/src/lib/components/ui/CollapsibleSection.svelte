@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte';
+  import { untrack, type Snippet } from 'svelte';
 
   let { title, open = false, children }: {
     title: string;
@@ -7,8 +7,8 @@
     children: Snippet;
   } = $props();
 
-  // eslint-disable-next-line svelte/state-referenced-locally
-  let isOpen = $state(open); // intentionally capturing initial value
+  // Capture only the initial `open` value; later prop changes don't reset it.
+  let isOpen = $state(untrack(() => open));
 </script>
 
 <div class="rounded-lg border border-border bg-surface-2 overflow-hidden">

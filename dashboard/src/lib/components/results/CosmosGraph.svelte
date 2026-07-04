@@ -24,7 +24,7 @@
     onHoverNode: (node: GraphNode | null) => void;
   } = $props();
 
-  let container: HTMLDivElement;
+  let container = $state<HTMLDivElement>()!;
   // Not $state — intentionally plain variable. The $effect below reacts to
   // colorMode/searchMatchIds/hiddenDepths, not to cosmosInstance being set.
   let cosmosInstance: Graph | null = null;

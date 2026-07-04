@@ -102,7 +102,7 @@
   onMount(async () => {
     try {
       const [rawData, oldData, newData] = await Promise.all([
-        api.compareCrawls(oldId, newId) as Promise<{ comparison: ComparisonReport }>,
+        api.compareCrawls(oldId, newId) as unknown as Promise<{ comparison: ComparisonReport }>,
         api.getCrawlStatus(oldId),
         api.getCrawlStatus(newId),
       ]);

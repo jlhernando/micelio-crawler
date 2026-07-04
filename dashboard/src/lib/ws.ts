@@ -3,7 +3,7 @@
  */
 
 export interface WsMessage {
-  type: 'progress' | 'page' | 'error' | 'complete' | 'paused' | 'resumed' | 'cancelled' | 'analysis_progress' | 'analysis_complete' | 'log_upload_progress' | 'log_progress' | 'log_complete' | 'merge_progress';
+  type: 'progress' | 'page' | 'error' | 'complete' | 'paused' | 'resumed' | 'stopping' | 'cancelled' | 'analysis_progress' | 'analysis_complete' | 'log_upload_progress' | 'log_progress' | 'log_complete' | 'log_delete_done' | 'merge_progress';
   crawlId?: string;
   data: Record<string, unknown>;
 }

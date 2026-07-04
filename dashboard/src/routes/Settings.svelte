@@ -88,6 +88,8 @@
     defaultJsRendering: false,
     defaultRespectRobots: true,
     defaultShowBlockedInternal: false,
+    alertWebhookUrl: '',
+    alertSlackUrl: '',
   };
 
   let dirty = $derived(JSON.stringify(settings) !== savedSnapshot);
@@ -167,7 +169,7 @@
     if (saving) return; // Guard against concurrent saves (#10)
     saving = true;
     try {
-      await api.updateSettings(settings);
+      await api.updateSettings(settings as unknown as Record<string, unknown>);
       savedSnapshot = JSON.stringify(settings);
       toast = { message: 'Settings saved', type: 'success' };
     } catch (err) {

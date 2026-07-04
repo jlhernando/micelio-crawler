@@ -29,7 +29,7 @@
 
   let { crawlId }: { crawlId: string } = $props();
 
-  let canvas: HTMLCanvasElement;
+  let canvas = $state<HTMLCanvasElement>()!;
   let tree = $state<TreeNode | null>(null);
   let totalPages = $state(0);
   let message = $state('');

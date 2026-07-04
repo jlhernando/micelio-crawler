@@ -32,7 +32,7 @@
   let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 
   // Sigma
-  let container: HTMLDivElement;
+  let container = $state<HTMLDivElement>()!;
   let sigmaRenderer: Sigma | null = null;
   let fa2Layout: FA2Layout | null = null;
   let graphInstance: DirectedGraph | null = null;

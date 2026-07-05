@@ -931,6 +931,7 @@ func (m *CrawlManager) GetOrLoadResults(crawlID string) *CrawlResults {
 				})
 				cs2.Close()
 			}
+
 			// Backfill: recompute orphans from graph inDegree for old crawls
 			// that used the reporter's raw-URL matching (pre-graph methodology).
 			if graph != nil {
@@ -1115,7 +1116,8 @@ func (m *CrawlManager) loadPagesInBackground(ctx context.Context, crawlID string
 
 	stripPagesForCache(pages)
 
-	// Build adjacency graph from DB
+	// Build adjacency graph from DB (pages' InternalLinks already stripped,
+	// so we read edges directly from the crawl DB).
 	var graph *analysis.AdjacencyGraph
 	if result.DBPath != "" {
 		if csGraph, err := storage.NewCrawlStore(result.DBPath); err == nil {
@@ -1126,7 +1128,7 @@ func (m *CrawlManager) loadPagesInBackground(ctx context.Context, crawlID string
 		}
 	}
 
-	// Backfill orphans from graph
+	// Backfill: recompute orphans from graph inDegree for old crawls.
 	if graph != nil {
 		result.mu.RLock()
 		methodology, _ := result.Stats["orphanMethodology"].(string)
@@ -1144,13 +1146,14 @@ func (m *CrawlManager) loadPagesInBackground(ctx context.Context, crawlID string
 			result.mu.Unlock()
 			log.Printf("backfill: recomputed orphans for crawl %s (%d → %d, methodology: graph)",
 				crawlID, oldCount, len(orphans))
+			// Persist updated stats
+			result.mu.RLock()
 			if updated, err := json.Marshal(result.Stats); err == nil {
-				result.mu.RLock()
 				if persistErr := m.store.SaveCrawlStats(crawlID, updated); persistErr != nil {
 					log.Printf("backfill: persist orphan stats for crawl %s: %v", crawlID, persistErr)
 				}
-				result.mu.RUnlock()
 			}
+			result.mu.RUnlock()
 		}
 	}
 

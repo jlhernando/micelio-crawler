@@ -21,8 +21,6 @@ jobs:
         run: go test -race ./...
       - name: Build release binaries
         run: make release VERSION=${GITHUB_REF_NAME}
-      - name: Generate checksums
-        run: cd dist && sha256sum * > checksums.txt
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:

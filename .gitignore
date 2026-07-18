@@ -19,6 +19,7 @@ output.*
 review-*.md
 
 # Internal / private files
+.codex/
 CLAUDE.md
 BACKLOG.md
 Public-release.md

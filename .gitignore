@@ -9,6 +9,7 @@ output.*
 *.html
 !src/**/*.html
 !dashboard/index.html
+!cmd/micelio/dashboard/dist/index.html
 .env
 .claude/
 .mcp.json
@@ -16,6 +17,7 @@ output.*
 *.png
 !docs/*.png
 !dashboard/public/*.png
+!cmd/micelio/dashboard/dist/*.png
 review-*.md
 
 # Internal / private files

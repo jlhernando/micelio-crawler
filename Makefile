@@ -5,12 +5,13 @@ CMD := ./cmd/micelio
 
 # Version from git tag or default
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS := -ldflags "-X main.version=$(VERSION) -X main.sourceDir=$(CURDIR)"
+LOCAL_LDFLAGS := -ldflags "-X main.version=$(VERSION) -X main.sourceDir=$(CURDIR)"
+RELEASE_LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
 .PHONY: build build-dashboard build-with-dashboard test lint clean bench bench-short bench-cpu bench-mem release clean-release install sync app clean-app
 
 build:
-	go build $(LDFLAGS) -o $(BINARY) $(CMD)
+	go build $(LOCAL_LDFLAGS) -o $(BINARY) $(CMD)
 
 # Build dashboard assets and copy into embed directory
 build-dashboard:
@@ -55,7 +56,7 @@ release: clean-release
 		output="dist/micelio-$$os-$$arch"; \
 		if [ "$$os" = "windows" ]; then output="$$output.exe"; fi; \
 		echo "Building $$os/$$arch..."; \
-		GOOS=$$os GOARCH=$$arch go build $(LDFLAGS) -o $$output ./cmd/micelio; \
+		GOOS=$$os GOARCH=$$arch go build $(RELEASE_LDFLAGS) -o $$output ./cmd/micelio; \
 	done
 	@echo "Generating checksums..."
 	@cd dist && shasum -a 256 micelio-* > checksums.txt

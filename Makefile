@@ -50,7 +50,7 @@ PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 win
 
 release: clean-release
 	@mkdir -p dist
-	@for platform in $(PLATFORMS); do \
+	@set -e; for platform in $(PLATFORMS); do \
 		os=$$(echo $$platform | cut -d/ -f1); \
 		arch=$$(echo $$platform | cut -d/ -f2); \
 		output="dist/micelio-$$os-$$arch"; \

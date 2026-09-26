@@ -113,6 +113,15 @@ describe('computePageRank', () => {
     expect(result.has('https://other.com/page')).toBe(false);
   });
 
+  it('matches trailing-slash URL variants', () => {
+    const pages = [
+      makePage('https://example.com/a', ['https://example.com/b/']),
+      makePage('https://example.com/b', []),
+    ] as PageData[];
+    const result = computePageRank(pages);
+    expect(result.get('https://example.com/b')).toBeGreaterThan(result.get('https://example.com/a')!);
+  });
+
   it('rounds scores to 2 decimal places', () => {
     const pages = [
       makePage('https://example.com/a', ['https://example.com/b']),

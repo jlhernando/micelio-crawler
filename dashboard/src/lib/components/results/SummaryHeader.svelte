@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CrawlHealthScore from './CrawlHealthScore.svelte';
+
 
   let { stats, pageCount, onFilter, activeTemplate = 'all', templateDistribution = null }: {
     stats: Record<string, unknown>;
@@ -25,6 +25,9 @@
     return `${d}d ${h % 24}h ${m % 60}m`;
   }
 
+  let indexability = $derived(stats.indexabilityStats as { indexable: number; nonIndexable: number } | undefined);
+  let httpErrors = $derived(stats.statusCodes ? Object.entries(stats.statusCodes as Record<string, number>).reduce((n, [code, count]) => Number(code) >= 400 ? n + count : n, 0) : null);
+
   function formatSpeed(pages: number, ms: number): string {
     if (ms < 1000) return `${pages}`;
     return ((pages / ms) * 1000).toFixed(1);
@@ -33,32 +36,17 @@
 </script>
 
 <div class="space-y-4">
-  <!-- Key Metrics Row -->
-  <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
-    <div class="rounded-md border border-border bg-surface-2 p-4">
-      <div class="text-xs text-fg-2">Total Pages</div>
-      <div class="text-2xl font-bold mt-1">{pageCount.toLocaleString()}</div>
-    </div>
-    <div class="rounded-md border border-border bg-surface-2 p-4">
-      <div class="text-xs text-fg-2">Duration</div>
-      <div class="text-2xl font-bold mt-1">{formatDuration(duration)}</div>
-    </div>
-    <div class="rounded-md border border-border bg-surface-2 p-4">
-      <div class="text-xs text-fg-2">Speed</div>
-      <div class="text-2xl font-bold mt-1">{formatSpeed(pageCount, duration)} <span class="text-sm text-fg-2">p/s</span></div>
-    </div>
-    <CrawlHealthScore {stats} {pageCount} />
-    <div class="rounded-md border border-border bg-surface-2 p-4">
-      <div class="text-xs text-fg-2">Response Time</div>
+  <dl class="metric-strip">
+    <div><dt>Pages crawled</dt><dd>{pageCount.toLocaleString()}</dd><small>{duration ? formatDuration(duration) + ' · ' + formatSpeed(pageCount, duration) + ' pages/s' : 'Crawl scope'}</small></div>
+    <div><dt>Indexable pages</dt><dd>{indexability && pageCount > 0 ? (indexability.indexable / pageCount * 100).toFixed(1) + '%' : '—'}</dd><small>{indexability ? indexability.indexable.toLocaleString() + ' pages allow indexing' : 'No indexability data'}</small></div>
+    <div><dt>HTTP errors</dt><dd class={httpErrors ? 'text-danger' : ''}>{httpErrors === null ? '—' : httpErrors.toLocaleString()}</dd><small>{httpErrors === null ? 'No status-code data' : 'Pages returning 4xx or 5xx'}</small></div>
+    <div><dt>Median response</dt>
       {#if stats.responseTimePercentiles}
-        {@const rt = stats.responseTimePercentiles as { p50: number; p90: number; p99: number }}
-        <div class="text-2xl font-bold mt-1 {rt.p50 > 1000 ? 'text-danger' : rt.p50 > 500 ? 'text-warning' : 'text-success'}">{Math.round(rt.p50)}<span class="text-sm text-fg-2">ms</span></div>
-        <div class="text-xs text-fg-2">p90: <span class="{rt.p90 > 2000 ? 'text-danger' : rt.p90 > 1000 ? 'text-warning' : ''}">{Math.round(rt.p90)}ms</span> · p99: <span class="{rt.p99 > 3000 ? 'text-danger' : rt.p99 > 2000 ? 'text-warning' : ''}">{Math.round(rt.p99)}ms</span></div>
-      {:else}
-        <div class="text-2xl font-bold mt-1 text-fg-2">—</div>
-      {/if}
+        {@const rt = stats.responseTimePercentiles as { p50: number; p90: number }}
+        <dd>{Math.round(rt.p50)}<span class="text-sm text-fg-2 ml-1">ms</span></dd><small>p90 · {Math.round(rt.p90)} ms</small>
+      {:else}<dd>—</dd><small>No response-time data</small>{/if}
     </div>
-  </div>
+  </dl>
 
   <!-- Page Types -->
   {#if templateDist && Object.keys(templateDist).length > 0}

@@ -49,3 +49,7 @@ stress-test-*.log
 
 # Go binary
 /micelio
+
+# Dashboard browser-test output
+/dashboard/test-results/
+/dashboard/playwright-report/

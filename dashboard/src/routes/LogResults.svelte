@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount, untrack } from 'svelte';
   import { api } from '../lib/api';
   import BotActivityChart from '../lib/components/results/BotActivityChart.svelte';
@@ -810,6 +811,8 @@
   }
 </script>
 
+<PageHeading title="Log insights" description="Explore bot activity, crawl patterns, and opportunities to reduce wasted requests." section="Server logs" />
+
 {#if loading}
   <div class="text-fg-2 text-sm py-8 text-center">Loading analysis...</div>
 {:else if error}
@@ -817,11 +820,12 @@
 {:else if stats}
   <div class="space-y-6">
     <!-- Tabs -->
-    <div class="flex gap-1 border-b border-border">
+    <div class="section-tabs">
       {#each [['overview', 'Overview'], ['bots', 'Bot Activity'], ['urls', 'URL Analysis'], ['dirs', 'Directories'], ['hourly', 'Hourly'], ['trends', 'Daily Trends'], ['heatmap', 'Heatmap'], ['google', 'Googlebot'], ['ai', 'AI Bots'], ['waste', 'Crawl Budget'], ['merge', 'Merge']] as [key, label]}
         <button
           class="px-4 py-2 text-sm font-medium border-b-2 transition-colors cursor-pointer
             {tab === key ? 'border-accent text-accent' : 'border-transparent text-fg-2 hover:text-fg'}"
+          aria-pressed={tab === key}
           onclick={() => tab = key as typeof tab}
         >{label}</button>
       {/each}
@@ -956,7 +960,7 @@
       {#if categoryStats.length > 0}
         <div class="rounded-xl bg-surface-1 border border-border p-5">
           <h3 class="text-sm font-medium text-fg mb-4">Bot Category Distribution</h3>
-          <div class="flex items-center gap-8">
+          <div class="flex flex-col sm:flex-row items-center gap-8">
             <svg viewBox="0 0 120 120" class="w-40 h-40 shrink-0">
               {#each categoryStats as seg, i}
                 {@const startPct = categoryStats.slice(0, i).reduce((s, c) => s + c.hits, 0) / botHitsTotal}
@@ -1615,7 +1619,7 @@
         {#if googlebotTotalHits > 0}
           <div class="rounded-xl bg-surface-1 border border-border p-5">
             <h3 class="text-sm font-medium text-fg mb-4">Mobile vs Desktop Crawl</h3>
-            <div class="flex items-center gap-8">
+            <div class="flex flex-col sm:flex-row items-center gap-8">
               <svg viewBox="0 0 120 120" class="w-32 h-32 shrink-0">
                 {#if googlebotMobileHits > 0}
                   {@const mobileAngle = (googlebotMobileHits / googlebotTotalHits) * Math.PI * 2}

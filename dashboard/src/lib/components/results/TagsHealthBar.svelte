@@ -31,19 +31,19 @@
       <div class="flex items-center gap-2">
         <span class="w-20 text-right text-xs text-fg-2 shrink-0">{tag.label}</span>
         <div class="flex-1 flex h-5 rounded overflow-hidden bg-surface-3">
-          {#if tag.good > 0}<div style="width:{w(tag.good)};background:#3fb950" class="h-full"></div>{/if}
-          {#if tag.tooLong > 0}<div style="width:{w(tag.tooLong)};background:#d29922" class="h-full"></div>{/if}
+          {#if tag.good > 0}<div style="width:{w(tag.good)};background:#73d9ac" class="h-full"></div>{/if}
+          {#if tag.tooLong > 0}<div style="width:{w(tag.tooLong)};background:#e5b66e" class="h-full"></div>{/if}
           {#if tag.duplicate > 0}<div style="width:{w(tag.duplicate)};background:#f97316" class="h-full"></div>{/if}
-          {#if tag.missing > 0}<div style="width:{w(tag.missing)};background:#f85149" class="h-full"></div>{/if}
+          {#if tag.missing > 0}<div style="width:{w(tag.missing)};background:#f58f98" class="h-full"></div>{/if}
         </div>
-        <span class="w-10 text-right text-xs shrink-0" style="color:{tag.good / (pageCount || 1) >= 0.8 ? '#3fb950' : tag.good / (pageCount || 1) >= 0.6 ? '#d29922' : '#f85149'}">{pct(tag.good)}</span>
+        <span class="w-10 text-right text-xs shrink-0" style="color:{tag.good / (pageCount || 1) >= 0.8 ? '#73d9ac' : tag.good / (pageCount || 1) >= 0.6 ? '#e5b66e' : '#f58f98'}">{pct(tag.good)}</span>
       </div>
     {/each}
   </div>
   <div class="flex gap-4 mt-2">
-    <span class="flex items-center gap-1 text-[10px] text-fg-2"><span class="w-2 h-2 rounded-full" style="background:#3fb950"></span>Good</span>
-    <span class="flex items-center gap-1 text-[10px] text-fg-2"><span class="w-2 h-2 rounded-full" style="background:#d29922"></span>Length issue</span>
+    <span class="flex items-center gap-1 text-[10px] text-fg-2"><span class="w-2 h-2 rounded-full" style="background:#73d9ac"></span>Good</span>
+    <span class="flex items-center gap-1 text-[10px] text-fg-2"><span class="w-2 h-2 rounded-full" style="background:#e5b66e"></span>Length issue</span>
     <span class="flex items-center gap-1 text-[10px] text-fg-2"><span class="w-2 h-2 rounded-full" style="background:#f97316"></span>Duplicate</span>
-    <span class="flex items-center gap-1 text-[10px] text-fg-2"><span class="w-2 h-2 rounded-full" style="background:#f85149"></span>Missing</span>
+    <span class="flex items-center gap-1 text-[10px] text-fg-2"><span class="w-2 h-2 rounded-full" style="background:#f58f98"></span>Missing</span>
   </div>
 </div>

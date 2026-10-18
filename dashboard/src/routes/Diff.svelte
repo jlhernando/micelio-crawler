@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
 
@@ -236,6 +237,7 @@
 </script>
 
 <div class="max-w-7xl mx-auto space-y-4">
+  <PageHeading title="Crawl comparison" description="See what changed between two audits and which issues need attention." section="Crawl results" />
   {#if loading}
     <div class="rounded-xl border border-border bg-surface-2 p-12 text-center">
       <div class="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>
@@ -286,6 +288,21 @@
         <div class="text-2xl font-bold mt-1 text-green-400">{infoCount.toLocaleString()}</div>
       </div>
     </div>
+
+      {@const coverageMax = Math.max(comparison.coverage.totalPages.old, comparison.coverage.totalPages.new, comparison.indexability.indexable.old, comparison.indexability.indexable.new, 1)}
+    <section class="chart-panel">
+      <div class="chart-panel-heading"><div><h2>Coverage comparison</h2><p>Earlier and later crawls on a common page-count scale</p></div><span class="text-xs text-fg-2">Pages</span></div>
+      <svg viewBox="0 0 850 185" class="w-full max-h-60" role="img" aria-label={`Total pages: ${comparison.coverage.totalPages.old} to ${comparison.coverage.totalPages.new}. Indexable: ${comparison.indexability.indexable.old} to ${comparison.indexability.indexable.new}.`}>
+        {#each [{ label: 'Total pages', value: comparison.coverage.totalPages }, { label: 'Indexable', value: comparison.indexability.indexable }] as metric, i}
+          <text x="0" y={34 + i * 82} fill="#a1a5ad" font-size="12">{metric.label}</text>
+          <rect x="110" y={12 + i * 82} width={metric.value.old / coverageMax * 650} height="18" rx="3" fill="#56657b" />
+          <text x={120 + metric.value.old / coverageMax * 650} y={25 + i * 82} fill="#a1a5ad" font-size="11">{metric.value.old.toLocaleString()}</text>
+          <rect x="110" y={37 + i * 82} width={metric.value.new / coverageMax * 650} height="18" rx="3" fill="#75a6ff" />
+          <text x={120 + metric.value.new / coverageMax * 650} y={50 + i * 82} fill="#f2f2f2" font-size="11">{metric.value.new.toLocaleString()}</text>
+        {/each}
+      </svg>
+      <p class="chart-note"><span style="color:#8192ad">● Earlier crawl</span><span class="ml-5" style="color:#75a6ff">● Later crawl</span></p>
+    </section>
 
     <!-- Tab bar -->
     <div class="flex gap-1 p-1 rounded-xl bg-surface-2 border border-border overflow-x-auto">

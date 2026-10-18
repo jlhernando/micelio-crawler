@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { updates } from '../lib/stores/updates.svelte';
@@ -219,6 +220,7 @@
 {/if}
 
 <div class="max-w-4xl mx-auto space-y-4">
+  <PageHeading title="Settings" description="Manage crawl defaults, integrations, and application updates." section="Workspace" />
   {#if loading}
     <div class="rounded-xl border border-border bg-surface-2 p-12 text-center">
       <div class="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>
@@ -226,7 +228,7 @@
     </div>
   {:else}
     <!-- Action bar -->
-    <div class="flex items-center justify-between">
+    <div class="flex flex-wrap gap-4 items-center justify-between">
       <p class="text-sm text-fg-2">Configure default crawl parameters, API keys, and integrations.</p>
       <div class="flex gap-2">
         {@render actionButtons()}

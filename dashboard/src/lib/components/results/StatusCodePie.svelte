@@ -7,13 +7,13 @@
   } = $props();
 
   const CODE_COLORS: Record<string, string> = {
-    '200': '#3fb950', '201': '#3fb950', '204': '#3fb950',
-    '301': '#d29922', '302': '#eab308', '303': '#eab308', '307': '#eab308', '308': '#d29922',
+    '200': '#73d9ac', '201': '#73d9ac', '204': '#73d9ac',
+    '301': '#e5b66e', '302': '#eab308', '303': '#eab308', '307': '#eab308', '308': '#e5b66e',
     '400': '#f97316', '401': '#f97316', '403': '#f97316', '404': '#f97316', '410': '#9ca3af', '429': '#f97316', '451': '#f97316',
-    '500': '#f85149', '502': '#f85149', '503': '#f85149', '504': '#f85149',
+    '500': '#f58f98', '502': '#f58f98', '503': '#f58f98', '504': '#f58f98',
   };
 
-  const GROUP_COLORS: Record<string, string> = { '2xx': '#3fb950', '3xx': '#d29922', '4xx': '#f97316', '5xx': '#f85149' };
+  const GROUP_COLORS: Record<string, string> = { '2xx': '#73d9ac', '3xx': '#e5b66e', '4xx': '#f97316', '5xx': '#f58f98' };
 
   let statusCodes = $derived((stats.statusCodes as Record<string, number>) || {});
   let entries = $derived.by(() => {

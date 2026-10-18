@@ -64,14 +64,14 @@
 
   function isActive(itemPath: string, current: string): boolean {
     if (itemPath === '/setup') return current === '/setup' || current === '/';
-    if (itemPath === '/history') return current === '/history' || current.startsWith('/results') || current.startsWith('/monitor');
+    if (itemPath === '/history') return current === '/history' || current.startsWith('/results') || current.startsWith('/monitor') || current.startsWith('/diff');
     return current.startsWith(itemPath);
   }
 </script>
 
-<aside class="h-full flex flex-col border-r border-border bg-surface-2 transition-all duration-200 {collapsed ? 'w-16' : 'w-56'}">
+<aside class="app-sidebar h-full flex flex-col border-r border-border bg-surface-2 transition-all duration-200 {collapsed ? 'w-16' : 'w-56'}">
   <!-- Logo -->
-  <div class="flex items-center gap-3 px-4 h-14 border-b border-border">
+  <div class="sidebar-brand flex items-center gap-3 px-4 h-16">
     <button onclick={onToggle} class="text-fg-2 hover:text-fg transition-colors cursor-pointer" aria-label="Toggle sidebar">
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <line x1="3" y1="12" x2="21" y2="12"></line>
@@ -81,7 +81,7 @@
     </button>
     {#if !collapsed}
       <img src="/micelio-icon.jpg" alt="Micelio" width="28" height="28" class="rounded-md" />
-      <span class="text-lg font-bold text-accent">Micelio</span>
+      <span class="text-lg font-semibold tracking-tight text-fg">micelio</span>
     {/if}
   </div>
 
@@ -128,12 +128,14 @@
   {/if}
 
   <!-- Navigation -->
-  <nav class="flex-1 py-3 flex flex-col gap-1 px-2">
+  <nav aria-label="Main navigation" class="flex-1 py-5 flex flex-col gap-1 px-3">
+    {#if !collapsed}<p class="page-eyebrow px-3 mb-3">Workspace</p>{/if}
     {#each navItems as item}
       <a
         href="#{item.path}"
+        aria-current={isActive(item.path, currentPath) ? 'page' : undefined}
         class="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors no-underline
-          {isActive(item.path, currentPath) ? 'bg-surface-3 text-fg font-medium border-l-2 border-accent' : 'text-fg-2 hover:text-fg hover:bg-surface-3 border-l-2 border-transparent'}"
+          {isActive(item.path, currentPath) ? 'bg-surface-3 text-fg font-medium' : 'text-fg-2 hover:text-fg hover:bg-surface-3'}"
         title={collapsed ? item.label : undefined}
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
@@ -149,7 +151,7 @@
   <!-- Version -->
   {#if !collapsed}
     <div class="px-4 py-3 text-xs text-fg-2 border-t border-border">
-      Micelio v1.0
+      <span class="block text-fg mb-1">Micelio</span>Technical SEO workspace
     </div>
   {/if}
 </aside>

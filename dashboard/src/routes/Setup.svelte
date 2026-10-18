@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { Zap, ScanSearch, FileText, Wrench, Network } from 'lucide-svelte';
+  import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import CollapsibleSection from '../lib/components/ui/CollapsibleSection.svelte';
   import NumberInput from '../lib/components/ui/NumberInput.svelte';
@@ -205,17 +207,17 @@
   });
 
   // UI state
-  let selectedPreset = $state<string | null>('Quick Scan');
+  let selectedPreset = $state<string | null>(null);
   let starting = $state(false);
   let error = $state('');
 
   // ── Presets ──
   const presets = [
-    { name: 'Quick Scan', desc: 'Fast overview, depth 1, 100 pages', icon: '⚡', config: { depth: 1, limit: 100, concurrency: 10, htmlReport: true } },
-    { name: 'Full Audit', desc: 'Enterprise: all analyses, 1M pages', icon: '🔍', config: { depth: 30, limit: 1000000, concurrency: 5, delay: 1000, adaptiveRate: true, discoverSitemaps: true, ngrams: true, embeddings: true, linkIntelligence: true, liMaxSuggestions: 100, checkExternal: true, htmlReport: true } },
-    { name: 'Content Audit', desc: 'Content focus: readability, duplicates, n-grams', icon: '📝', config: { depth: 3, limit: 2000, ngrams: true, embeddings: true, htmlReport: true } },
-    { name: 'Technical Audit', desc: 'Technical SEO: redirects, canonicals, security', icon: '🔧', config: { depth: 3, limit: 2000, checkExternal: true, linkIntelligence: true, pageWeight: true, htmlReport: true } },
-    { name: 'Internal Linking', desc: 'Full link graph, orphans, 200 suggestions, n-grams', icon: '🔗', config: { depth: 10, limit: 50000, concurrency: 10, linkIntelligence: true, liMaxSuggestions: 200, embeddings: true, ngrams: true, sitemapOut: true, checkExternal: true, htmlReport: true } },
+    { name: 'Quick Scan', desc: 'Fast overview, depth 1, 100 pages', icon: Zap, config: { depth: 1, limit: 100, concurrency: 10, htmlReport: true } },
+    { name: 'Full Audit', desc: 'Enterprise: all analyses, 1M pages', icon: ScanSearch, config: { depth: 30, limit: 1000000, concurrency: 5, delay: 1000, adaptiveRate: true, discoverSitemaps: true, ngrams: true, embeddings: true, linkIntelligence: true, liMaxSuggestions: 100, checkExternal: true, htmlReport: true } },
+    { name: 'Content Audit', desc: 'Content focus: readability, duplicates, n-grams', icon: FileText, config: { depth: 3, limit: 2000, ngrams: true, embeddings: true, htmlReport: true } },
+    { name: 'Technical Audit', desc: 'Technical SEO: redirects, canonicals, security', icon: Wrench, config: { depth: 3, limit: 2000, checkExternal: true, linkIntelligence: true, pageWeight: true, htmlReport: true } },
+    { name: 'Internal Linking', desc: 'Full link graph, orphans, 200 suggestions, n-grams', icon: Network, config: { depth: 10, limit: 50000, concurrency: 10, linkIntelligence: true, liMaxSuggestions: 200, embeddings: true, ngrams: true, sitemapOut: true, checkExternal: true, htmlReport: true } },
   ];
 
   function applyPreset(preset: typeof presets[0]) {
@@ -443,6 +445,7 @@
 </script>
 
 <div class="max-w-5xl mx-auto space-y-6">
+  <PageHeading title="New crawl" description="Choose a preset, set your scope, and start exploring your site." section="Crawling" />
   <!-- Presets -->
   <div>
     <h2 class="text-sm font-medium text-fg-2 mb-3">Quick Start Presets</h2>
@@ -451,10 +454,11 @@
         <button
           type="button"
           class="text-left rounded-lg border p-4 transition-colors cursor-pointer
-            {selectedPreset === preset.name ? 'border-accent bg-accent/10' : 'border-border bg-surface-2 hover:border-accent/50 hover:bg-surface-3'}"
+            {selectedPreset === preset.name ? 'border-fg-2 bg-surface-3' : 'border-border bg-surface-2 hover:border-fg-2 hover:bg-surface-3'}"
+          aria-pressed={selectedPreset === preset.name}
           onclick={() => applyPreset(preset)}
         >
-          <div class="text-xl mb-1">{preset.icon}</div>
+          <div class="mb-4 text-fg-2"><preset.icon size={20} strokeWidth={1.5} /></div>
           <div class="text-sm font-medium">{preset.name}</div>
           <div class="text-xs text-fg-2 mt-1">{preset.desc}</div>
         </button>
@@ -993,7 +997,7 @@
   </div>
 
   <!-- Start Button -->
-  <div class="sticky bottom-0 bg-surface/80 backdrop-blur-sm border-t border-border py-4 -mx-6 px-6">
+  <div class="sticky bottom-0 bg-surface/80 backdrop-blur-sm border-t border-border py-4">
     {#if error}
       <div class="mb-3 px-4 py-2 rounded-lg bg-danger/10 text-danger text-sm">{error}</div>
     {/if}

@@ -1,7 +1,10 @@
 <script lang="ts">
+  import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { createWsClient } from '../lib/ws';
+  import CrawlHealthScore from '../lib/components/results/CrawlHealthScore.svelte';
+  import OverviewCharts from '../lib/components/results/OverviewCharts.svelte';
   import SummaryHeader from '../lib/components/results/SummaryHeader.svelte';
   import IssueCards from '../lib/components/results/IssueCards.svelte';
   import PagesTable from '../lib/components/results/PagesTable.svelte';
@@ -40,7 +43,7 @@
   let loadingProgress = $state(0);
 
   // Active tab
-  let activeTab = $state<'pages' | 'issues' | 'performance' | 'content' | 'links' | 'signals' | 'ai-visibility'>('pages');
+  let activeTab = $state<'overview' | 'pages' | 'issues' | 'performance' | 'content' | 'links' | 'signals' | 'ai-visibility'>('overview');
   let graphSubTab = $state<'explorer' | 'full' | 'treemap'>('explorer');
 
   // Filters passed from SummaryHeader clicks
@@ -186,6 +189,7 @@
 </script>
 
 <div class="max-w-7xl mx-auto space-y-4">
+  <PageHeading title="Site overview" description="Understand coverage, find problems, and explore the pages behind every number." section="Crawl results" />
   {#if loading}
     <div class="rounded-md border border-border bg-surface-2 p-12 text-center">
       <div class="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>
@@ -200,47 +204,10 @@
     <!-- Summary Header -->
     <SummaryHeader {stats} {pageCount} onFilter={handleSummaryFilter} activeTemplate={initialFilterTemplate} templateDistribution={originalTemplateDist} />
 
-    <!-- SEO Funnel + Tags Health -->
-    <div class="grid gap-3 grid-cols-1 md:grid-cols-2">
-      <SeoFunnel {stats} onFilter={handleSummaryFilter} />
-      <TagsHealthBar {stats} {pageCount} />
-    </div>
-
-    <!-- Alerts -->
-    {#if stats.alertSummary}
-      <AlertPanel {stats} />
-    {/if}
-
-    <!-- Chart Row: Status Code + Indexability Reasons + Load Time -->
-    <div class="grid gap-3 grid-cols-1 md:grid-cols-3">
-      <StatusCodePie {stats} onFilter={handleSummaryFilter} />
-      <IndexabilityReasonsPie {stats} onFilter={handleSummaryFilter} />
-      <ResponseTimeChart {stats} />
-    </div>
-
-    <!-- Chart Row 2: Canonical + Image Audit + PageRank -->
-    <div class="grid gap-3 grid-cols-1 md:grid-cols-3">
-      <CanonicalHealthPie {stats} />
-      <ImageAuditBar {stats} />
-      <PageRankHistogram {stats} />
-    </div>
-
-    <!-- Chart Row 3: URL Structure + Content Quality -->
-    <div class="grid gap-3 grid-cols-1 md:grid-cols-2">
-      <UrlStructureChart {stats} />
-      <ContentQualityGrid {stats} />
-    </div>
-
-    <!-- Chart Row 4: URL Issues + Structured Data + Security -->
-    <div class="grid gap-3 grid-cols-1 md:grid-cols-3">
-      <UrlIssuesCard {stats} />
-      <StructuredDataCard {stats} {pageCount} />
-      <SecurityOverview {stats} {pageCount} onFilter={handleSummaryFilter} />
-    </div>
-
     <!-- Tab Navigation -->
-    <div class="flex gap-1 p-1 rounded-md bg-surface-2 border border-border">
+    <div class="section-tabs">
       {#each [
+        { key: 'overview', label: 'Overview' },
         { key: 'pages', label: 'All Pages' },
         { key: 'issues', label: 'Issues' },
         { key: 'performance', label: 'Performance' },
@@ -251,11 +218,62 @@
       ] as tab}
         <button
           type="button"
-          class="flex-1 px-4 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer {activeTab === tab.key ? 'bg-accent text-white' : 'text-fg-2 hover:text-fg-1 hover:bg-surface-3'}"
+          aria-pressed={activeTab === tab.key}
           onclick={() => activeTab = tab.key as typeof activeTab}
         >{tab.label}</button>
       {/each}
     </div>
+
+    {#if activeTab === 'overview'}
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <OverviewCharts {stats} {pageCount} onFilter={handleSummaryFilter} onIssues={() => activeTab = 'issues'} />
+    </div>
+
+    <!-- SEO Funnel + Tags Health -->
+    <div class="grid gap-5 grid-cols-1 md:grid-cols-2">
+      <SeoFunnel {stats} onFilter={handleSummaryFilter} />
+      <TagsHealthBar {stats} {pageCount} />
+    </div>
+
+    <!-- Alerts -->
+    {#if stats.alertSummary}
+      <AlertPanel {stats} />
+    {/if}
+
+    <!-- Chart Row: Status Code + Indexability Reasons + Load Time -->
+    <div class="grid gap-5 grid-cols-1 md:grid-cols-3">
+      <StatusCodePie {stats} onFilter={handleSummaryFilter} />
+      <IndexabilityReasonsPie {stats} onFilter={handleSummaryFilter} />
+      <ResponseTimeChart {stats} />
+    </div>
+
+    <details class="overview-details">
+      <summary>More diagnostics <span>Canonicals, images, content, structured data and security</span></summary>
+      <div class="space-y-5 mt-5">
+      <div class="max-w-sm"><CrawlHealthScore {stats} {pageCount} /></div>
+    <!-- Chart Row 2: Canonical + Image Audit + PageRank -->
+    <div class="grid gap-5 grid-cols-1 md:grid-cols-3">
+      <CanonicalHealthPie {stats} />
+      <ImageAuditBar {stats} />
+      <PageRankHistogram {stats} />
+    </div>
+
+    <!-- Chart Row 3: URL Structure + Content Quality -->
+    <div class="grid gap-5 grid-cols-1 md:grid-cols-2">
+      <UrlStructureChart {stats} />
+      <ContentQualityGrid {stats} />
+    </div>
+
+    <!-- Chart Row 4: URL Issues + Structured Data + Security -->
+    <div class="grid gap-5 grid-cols-1 md:grid-cols-3">
+      <UrlIssuesCard {stats} />
+      <StructuredDataCard {stats} {pageCount} />
+      <SecurityOverview {stats} {pageCount} onFilter={handleSummaryFilter} />
+    </div>
+
+      </div>
+    </details>
+    {/if}
 
     <!-- Tab Content -->
     {#if activeTab === 'issues'}
@@ -554,3 +572,10 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .overview-details { border: 1px solid var(--color-border); border-radius: 10px; padding: 20px; }
+  .overview-details summary { cursor: pointer; font-size: 13px; }
+  .overview-details summary span { margin-left: 15px; font-size: 11px; color: var(--color-fg-2); }
+  @media(max-width: 767px) { .overview-details summary span { display: block; margin: 8px 0 0; } }
+</style>

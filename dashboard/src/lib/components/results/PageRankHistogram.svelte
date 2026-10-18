@@ -5,10 +5,10 @@
 
   const BUCKETS: [string, number, number, string][] = [
     ['0-1', 0, 1, '#9ca3af'],
-    ['1-3', 1, 3, '#58a6ff'],
-    ['3-5', 3, 5, '#d29922'],
+    ['1-3', 1, 3, '#75a6ff'],
+    ['3-5', 3, 5, '#e5b66e'],
     ['5-10', 5, 10, '#f97316'],
-    ['10+', 10, Infinity, '#3fb950'],
+    ['10+', 10, Infinity, '#73d9ac'],
   ];
 
   let bucketCounts = $derived.by(() => {

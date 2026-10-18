@@ -20,12 +20,14 @@ import (
 func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
 	// Path budget check (before any fetch)
 	if exceeded, rule := s.checkPathBudget(e.URL); exceeded {
+		s.queue.RecordExclusion("path_budget", rule, e.URL)
 		s.addToDeadLetter(e, 0, "path budget exceeded: "+rule)
 		return
 	}
 
 	// Robots.txt check
 	if s.robotsChecker != nil && !s.robotsChecker.IsAllowed(e.URL, s.config.UserAgent) {
+		s.queue.RecordExclusion("robots", "", e.URL)
 		s.handleRobotsBlocked(e)
 		return
 	}
@@ -239,6 +241,7 @@ func (s *crawlSession) handle304(e types.QueueEntry, result types.FetchResult) {
 			Crawled:        int(n),
 			Queued:         s.queue.Size(),
 			TotalSeen:      s.queue.TotalSeen(),
+			Coverage:       s.queue.CoverageSnapshot(),
 			Excluded:       excTotal,
 			ExcludedStats:  excStats,
 			CurrentURL:     e.URL,
@@ -519,6 +522,7 @@ func (s *crawlSession) storePage(e types.QueueEntry, page *types.PageData) {
 			Crawled:        n,
 			Queued:         s.queue.Size(),
 			TotalSeen:      s.queue.TotalSeen(),
+			Coverage:       s.queue.CoverageSnapshot(),
 			Excluded:       excTotal,
 			ExcludedStats:  excStats,
 			CurrentURL:     e.URL,

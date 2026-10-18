@@ -36,3 +36,18 @@ The browser suite mocks REST and WebSocket data. It covers all nine route screen
 - History shows coverage across the latest eight completed crawls for one selected hostname. Crawl settings can affect counts; the chart does not imply SEO performance improvement.
 - Schedules and log uploads summarize saved jobs. Log results retain their existing analytical tabs.
 - Test data stays in `tests/fixtures.ts`; the application does not ship demonstration records.
+
+### Persisted crawl exclusions
+
+The status endpoint exposes `coverage` for newly recorded executions. The crawler
+records the first rejected check for depth, page limits, domain scope, include and
+exclude filters, invalid URLs, robots.txt, and path budgets. Counts are rejected
+attempts, not unique URLs; repeated discoveries can count again. Samples are
+bounded to five URLs per reason/rule and 2,048 characters per URL.
+
+Snapshots are saved every ten page-progress events and after the execution,
+including zero-page and interrupted runs. A partial checkpoint can omit decisions
+made after the last save. A resumed execution replaces the previous snapshot;
+these are not cumulative counts across runs. Legacy jobs omit `coverage` rather
+than reporting zero exclusions. Coverage survives UI database reopen and remains
+available when page statistics are unavailable.

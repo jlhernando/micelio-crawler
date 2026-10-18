@@ -86,7 +86,7 @@ type crawlSession struct {
 	pathBudgets []pathBudgetCounter
 }
 
-func newCrawlSession(ctx context.Context, config types.CrawlConfig, onProgress OnProgress, store []CrawlStore) (*crawlSession, error) {
+func newCrawlSession(ctx context.Context, config types.CrawlConfig, onProgress OnProgress, store []CrawlStore) (_ *crawlSession, err error) {
 	s := &crawlSession{
 		config:        config,
 		startTime:     time.Now(),
@@ -105,6 +105,11 @@ func newCrawlSession(ctx context.Context, config types.CrawlConfig, onProgress O
 	ok := false
 	defer func() {
 		if !ok {
+			if err != nil && s.queue != nil {
+				coverage := s.queue.CoverageSnapshot()
+				coverage.Final = true
+				err = &coverageSetupError{error: err, coverage: coverage}
+			}
 			s.cleanup()
 		}
 	}()
@@ -493,7 +498,7 @@ func (s *crawlSession) setupNgrams() {
 func (s *crawlSession) setupRobotsAndDelay(ctx context.Context) {
 	isSpiderMode := s.config.Mode == types.ModeSpider || s.config.Mode == ""
 	if isSpiderMode && s.config.RespectRobots {
-		s.robotsChecker = &RobotsChecker{}
+		s.robotsChecker = &RobotsChecker{SkipSSRF: s.config.SkipSSRF}
 		if err := s.robotsChecker.Init(ctx, s.seedURL, s.config.UserAgent); err != nil {
 			fmt.Fprintf(os.Stderr, "  [warn] robots.txt fetch error: %v\n", err)
 		} else if s.robotsChecker.IsUnavailable() {
@@ -636,7 +641,11 @@ func (s *crawlSession) seedSitemapMode(ctx context.Context) error {
 			// own dedup key, so invalid locs never inflate counts or pollute
 			// the registered-domain set.
 			n := NormalizeURL(u)
-			if n == "" || seen[n] {
+			if n == "" {
+				s.queue.RecordExclusion("invalid_url", "", u)
+				continue
+			}
+			if seen[n] {
 				continue
 			}
 			seen[n] = true
@@ -648,6 +657,7 @@ func (s *crawlSession) seedSitemapMode(ctx context.Context) error {
 			host := p.Hostname()
 			if allowFilter != nil && !allowFilter[host] {
 				skippedScope++
+				s.queue.RecordExclusion("domain", "", u)
 				continue
 			}
 			// Register the host as internal before enqueuing so enforceInternal

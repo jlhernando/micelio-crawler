@@ -64,6 +64,7 @@ type ExcludedStats struct {
 // When the pending queue exceeds 50K entries, overflow spills to a temp file
 // and is loaded back in batches as the in-memory buffer drains.
 type CrawlQueue struct {
+	exclusions        map[string]*types.ExclusionReason
 	visited           *bloom.BloomFilter
 	visitedCount      int
 	excludedByPattern []int // per-pattern counts (same order as excludePatterns)
@@ -128,6 +129,7 @@ func NewCrawlQueue(seedURL string, maxDepth, maxPages int, opts *QueueOptions) *
 func (q *CrawlQueue) Enqueue(rawURL string, depth int, referrer *string) bool {
 	normalized := NormalizeURL(rawURL)
 	if normalized == "" {
+		q.RecordExclusion("invalid_url", "", rawURL)
 		return false
 	}
 
@@ -138,12 +140,15 @@ func (q *CrawlQueue) Enqueue(rawURL string, depth int, referrer *string) bool {
 		return false
 	}
 	if depth > q.maxDepth {
+		q.recordExclusion("depth", "", normalized)
 		return false
 	}
 	if q.visitedCount >= q.maxPages {
+		q.recordExclusion("page_limit", "", normalized)
 		return false
 	}
 	if q.enforceInternal && !q.isInternal(normalized) {
+		q.recordExclusion("domain", "", normalized)
 		return false
 	}
 	if !q.matchesFilters(normalized) {
@@ -166,6 +171,7 @@ func (q *CrawlQueue) Enqueue(rawURL string, depth int, referrer *string) bool {
 func (q *CrawlQueue) EnqueueEntry(entry types.QueueEntry) bool {
 	normalized := NormalizeURL(entry.URL)
 	if normalized == "" {
+		q.RecordExclusion("invalid_url", "", entry.URL)
 		return false
 	}
 	q.mu.Lock()
@@ -174,12 +180,15 @@ func (q *CrawlQueue) EnqueueEntry(entry types.QueueEntry) bool {
 		return false
 	}
 	if entry.Depth > q.maxDepth {
+		q.recordExclusion("depth", "", normalized)
 		return false
 	}
 	if q.visitedCount >= q.maxPages {
+		q.recordExclusion("page_limit", "", normalized)
 		return false
 	}
 	if q.enforceInternal && !q.isInternal(normalized) {
+		q.recordExclusion("domain", "", normalized)
 		return false
 	}
 	if !q.matchesFilters(normalized) {
@@ -491,6 +500,7 @@ func (q *CrawlQueue) matchesFilters(u string) bool {
 		}
 		if !matched {
 			q.excludedByInclude++
+			q.recordExclusion("include_filter", "", u)
 			return false
 		}
 	}
@@ -498,6 +508,7 @@ func (q *CrawlQueue) matchesFilters(u string) bool {
 		for i, p := range q.excludePatterns {
 			if p.MatchString(matchTarget) {
 				q.excludedByPattern[i]++
+				q.recordExclusion("exclude_filter", p.String(), u)
 				return false
 			}
 		}

@@ -2,6 +2,7 @@ package crawler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -16,27 +17,29 @@ import (
 
 // CrawlProgress reports crawl progress.
 type CrawlProgress struct {
-	CurrentURL     string          `json:"currentUrl"`
-	PageError      string          `json:"pageError,omitempty"`
-	Crawled        int             `json:"crawled"`
-	Queued         int             `json:"queued"`
-	TotalSeen      int             `json:"totalSeen"`
-	Excluded       int             `json:"excluded"`
-	ExcludedStats  []ExcludedStats `json:"excludedStats,omitempty"`
-	Rate           float64         `json:"rate"`
-	Errors         int             `json:"errors"`
-	StatusCode     int             `json:"statusCode"`
-	ResponseTimeMs int64           `json:"responseTimeMs"`
+	Coverage       *types.CrawlCoverage `json:"coverage,omitempty"`
+	CurrentURL     string               `json:"currentUrl"`
+	PageError      string               `json:"pageError,omitempty"`
+	Crawled        int                  `json:"crawled"`
+	Queued         int                  `json:"queued"`
+	TotalSeen      int                  `json:"totalSeen"`
+	Excluded       int                  `json:"excluded"`
+	ExcludedStats  []ExcludedStats      `json:"excludedStats,omitempty"`
+	Rate           float64              `json:"rate"`
+	Errors         int                  `json:"errors"`
+	StatusCode     int                  `json:"statusCode"`
+	ResponseTimeMs int64                `json:"responseTimeMs"`
 }
 
 // CrawlResult holds the final crawl output.
 type CrawlResult struct {
-	ExternalLinks        map[string][]string
-	ResourceRefs         map[string][]types.ResourceEntry
-	TransferSizes        map[string]int64
-	NgramAnalyzer        *analysis.NgramAnalyzer
-	Pages                []*types.PageData
-	DeadLetterQueue      []types.DeadLetterEntry
+	Coverage              *types.CrawlCoverage
+	ExternalLinks         map[string][]string
+	ResourceRefs          map[string][]types.ResourceEntry
+	TransferSizes         map[string]int64
+	NgramAnalyzer         *analysis.NgramAnalyzer
+	Pages                 []*types.PageData
+	DeadLetterQueue       []types.DeadLetterEntry
 	DiscoveredSitemapURLs []string
 	// InternalLinksIter yields per-page internal links from disk.
 	// Used by BuildAdjacencyList to avoid holding links in memory.
@@ -83,8 +86,8 @@ type CrawlStore interface {
 type CrawlOption func(*crawlOptions)
 
 type crawlOptions struct {
-	store    CrawlStore
-	pauseFn  PauseFunc
+	store   CrawlStore
+	pauseFn PauseFunc
 }
 
 // WithStore sets the optional SQLite-backed crawl persistence.
@@ -111,6 +114,10 @@ func CrawlWithOptions(ctx context.Context, config types.CrawlConfig, onProgress 
 
 	s, err := newCrawlSession(ctx, config, onProgress, store)
 	if err != nil {
+		var setupErr *coverageSetupError
+		if errors.As(err, &setupErr) {
+			return &CrawlResult{Coverage: setupErr.coverage}, err
+		}
 		return nil, err
 	}
 	s.onPhase = phaseFn
@@ -174,6 +181,9 @@ func CrawlWithOptions(ctx context.Context, config types.CrawlConfig, onProgress 
 
 	wg.Wait()
 
+	coverage := s.queue.CoverageSnapshot()
+	coverage.Final = true
+
 	// Persist pending queue on interruption for later resume
 	interrupted := cancelled || s.shouldAbort()
 	if interrupted {
@@ -225,6 +235,7 @@ func CrawlWithOptions(ctx context.Context, config types.CrawlConfig, onProgress 
 	}
 
 	result := &CrawlResult{
+		Coverage:              coverage,
 		Pages:                 s.pages,
 		Duration:              time.Since(s.startTime),
 		Errors:                int(s.errorCount.Load()),

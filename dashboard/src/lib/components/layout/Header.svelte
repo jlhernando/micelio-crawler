@@ -1,5 +1,5 @@
 <script lang="ts">
-  let { currentPath }: { currentPath: string } = $props();
+  let { currentPath, mobileOpen = false, onMenu }: { currentPath: string; mobileOpen?: boolean; onMenu: () => void } = $props();
 
   function getTitle(path: string): string {
     if (path === '/setup' || path === '/') return 'New Crawl';
@@ -9,6 +9,7 @@
     if (path === '/history') return 'Crawl History';
     if (path === '/logs') return 'Log Analysis';
     if (path.startsWith('/logs/')) return 'Log Results';
+    if (path === '/schedules') return 'Schedules';
     if (path === '/settings') return 'Settings';
     return 'Micelio';
   }
@@ -54,15 +55,17 @@
   }
 </script>
 
-<header class="h-14 flex items-center justify-between px-6 border-b border-border bg-surface-2 shrink-0">
-  <div class="flex items-center gap-2">
-    <h1 class="text-lg font-semibold">{title}</h1>
+<header class="workspace-header">
+  <div class="header-location">
+    <button class="mobile-menu" type="button" onclick={onMenu} aria-label={mobileOpen ? 'Close navigation' : 'Open navigation'} aria-expanded={mobileOpen} aria-controls="main-navigation">☰</button>
+    <span class="header-workspace">Workspace <span class="mx-3 text-fg-2">/</span></span>
+    <span class="text-sm text-fg">{title}</span>
     {#if domain}
       <span class="text-fg-2">/</span>
-      <span class="text-sm font-medium text-fg-2">{domain}</span>
+      <span class="header-domain text-sm font-medium text-fg-2">{domain}</span>
     {/if}
   </div>
-  <div class="flex items-center gap-3">
+  <div class="header-actions">
     {#if crawlId}
       <a
         href="/api/crawl/{crawlId}/export/csv"
@@ -80,7 +83,7 @@
     {#if crawlId && crawlConfig}
       <button
         type="button"
-        class="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-success/90 text-white text-sm font-medium hover:bg-success transition-all cursor-pointer disabled:opacity-50"
+        class="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-surface-3 text-fg text-sm font-medium hover:bg-surface-2 transition-all cursor-pointer disabled:opacity-50"
         onclick={recrawl}
         disabled={recrawling}
       >

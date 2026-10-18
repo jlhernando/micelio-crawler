@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import { createWsClient, type WsMessage } from '../lib/ws';
   import { api } from '../lib/api';
@@ -365,6 +366,7 @@
 </script>
 
 <div class="max-w-7xl mx-auto space-y-4">
+  <PageHeading title="Crawl monitor" description="Follow discovery, response times, and errors as they happen." section="Live activity" />
   <!-- Completion Banner -->
   {#if status === 'completed' && completionData}
     <div class="rounded-xl border border-green-500/30 bg-green-500/10 p-6 text-center">
@@ -398,8 +400,8 @@
 
   <!-- Progress Bar -->
   <div class="rounded-xl border border-border bg-surface-2 p-5">
-    <div class="flex items-center justify-between mb-3">
-      <div class="flex items-center gap-3">
+    <div class="flex flex-wrap gap-4 items-center justify-between mb-3">
+      <div class="flex flex-wrap items-center gap-3">
         <span class="text-2xl font-bold">{progressPct}%</span>
         {#if status === 'running'}
           <span class="flex items-center gap-1.5 text-xs text-green-400">
@@ -432,7 +434,7 @@
       </div>
       <!-- Controls -->
       {#if status === 'running' || status === 'paused'}
-        <div class="flex gap-2">
+        <div class="flex flex-wrap gap-2">
           {#if status === 'running'}
             <button
               type="button"

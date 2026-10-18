@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import { api, type ScheduleState } from '../lib/api';
 
@@ -109,11 +110,12 @@
   }
 </script>
 
-<div class="p-6 max-w-5xl mx-auto">
+<div class="max-w-5xl mx-auto">
+  <PageHeading title="Schedules" description="Set recurring crawls and review their next run and latest outcome." section="Automation" />
   <div class="flex items-center justify-between mb-6">
     <div>
-      <h1 class="text-2xl font-bold text-fg">Schedules</h1>
-      <p class="text-sm text-fg-2 mt-1">Recurring crawls that run automatically on a schedule.</p>
+      <h2 class="text-sm font-medium text-fg">Recurring crawls</h2>
+
     </div>
     <button
       class="px-4 py-2 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent/90 transition-colors cursor-pointer"
@@ -125,6 +127,15 @@
 
   {#if error}
     <div class="mb-4 px-4 py-3 rounded-md bg-danger/10 text-danger text-sm">{error}</div>
+  {/if}
+
+  {#if !loading && schedules.length > 0}
+    <dl class="metric-strip">
+      <div><dt>Schedules</dt><dd>{schedules.length}</dd><small>Recurring crawls</small></div>
+      <div><dt>Total runs</dt><dd>{schedules.reduce((sum, s) => sum + s.totalRuns, 0).toLocaleString()}</dd><small>Across all schedules</small></div>
+      <div><dt>Last run succeeded</dt><dd class="text-success">{schedules.filter(s => s.lastStatus === 'success').length}</dd><small>Schedules with a successful last run</small></div>
+      <div><dt>Need attention</dt><dd class="text-danger">{schedules.filter(s => s.lastStatus === 'failed').length}</dd><small>Schedules with a failed last run</small></div>
+    </dl>
   {/if}
 
   <!-- Create form -->

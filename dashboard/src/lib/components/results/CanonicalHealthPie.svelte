@@ -14,9 +14,9 @@
     const cross = cs.crossDomain?.length || 0;
     const missing = cs.totalWithoutCanonical || 0;
     const items: [string, number, string][] = [];
-    if (self > 0) items.push(['Self-referencing', self, '#3fb950']);
-    if (canonicalized > 0) items.push(['Canonicalized', canonicalized, '#d29922']);
-    if (cross > 0) items.push(['Cross-domain', cross, '#58a6ff']);
+    if (self > 0) items.push(['Self-referencing', self, '#73d9ac']);
+    if (canonicalized > 0) items.push(['Canonicalized', canonicalized, '#e5b66e']);
+    if (cross > 0) items.push(['Cross-domain', cross, '#75a6ff']);
     if (missing > 0) items.push(['Missing', missing, '#9ca3af']);
     return items;
   });

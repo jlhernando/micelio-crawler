@@ -9,9 +9,9 @@
   let bars = $derived.by(() => {
     if (!audit) return [];
     const items: [string, number, string][] = [];
-    if (audit.missingAltAttribute > 0) items.push(['Missing alt', audit.missingAltAttribute, '#f85149']);
+    if (audit.missingAltAttribute > 0) items.push(['Missing alt', audit.missingAltAttribute, '#f58f98']);
     if (audit.emptyAlt > 0) items.push(['Empty alt', audit.emptyAlt, '#f97316']);
-    if (audit.altTooLong?.length) items.push(['Alt too long', audit.altTooLong.length, '#d29922']);
+    if (audit.altTooLong?.length) items.push(['Alt too long', audit.altTooLong.length, '#e5b66e']);
     if (audit.missingDimensions > 0) items.push(['No dimensions', audit.missingDimensions, '#9ca3af']);
     if (audit.oversizedImages?.length) items.push(['Oversized', audit.oversizedImages.length, '#f97316']);
     return items;

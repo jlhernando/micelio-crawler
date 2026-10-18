@@ -1,4 +1,6 @@
 <script lang="ts">
+  import HistoryOverview from '../lib/components/results/HistoryOverview.svelte';
+  import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { navigate } from '../lib/router';
@@ -199,6 +201,7 @@
 </script>
 
 <div class="max-w-7xl mx-auto space-y-4">
+  <PageHeading title="Crawl history" description="Track completed audits and compare two crawls from the same site." section="Workspace" />
   {#if loading}
     <div class="rounded-xl border border-border bg-surface-2 p-12 text-center">
       <div class="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>
@@ -218,6 +221,8 @@
       </a>
     </div>
   {:else}
+    <HistoryOverview {crawls} />
+
     <!-- Compare toolbar -->
     {#if selected.size === 2}
       <div class="rounded-xl border border-accent/50 bg-accent/10 p-4 flex items-center justify-between">

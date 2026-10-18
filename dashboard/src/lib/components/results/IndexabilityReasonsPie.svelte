@@ -6,7 +6,7 @@
     onFilter?: (filter: { indexable?: string }) => void;
   } = $props();
 
-  const REASON_COLORS = ['#bc8cff', '#d29922', '#f97316', '#9ca3af', '#39d2c0', '#f778ba', '#58a6ff', '#f85149'];
+  const REASON_COLORS = ['#bc8cff', '#e5b66e', '#f97316', '#9ca3af', '#39d2c0', '#f778ba', '#75a6ff', '#f58f98'];
 
   let indexability = $derived((stats.indexabilityStats as { indexable: number; nonIndexable: number; reasons: Record<string, number> }) || null);
   let entries = $derived.by(() => {

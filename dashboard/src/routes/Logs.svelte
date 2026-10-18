@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { navigate } from '../lib/router';
@@ -309,7 +310,16 @@
   });
 </script>
 
-<div class="space-y-6">
+<div class="max-w-7xl mx-auto space-y-6">
+  <PageHeading title="Log analysis" description="Upload server logs to see which bots visit your site and where they spend time." section="Tools" />
+  {#if !loading && jobs.length > 0}
+    <dl class="metric-strip">
+      <div><dt>Analyses</dt><dd>{jobs.length}</dd><small>Uploaded log jobs</small></div>
+      <div><dt>Completed</dt><dd>{jobs.filter(j => j.status === 'completed').length}</dd><small>Ready to explore</small></div>
+      <div><dt>Processed lines</dt><dd>{jobs.reduce((n, j) => n + j.processedLines, 0).toLocaleString()}</dd><small>Across uploaded jobs</small></div>
+      <div><dt>Uploaded size</dt><dd class="text-xl">{formatBytes(jobs.reduce((n, j) => n + j.fileSize, 0))}</dd><small>All saved analyses</small></div>
+    </dl>
+  {/if}
   <!-- Upload Area -->
   <div
     class="border-2 border-dashed rounded-xl p-8 text-center transition-colors

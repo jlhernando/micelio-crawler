@@ -26,7 +26,7 @@
   } = $props();
 
   const PALETTE = [
-    { fill: 'rgba(88,166,255,0.78)',  border: '#58a6ff' }, // search blue
+    { fill: 'rgba(88,166,255,0.78)',  border: '#75a6ff' }, // search blue
     { fill: 'rgba(192,132,252,0.78)', border: '#c084fc' }, // AI training purple
     { fill: 'rgba(244,114,182,0.78)', border: '#f472b6' }, // AI search pink
     { fill: 'rgba(52,211,153,0.78)',  border: '#34d399' }, // social green

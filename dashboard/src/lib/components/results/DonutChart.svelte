@@ -4,11 +4,12 @@
 
   Chart.register(DoughnutController, ArcElement, Tooltip, Legend);
 
-  let { labels, data, colors, height = 200 }: {
+  let { labels, data, colors, height = 200, legend = true }: {
     labels: string[];
     data: number[];
     colors: string[];
     height?: number;
+    legend?: boolean;
   } = $props();
 
   let canvas: HTMLCanvasElement;
@@ -23,7 +24,7 @@
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { position: 'right', labels: { padding: 8, font: { size: 10 }, usePointStyle: true, boxWidth: 8 } },
+          legend: { display: legend, position: 'right', labels: { padding: 8, font: { size: 10 }, usePointStyle: true, boxWidth: 8 } },
           tooltip: {
             callbacks: {
               label: (ctx) => {
@@ -48,6 +49,6 @@
   });
 </script>
 
-<div style="position:relative;height:{height}px">
+<div style="position:relative;height:{height}px" role="img" aria-label={labels.map((label, i) => `${label}: ${(data[i] || 0).toLocaleString()}`).join(', ')}>
   <canvas bind:this={canvas}></canvas>
 </div>

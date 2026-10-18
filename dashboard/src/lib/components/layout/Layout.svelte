@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import Sidebar from './Sidebar.svelte';
   import Header from './Header.svelte';
   import UpdateBanner from '../UpdateBanner.svelte';
@@ -6,15 +7,32 @@
 
   let { currentPath, children }: { currentPath: string; children: Snippet } = $props();
   let sidebarCollapsed = $state(false);
+  let mobileOpen = $state(false);
+  onMount(() => {
+    const query = window.matchMedia('(max-width: 767px)');
+    const close = () => { mobileOpen = false; };
+    query.addEventListener('change', close);
+    return () => query.removeEventListener('change', close);
+  });
+  $effect(() => { currentPath; mobileOpen = false; });
 </script>
 
-<div class="flex h-screen overflow-hidden">
-  <Sidebar {currentPath} collapsed={sidebarCollapsed} onToggle={() => sidebarCollapsed = !sidebarCollapsed} />
-  <div class="flex-1 flex flex-col min-w-0">
-    <Header {currentPath} />
+<svelte:window onkeydown={(event) => { if (event.key === 'Escape') mobileOpen = false; }} />
+<a class="skip-link" href="#main-content" onclick={(event) => { event.preventDefault(); document.getElementById('main-content')?.focus(); }}>Skip to content</a>
+<div class="app-shell">
+  {#if mobileOpen}
+    <button class="sidebar-backdrop" aria-label="Close navigation" onclick={() => mobileOpen = false}></button>
+  {/if}
+  <div id="main-navigation" class:mobile-open={mobileOpen} class="sidebar-container">
+    <Sidebar {currentPath} collapsed={sidebarCollapsed} onToggle={() => sidebarCollapsed = !sidebarCollapsed} />
+  </div>
+  <div class="app-body">
+    <Header {currentPath} {mobileOpen} onMenu={() => mobileOpen = !mobileOpen} />
     <UpdateBanner />
-    <main class="flex-1 overflow-auto p-6">
-      {@render children()}
+    <main id="main-content" class="workspace-content" tabindex="-1">
+      <div class="workspace-page" data-page={currentPath.split('/')[1] || 'setup'}>
+        {@render children()}
+      </div>
     </main>
   </div>
 </div>

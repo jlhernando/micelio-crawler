@@ -4,6 +4,8 @@
   import { api } from '../lib/api';
   import { createWsClient } from '../lib/ws';
   import CrawlHealthScore from '../lib/components/results/CrawlHealthScore.svelte';
+  import CrawlCoverage from '../lib/components/results/CrawlCoverage.svelte';
+  import PriorityIssues from '../lib/components/results/PriorityIssues.svelte';
   import OverviewCharts from '../lib/components/results/OverviewCharts.svelte';
   import SummaryHeader from '../lib/components/results/SummaryHeader.svelte';
   import IssueCards from '../lib/components/results/IssueCards.svelte';
@@ -38,6 +40,8 @@
   let error = $state<string | null>(null);
   let stats = $state<Record<string, unknown> | null>(null);
   let pageCount = $state(0);
+  let crawlJob = $state<Record<string, unknown> | null>(null);
+  let scopeUnavailable = $state(false);
   let analysisPending = $state(false);
   let pagesReady = $state(false);
   let loadingProgress = $state(0);
@@ -113,6 +117,7 @@
   let liStats = $derived((stats?.linkIntelligenceStats as Record<string, unknown>) || null);
 
   onMount(() => {
+    api.getCrawlStatus(id).then(data => crawlJob = data).catch(() => scopeUnavailable = true);
     api.getCrawlStats(id).then((data: Record<string, unknown>) => {
       stats = data.stats as Record<string, unknown>;
       pageCount = data.pageCount as number;
@@ -225,8 +230,10 @@
     </div>
 
     {#if activeTab === 'overview'}
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
-      <OverviewCharts {stats} {pageCount} onFilter={handleSummaryFilter} onIssues={() => activeTab = 'issues'} />
+    <CrawlCoverage job={crawlJob} stats={baseStats || stats} pageCount={baseStats ? basePageCount : pageCount} unavailable={scopeUnavailable} />
+    {#key initialFilterTemplate}<PriorityIssues {stats} crawlId={id} template={initialFilterTemplate} onIssues={() => activeTab = 'issues'} />{/key}
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <OverviewCharts {stats} {pageCount} onFilter={handleSummaryFilter} />
     </div>
 
     <!-- SEO Funnel + Tags Health -->

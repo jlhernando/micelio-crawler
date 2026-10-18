@@ -143,3 +143,31 @@ test('Template filtering keeps full crawl coverage and scopes issue examples', a
   await expect(page.getByRole('region',{name:'Crawl coverage'})).toContainText('1,248');
   await expect(page.getByRole('region',{name:'Crawl coverage'})).toContainText('Finishing a crawl does not prove');
 });
+
+test('Saved exclusion reasons survive reload and show examples without inventing unique totals', async ({page}) => {
+  await mockApi(page);
+  await page.route('**/api/crawl/crawl-6/status',route=>route.fulfill({json:{status:'completed',config:{maxPages:1248},coverage:{final:true,acceptedUrls:1248,pendingUrls:0,reasons:[{reason:'depth',count:120,examples:['https://studio.example/deep']},{reason:'exclude_filter',rule:'/private',count:30,examples:['https://studio.example/private']},{reason:'robots',count:7,examples:['https://studio.example/blocked']}]}}}));
+  await page.goto('/#/results/crawl-6');
+  const panel=page.getByRole('region',{name:'Crawl coverage'});
+  await expect(panel).toContainText('157 rejected attempts');
+  await expect(panel).toContainText('Attempts, not unique URLs');
+  await panel.locator('summary').filter({hasText:'Exclude rule matched'}).click();
+  await expect(panel.getByText('https://studio.example/private',{exact:true})).toBeVisible();
+  await page.reload();
+  await expect(panel).toContainText('157 rejected attempts');
+  await panel.locator('summary').filter({hasText:'Blocked by robots.txt'}).click();
+  await expect(panel.getByText('https://studio.example/blocked',{exact:true})).toBeVisible();
+  await page.setViewportSize({width:390,height:844});
+  expect(await panel.evaluate(el=>el.scrollWidth>el.clientWidth+1)).toBe(false);
+});
+
+test('Failed zero-page crawls still expose saved exclusion evidence', async ({page}) => {
+  await mockApi(page);
+  await page.route('**/api/crawl/crawl-6/stats',route=>route.fulfill({status:404,json:{error:'results not available'}}));
+  await page.route('**/api/crawl/crawl-6/status',route=>route.fulfill({json:{status:'failed',pageCount:0,config:{mode:'sitemap'},coverage:{final:true,acceptedUrls:0,pendingUrls:0,reasons:[{reason:'domain',count:12,examples:['https://outside.example/page']}]}}}));
+  await page.goto('/#/results/crawl-6');
+  const panel=page.getByRole('region',{name:'Crawl coverage'});
+  await expect(panel).toContainText('12 rejected attempts');
+  await panel.locator('summary').filter({hasText:'Outside allowed domains'}).click();
+  await expect(panel.getByText('https://outside.example/page',{exact:true})).toBeVisible();
+});

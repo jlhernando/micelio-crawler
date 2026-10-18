@@ -27,6 +27,7 @@ type CrawlEvent struct {
 
 // CrawlJob represents a crawl job stored in the database.
 type CrawlJob struct {
+	Coverage    json.RawMessage        `json:"coverage,omitempty"`
 	Config      map[string]interface{} `json:"config"`
 	Stats       json.RawMessage        `json:"stats,omitempty"`
 	Events      []CrawlEvent           `json:"events,omitempty"`
@@ -139,6 +140,11 @@ func (s *UiStore) migrate() error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_crawl_jobs_status ON crawl_jobs(status);
 		CREATE INDEX IF NOT EXISTS idx_crawl_jobs_started ON crawl_jobs(started_at);
+
+		CREATE TABLE IF NOT EXISTS crawl_coverage (
+			crawl_id TEXT PRIMARY KEY,
+			summary_json TEXT NOT NULL
+		);
 
 		CREATE TABLE IF NOT EXISTS presets (
 			id TEXT PRIMARY KEY,
@@ -371,6 +377,14 @@ func (s *UiStore) GetCrawlJob(id string) (*CrawlJob, error) {
 	if err != nil {
 		return nil, err
 	}
+	if job != nil {
+		err = sqlitex.Execute(s.conn, `SELECT summary_json FROM crawl_coverage WHERE crawl_id = ?`, &sqlitex.ExecOptions{
+			Args: []interface{}{id}, ResultFunc: func(stmt *sqlite.Stmt) error { job.Coverage = json.RawMessage(stmt.ColumnText(0)); return nil },
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
 	return job, nil
 }
 
@@ -442,10 +456,25 @@ func (s *UiStore) UpdateCrawlJob(id string, updates map[string]interface{}) erro
 	return sqlitex.Execute(s.conn, query, &sqlitex.ExecOptions{Args: args})
 }
 
+// SaveCrawlCoverage persists a snapshot independently of page statistics, including
+// zero-page crawls and interrupted executions. NULL/absence means not recorded.
+func (s *UiStore) SaveCrawlCoverage(id string, coverage interface{}) error {
+	data, err := json.Marshal(coverage)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return sqlitex.Execute(s.conn, `INSERT INTO crawl_coverage(crawl_id, summary_json) VALUES (?, ?) ON CONFLICT(crawl_id) DO UPDATE SET summary_json = excluded.summary_json`, &sqlitex.ExecOptions{Args: []interface{}{id, string(data)}})
+}
+
 // DeleteCrawlJob deletes a crawl job and its associated stats by ID.
 func (s *UiStore) DeleteCrawlJob(id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := sqlitex.Execute(s.conn, `DELETE FROM crawl_coverage WHERE crawl_id = ?`, &sqlitex.ExecOptions{Args: []interface{}{id}}); err != nil {
+		return false, err
+	}
 	// Delete associated stats first (foreign key target)
 	if err := sqlitex.Execute(s.conn, `DELETE FROM crawl_stats WHERE crawl_id = ?`,
 		&sqlitex.ExecOptions{Args: []interface{}{id}}); err != nil {
@@ -670,20 +699,20 @@ func rowToJob(stmt *sqlite.Stmt) *CrawlJob {
 // ── Log Analysis persistence ──
 
 type LogJob struct {
-	CompletedAt    *string    `json:"completedAt"`
-	DurationMs     *int64     `json:"durationMs"`
-	UploadMs       *int64     `json:"uploadMs,omitempty"`
-	ParseMs        *int64     `json:"parseMs,omitempty"`
-	AnalysisMs     *int64     `json:"analysisMs,omitempty"`
-	ErrorMsg       *string    `json:"errorMsg"`
-	ID             string     `json:"id"`
-	Filename       string     `json:"filename"`
-	Format         string     `json:"format"`
-	Status         string     `json:"status"`
-	CreatedAt      string     `json:"createdAt"`
-	FileSize       int64      `json:"fileSize"`
-	TotalLines     int64      `json:"totalLines"`
-	ProcessedLines int64      `json:"processedLines"`
+	CompletedAt    *string `json:"completedAt"`
+	DurationMs     *int64  `json:"durationMs"`
+	UploadMs       *int64  `json:"uploadMs,omitempty"`
+	ParseMs        *int64  `json:"parseMs,omitempty"`
+	AnalysisMs     *int64  `json:"analysisMs,omitempty"`
+	ErrorMsg       *string `json:"errorMsg"`
+	ID             string  `json:"id"`
+	Filename       string  `json:"filename"`
+	Format         string  `json:"format"`
+	Status         string  `json:"status"`
+	CreatedAt      string  `json:"createdAt"`
+	FileSize       int64   `json:"fileSize"`
+	TotalLines     int64   `json:"totalLines"`
+	ProcessedLines int64   `json:"processedLines"`
 	// Files is the per-file breakdown for multi-file jobs. Empty (nil) for
 	// single-file jobs — the top-level Filename/FileSize/TotalLines still apply.
 	Files []LogJobFile `json:"files,omitempty"`
@@ -691,12 +720,12 @@ type LogJob struct {
 
 // LogJobFile describes one file within a multi-file log analysis job.
 type LogJobFile struct {
-	Filename       string `json:"filename"`
-	Size           int64  `json:"size"`
-	BytesRead      int64  `json:"bytesRead,omitempty"`
-	Lines          int64  `json:"lines,omitempty"`
-	Status         string `json:"status"`          // uploading, parsing, completed, failed
-	Error          string `json:"error,omitempty"`
+	Filename  string `json:"filename"`
+	Size      int64  `json:"size"`
+	BytesRead int64  `json:"bytesRead,omitempty"`
+	Lines     int64  `json:"lines,omitempty"`
+	Status    string `json:"status"` // uploading, parsing, completed, failed
+	Error     string `json:"error,omitempty"`
 }
 
 func (s *UiStore) CreateLogJob(filename string, fileSize int64) (*LogJob, error) {
@@ -1477,13 +1506,13 @@ func (s *UiStore) SaveMergePagesBatch(logID, crawlID string, pages []logs.Merged
 
 // MergeQueryOpts narrows / orders / paginates a merged-pages query.
 type MergeQueryOpts struct {
-	Segment          string // e.g. "crawl_waste"; empty = all
-	URLSearch        string // LIKE %x% on url
-	ReasonSearch     string // LIKE %x% on reason
-	TopBotSearch     string // LIKE %x% on log_top_bot
-	LogStatusFilter  string // "200", "404", "2xx", "3xx", "4xx", "5xx", "" = any
+	Segment           string // e.g. "crawl_waste"; empty = all
+	URLSearch         string // LIKE %x% on url
+	ReasonSearch      string // LIKE %x% on reason
+	TopBotSearch      string // LIKE %x% on log_top_bot
+	LogStatusFilter   string // "200", "404", "2xx", "3xx", "4xx", "5xx", "" = any
 	CrawlStatusFilter string
-	IndexableFilter  string // "yes", "no", "" = any
+	IndexableFilter   string // "yes", "no", "" = any
 	// Coverage maps Venn-style regions to segment combinations:
 	//   "crawl_only" → segment = uncrawled_indexable (ghosts)
 	//   "logs_only"  → segment = orphan_crawled

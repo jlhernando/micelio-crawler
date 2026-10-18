@@ -201,6 +201,9 @@
       <p class="text-fg-2 mt-3">Loading results...</p>
     </div>
   {:else if error}
+    {#if crawlJob?.coverage}
+      <CrawlCoverage job={crawlJob} stats={{}} pageCount={Number(crawlJob.pageCount) || 0} unavailable={scopeUnavailable} />
+    {/if}
     <div class="rounded-md border border-red-500/30 bg-red-500/10 p-8 text-center">
       <h2 class="text-xl font-semibold text-danger mb-2">Error Loading Results</h2>
       <p class="text-fg-2">{error}</p>

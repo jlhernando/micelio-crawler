@@ -32,19 +32,19 @@ type ProgressEvent struct {
 // Pages are not kept in memory; they are loaded from the crawl DB when requested.
 type CrawlResults struct {
 	Stats           map[string]interface{}   `json:"stats"`
-	Pages           []*types.PageData        `json:"pages"`           // populated only for the active/recent crawl
-	Graph           *analysis.AdjacencyGraph `json:"-"`               // CSR graph for edge rendering after InternalLinks freed
-	AnchorStats     map[string]interface{}   `json:"-"`               // pre-computed anchor stats (survives stripPagesForCache)
-	DirTree         map[string]interface{}   `json:"-"`               // pre-computed directory tree (survives stripPagesForCache)
-	TemplateTypes   []string                 `json:"-"`               // cached distinct template types
-	InlinkIndex     map[string][]string      `json:"-"`               // targetURL → []sourceURL for O(1) inlink lookups
-	DBPath          string                   `json:"-"`               // path to crawl DB for lazy loading
+	Pages           []*types.PageData        `json:"pages"` // populated only for the active/recent crawl
+	Graph           *analysis.AdjacencyGraph `json:"-"`     // CSR graph for edge rendering after InternalLinks freed
+	AnchorStats     map[string]interface{}   `json:"-"`     // pre-computed anchor stats (survives stripPagesForCache)
+	DirTree         map[string]interface{}   `json:"-"`     // pre-computed directory tree (survives stripPagesForCache)
+	TemplateTypes   []string                 `json:"-"`     // cached distinct template types
+	InlinkIndex     map[string][]string      `json:"-"`     // targetURL → []sourceURL for O(1) inlink lookups
+	DBPath          string                   `json:"-"`     // path to crawl DB for lazy loading
 	PageCount       int                      `json:"pageCount"`
 	AnalysisPending bool                     `json:"analysisPending"` // true while deferred analysis (link intel, embeddings) is running
 	PagesReady      bool                     `json:"pagesReady"`      // false while pages are loading from DB in background
-	loadingProgress atomic.Int32                                      // 0-100 progress of background page loading (lock-free)
-	loadCancel      context.CancelFunc                                // cancels background page loading goroutine
-	mu              sync.RWMutex                                      // protects Pages during deferred analysis
+	loadingProgress atomic.Int32             // 0-100 progress of background page loading (lock-free)
+	loadCancel      context.CancelFunc       // cancels background page loading goroutine
+	mu              sync.RWMutex             // protects Pages during deferred analysis
 }
 
 // ActiveCrawl tracks a running crawl job.
@@ -60,7 +60,7 @@ type ActiveCrawl struct {
 	TotalSeen   int // total unique URLs discovered
 	Excluded    int // URLs filtered out by rules
 	Paused      bool
-	Stopping    bool         // true = stop crawling but still run analysis
+	Stopping    bool          // true = stop crawling but still run analysis
 	pauseCh     chan struct{} // closed when unpaused; recreated on each pause
 	pauseMu     sync.Mutex
 }
@@ -494,6 +494,11 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 
 		// Update DB periodically (every 10 pages)
 		if p.Crawled%10 == 0 {
+			if p.Coverage != nil {
+				if err := m.store.SaveCrawlCoverage(crawlID, p.Coverage); err != nil {
+					log.Printf("[manager] save coverage: %v", err)
+				}
+			}
 			if err := m.store.UpdateCrawlJob(crawlID, map[string]interface{}{
 				"pageCount": p.Crawled, "errorCount": p.Errors,
 			}); err != nil {
@@ -505,14 +510,14 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		m.emit(ProgressEvent{
 			CrawlID: crawlID, Type: "progress",
 			Data: map[string]interface{}{
-				"completed": completed,
-				"failed":    failed,
-				"pending":   pending,
-				"total":     maxPages,
-				"elapsedMs": elapsed,
-				"crawled":   p.Crawled,
-				"queued":    p.Queued,
-				"totalSeen": p.TotalSeen,
+				"completed":     completed,
+				"failed":        failed,
+				"pending":       pending,
+				"total":         maxPages,
+				"elapsedMs":     elapsed,
+				"crawled":       p.Crawled,
+				"queued":        p.Queued,
+				"totalSeen":     p.TotalSeen,
 				"excluded":      p.Excluded,
 				"excludedStats": p.ExcludedStats,
 				"rate":          p.Rate,
@@ -545,6 +550,13 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		})
 	})
 
+	// Persist before cancellation handling: final decisions also matter when no
+	// pages were fetched (robots/filters) or the user stopped the execution.
+	if result != nil && result.Coverage != nil {
+		if saveErr := m.store.SaveCrawlCoverage(crawlID, result.Coverage); saveErr != nil {
+			log.Printf("[manager] save final coverage: %v", saveErr)
+		}
+	}
 	elapsed := time.Since(startTime).Milliseconds()
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -960,16 +972,16 @@ func (m *CrawlManager) GetOrLoadResults(crawlID string) *CrawlResults {
 	}
 
 	result := &CrawlResults{
-		Stats:       statsMap,
-		Pages:       pages,
-		Graph:       graph,
-		AnchorStats: anchorStats,
-		DirTree:     dirTree,
+		Stats:         statsMap,
+		Pages:         pages,
+		Graph:         graph,
+		AnchorStats:   anchorStats,
+		DirTree:       dirTree,
 		TemplateTypes: tmplTypes,
-		InlinkIndex: inlinkIdx,
-		DBPath:      job.DBPath,
-		PageCount:   job.PageCount,
-		PagesReady:  true,
+		InlinkIndex:   inlinkIdx,
+		DBPath:        job.DBPath,
+		PageCount:     job.PageCount,
+		PagesReady:    true,
 	}
 	result.loadingProgress.Store(100)
 

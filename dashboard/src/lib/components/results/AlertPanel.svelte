@@ -20,7 +20,16 @@
     timestamp: string;
   }
 
-  let summary = $derived((stats.alertSummary as AlertSummaryData) || null);
+  let summary = $derived.by(() => {
+    const raw = stats.alertSummary as AlertSummaryData | null;
+    if (!raw) return null;
+    const alerts = raw.alerts.map(alert => alert.id === 'orphan-pages' ? {
+      ...alert, name: 'Possible orphan pages', severity: 'info',
+      message: 'No incoming links were recorded for these candidates. Crawl limits can hide links; verify with a broader crawl and sitemap or another URL source.',
+    } : alert);
+    return { ...raw, alerts, critical: alerts.filter(a=>a.severity==='critical').length,
+      warnings: alerts.filter(a=>a.severity==='warning').length, info: alerts.filter(a=>a.severity==='info').length };
+  });
 
   function severityColor(severity: string): string {
     switch (severity) {

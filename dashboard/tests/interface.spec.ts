@@ -77,3 +77,69 @@ test('Missing result metrics show no-data messages instead of charts',async({pag
   await expect(page.getByText('Indexability data is not available for this crawl.')).toBeVisible();
   await expect(page.getByText('Response-time data is not available for this crawl.')).toBeVisible();
 });
+
+test('Coverage explains limits and does not invent whole-site completeness', async ({page}) => {
+  await mockApi(page);
+  await page.route('**/api/crawl/crawl-6/status', route => route.fulfill({json:{status:'completed',config:{maxPages:1248,maxDepth:3,respectRobots:true}}}));
+  await page.goto('/#/results/crawl-6');
+  const coverage=page.getByRole('region',{name:'Crawl coverage'});
+  await expect(coverage.getByText('Page limit reached',{exact:true})).toBeVisible();
+  await expect(coverage).toContainText('Whole-site coverage is unknown.');
+  await expect(coverage).toContainText('Not recorded');
+  await expect(coverage).toContainText('Not measured');
+  await page.setViewportSize({width:390,height:844});
+  expect(await coverage.evaluate(el=>el.scrollWidth>el.clientWidth+1)).toBe(false);
+});
+
+test('Priority findings show scoped examples, action and retry on failure', async ({page}) => {
+  await mockApi(page);
+  let attempts=0;
+  await page.route('**/api/crawl/crawl-6/pages?*',route=>{
+    const url=new URL(route.request().url());
+    if(url.searchParams.get('issue')!=='5xx')return route.fallback();
+    expect(url.searchParams.get('limit')).toBe('5');
+    attempts++;
+    return attempts===1?route.fulfill({status:500,json:{error:'Example load failed'}}):route.fulfill({json:{pages:[{url:'https://studio.example/server-error'}],total:4}});
+  });
+  await page.goto('/#/results/crawl-6');
+  const panel=page.getByRole('region',{name:'Problems by impact'});
+  await expect(panel.locator('article').first()).toContainText('Broken internal links');
+  await panel.getByRole('button',{name:/Server errors/}).click();
+  await expect(panel.getByRole('alert')).toContainText('Could not load examples');
+  await panel.getByRole('button',{name:'Retry',exact:true}).click();
+  await expect(panel).toContainText('https://studio.example/server-error');
+  await expect(panel).toContainText('Check server logs');
+  await panel.getByRole('button',{name:/Broken internal links/}).click();
+  await expect(panel).toContainText('https://studio.example/archive/0');
+  expect(attempts).toBe(2);
+});
+
+test('Missing scope preserves results and orphan candidates stay qualified', async ({page}) => {
+  await mockApi(page);
+  await page.route('**/api/crawl/crawl-6/status',route=>route.fulfill({status:500,json:{error:'Scope unavailable'}}));
+  await page.route('**/api/crawl/crawl-6/stats',route=>route.fulfill({json:{stats:{orphanPages:['https://studio.example/candidate'],alertSummary:{alerts:[{id:'orphan-pages',name:'Orphan Pages Detected',severity:'warning',message:'Orphan detected'}]}},pageCount:1,pagesReady:true}}));
+  await page.goto('/#/results/crawl-6');
+  await expect(page.getByText('Could not load crawl settings. Results are still available.')).toBeVisible();
+  const panel=page.getByRole('region',{name:'Problems by impact'});
+  await panel.getByRole('button',{name:/Possible orphan pages/}).click();
+  await expect(panel).toContainText('Incomplete link evidence');
+  await expect(panel).toContainText('before calling these pages orphaned');
+  await expect(page.getByText('Orphan Pages Detected',{exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'All issues ↗'}).click();
+  await page.getByRole('button',{name:/Possible Orphan Pages/}).click();
+  await expect(page.getByText(/Limited coverage can hide links/)).toBeVisible();
+});
+
+test('Template filtering keeps full crawl coverage and scopes issue examples', async ({page}) => {
+  await mockApi(page);
+  await page.route('**/stats/filtered?*',route=>route.fulfill({json:{stats:{pagesWithoutTitle:3},pageCount:12}}));
+  await page.goto('/#/results/crawl-6');
+  await page.getByRole('button',{name:'Product 612',exact:true}).click();
+  const panel=page.getByRole('region',{name:'Problems by impact'});
+  await expect(panel.getByRole('button',{name:/Missing titles/})).toContainText('3 pages');
+  const request=page.waitForRequest(r=>r.url().includes('/pages?')&&r.url().includes('issue=missing-title'));
+  await panel.getByRole('button',{name:/Missing titles/}).click();
+  expect(new URL((await request).url()).searchParams.get('template')).toBe('Product');
+  await expect(page.getByRole('region',{name:'Crawl coverage'})).toContainText('1,248');
+  await expect(page.getByRole('region',{name:'Crawl coverage'})).toContainText('Finishing a crawl does not prove');
+});

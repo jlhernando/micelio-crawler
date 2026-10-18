@@ -56,7 +56,7 @@
     const orphans = (stats.orphanPages as string[]) || [];
     if (orphans.length > 0) {
       cards.push({
-        id: 'orphan-pages', label: 'Orphan Pages', count: orphans.length, severity: 'critical',
+        id: 'orphan-pages', label: 'Possible Orphan Pages', count: orphans.length, severity: 'info',
         details: orphans.slice(0, 50).map(url => ({ url })),
       });
     }
@@ -435,6 +435,9 @@
               onclick={() => expandedCard = null}
             >Close</button>
           </div>
+          {#if card.id === 'orphan-pages'}
+            <p class="text-xs text-fg-2 mb-3">No incoming links were recorded in this crawl. Limited coverage can hide links. Verify with a broader crawl and sitemap or another URL source before treating these as orphan pages.</p>
+          {/if}
           {#if detailsLoading === card.id}
             <div class="flex items-center gap-2 py-4 justify-center">
               <div class="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>

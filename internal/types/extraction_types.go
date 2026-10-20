@@ -107,7 +107,7 @@ type RenderDiff struct {
 	Rendered string `json:"rendered"`
 }
 
-// --- Rankpedia-informed SEO signals ---
+// --- SEO signals ---
 
 // FreshnessData holds content freshness signals.
 // Source: Patent US8924379, US8583617, DOJ (semanticDateInfo, bylineDate).

@@ -285,7 +285,6 @@ footer{margin-top:32px;padding-top:16px;border-top:1px solid var(--border);color
 .signal-section{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:20px;margin-bottom:16px}
 .signal-section h3{font-size:16px;margin-bottom:4px;color:var(--accent)}
 .signal-section .source{font-size:11px;color:var(--text-muted);margin-bottom:4px}
-.signal-section .cite{font-size:10px;color:var(--text-muted);opacity:0.6;margin-bottom:12px}
 .signal-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
 .signal-metric{padding:10px 14px;background:var(--bg);border-radius:6px;border:1px solid var(--border)}
 .signal-metric .label{font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px}
@@ -648,12 +647,11 @@ function renderSignals(){
   // 1. Crawl & Index
   h+='<div class="signal-section" style="border-left:3px solid var(--green)"><h3>Crawl &amp; Index (Trawler / Alexandria)</h3>';
   h+='<div class="source">Google\'s Trawler crawls and Alexandria indexes pages. Only indexed pages can rank. Crawl budget wasted on non-indexable URLs reduces the rate at which Googlebot discovers and refreshes your content.</div>';
-  h+='<div class="cite">Rankpedia: doj:trawler, doj:caffeine-indexing</div>';
   h+='<div class="signal-grid">';
   h+='<div class="signal-metric sig-crawl"><div class="label">Index Rate</div><div class="val good">'+pct(idx,total)+'</div><div class="sub">'+comma(idx)+' of '+comma(total)+' pages indexable (no noindex, canonical self-referencing, 200 status)</div>'+bar(idx,total,'var(--green)')+'</div>';
   h+='<div class="signal-metric sig-crawl"><div class="label">Crawl Waste</div><div class="val '+(nonIdx+broken>0?'warn':'good')+'">'+pct(nonIdx+broken,total)+'</div><div class="sub">'+comma(nonIdx+broken)+' URLs consuming crawl budget without entering the index (redirects, 4xx/5xx, noindex, duplicate)</div></div>';
   h+='<div class="signal-metric sig-crawl"><div class="label">Orphan Pages</div><div class="val '+(orphans>0?'warn':'good')+'">'+comma(orphans)+'</div><div class="sub">Pages with no internal link path from seed. Googlebot relies on links for discovery; orphans depend entirely on sitemaps or external links</div></div>';
-  if(s.redirectStats){const nb=s.redirectStats.navBoostAtRisk||0;h+='<div class="signal-metric sig-crawl"><div class="label">NavBoost at Risk</div><div class="val '+(nb>0?'warn':'good')+'">'+nb+'</div><div class="sub">Pages behind 302/307 redirects. NavBoost click signals accumulate on the redirect URL instead of the destination, diluting ranking power. <em style="opacity:0.6">Rankpedia: doj:navboost</em></div></div>'}
+  if(s.redirectStats){const nb=s.redirectStats.navBoostAtRisk||0;h+='<div class="signal-metric sig-crawl"><div class="label">NavBoost at Risk</div><div class="val '+(nb>0?'warn':'good')+'">'+nb+'</div><div class="sub">Pages behind 302/307 redirects. NavBoost click signals accumulate on the redirect URL instead of the destination, diluting ranking power.</div></div>'}
   h+='</div></div>';
 
   // 2. Relevance (T*)
@@ -661,7 +659,6 @@ function renderSignals(){
     const t=s.topicalityStats;
     h+='<div class="signal-section" style="border-left:3px solid var(--accent)"><h3>Relevance (T* Topicality)</h3>';
     h+='<div class="source">T* is Google\'s query-dependent topicality score combining three sub-signals: Anchors (A) what the web says about you, Body (B) what your page says about itself, and Clicks (C) what users say about you. Our proxy measures the B component (on-page alignment). Confirmed by Pandu Nayak (sworn testimony).</div>';
-    h+='<div class="cite">Rankpedia: doj:t-star, doj:abc-body, leak:Ascorer</div>';
     h+='<div class="signal-grid">';
     h+='<div class="signal-metric sig-relevance"><div class="label">Title-Body Overlap</div><div class="val">'+fmt(t.avgTitleBodyOverlap)+'</div><div class="sub">Fraction of title terms found in body text. Proxy for titlematchScore: the higher, the more Google trusts the title reflects the content</div>'+bar(t.avgTitleBodyOverlap,1,'var(--accent)')+'</div>';
     h+='<div class="signal-metric sig-relevance"><div class="label">Title-H1 Alignment</div><div class="val">'+fmt(t.avgTitleH1Alignment)+'</div><div class="sub">Jaccard similarity between title tag and H1. Misalignment signals inconsistent topic targeting, weakening the Body (B) sub-signal</div>'+bar(t.avgTitleH1Alignment,1,'var(--accent)')+'</div>';
@@ -674,7 +671,6 @@ function renderSignals(){
   if(s.readabilityStats||s.contentRichnessStats||s.eeatStats){
     h+='<div class="signal-section" style="border-left:3px solid var(--purple)"><h3>Quality (Q* Score)</h3>';
     h+='<div class="source">Q* is Google\'s site-wide, query-independent quality score on a 0-1 scale. Pages below 0.4 are ineligible for featured snippets and rich results. Hand-crafted (not ML), operates at subdomain level, tied to E-E-A-T. Confirmed by Pandu Nayak. Candour Agency independently verified the 0.4 threshold across 800K domains.</div>';
-    h+='<div class="cite">Rankpedia: doj:q-star, leak:contentEffort, patent:US8682892</div>';
     h+='<div class="signal-grid">';
     if(s.readabilityStats){
       const r=s.readabilityStats;
@@ -685,12 +681,12 @@ function renderSignals(){
     }
     if(s.contentRichnessStats){
       const cr=s.contentRichnessStats;
-      h+='<div class="signal-metric sig-quality"><div class="label">Content Richness</div><div class="val">'+fmt(cr.avgRichnessScore)+'</div><div class="sub">Proxy for contentEffort (leaked LLM signal). Measures structural diversity: headings, lists, tables, images, code blocks. <em style="opacity:0.6">Rankpedia: leak:contentEffort</em></div>'+bar(cr.avgRichnessScore,1,'var(--green)')+'</div>';
+      h+='<div class="signal-metric sig-quality"><div class="label">Content Richness</div><div class="val">'+fmt(cr.avgRichnessScore)+'</div><div class="sub">Proxy for contentEffort (leaked LLM signal). Measures structural diversity: headings, lists, tables, images, code blocks.</div>'+bar(cr.avgRichnessScore,1,'var(--green)')+'</div>';
       h+='<div class="signal-metric sig-quality"><div class="label">Low Richness</div><div class="val '+(cr.lowRichnessPages>0?'warn':'good')+'">'+cr.lowRichnessPages+' <span style="font-size:12px;font-weight:normal;color:var(--text-muted)">pages</span></div><div class="sub">Score &lt; 0.2. Thin content with minimal structural elements, likely scored low on contentEffort</div></div>';
     }
     if(s.eeatStats){
       const e=s.eeatStats;
-      h+='<div class="signal-metric sig-quality"><div class="label">Author Coverage</div><div class="val">'+fmt(e.authorCoverage,0)+'%</div><div class="sub">'+e.pagesWithAuthor+' pages with author markup. Google\'s authorshipMarkup patent (US9697259) uses structured author data for expertise signals. <em style="opacity:0.6">Rankpedia: patent:US9697259</em></div>'+bar(e.authorCoverage,100,'var(--accent)')+'</div>';
+      h+='<div class="signal-metric sig-quality"><div class="label">Author Coverage</div><div class="val">'+fmt(e.authorCoverage,0)+'%</div><div class="sub">'+e.pagesWithAuthor+' pages with author markup. Google\'s authorshipMarkup patent (US9697259) uses structured author data for expertise signals.</div>'+bar(e.authorCoverage,100,'var(--accent)')+'</div>';
       const trust=[e.hasAboutPage?'About':'',e.hasContactPage?'Contact':'',e.hasEditorialPolicy?'Editorial':''].filter(Boolean).join(', ');
       h+='<div class="signal-metric sig-quality"><div class="label">Trust Pages</div><div class="val">'+(trust||'None')+'</div><div class="sub">E-E-A-T trust signals. About, Contact, and Editorial Policy pages strengthen domain trustworthiness, a direct input to Q*</div></div>';
     }
@@ -701,7 +697,6 @@ function renderSignals(){
   if(s.linkIntelligenceStats||s.anchorHealthStats){
     h+='<div class="signal-section" style="border-left:3px solid var(--orange)"><h3>Authority (NSR / PageRank<sub>NS</sub>)</h3>';
     h+='<div class="source">NSR (Normalized Site Rank) is a 46-signal composite measuring site-wide authority. PageRank<sub>NS</sub> (Nearest Seed) computes link authority based on proximity to trusted seed pages, confirmed still active in the leaked API. Internal link structure directly controls how authority flows across your site.</div>';
-    h+='<div class="cite">Rankpedia: leak:pagerank-ns, leak:site-pr, doj:nsr, patent:US9165040</div>';
     h+='<div class="signal-grid">';
     if(s.linkIntelligenceStats){
       const li=s.linkIntelligenceStats;
@@ -711,7 +706,7 @@ function renderSignals(){
     }
     if(s.anchorHealthStats){
       const ah=s.anchorHealthStats;
-      h+='<div class="signal-metric sig-authority"><div class="label">Anchor Diversity</div><div class="val">'+fmt(ah.avgInboundDiversity)+'</div><div class="sub">Anchor text variation in inbound links. Low diversity triggers anchorMismatch spam signals. Natural profiles mix brand, keyword, and generic anchors. <em style="opacity:0.6">Rankpedia: patent:US7533092, doj:BayesSpam</em></div>'+bar(ah.avgInboundDiversity,1,'var(--green)')+'</div>';
+      h+='<div class="signal-metric sig-authority"><div class="label">Anchor Diversity</div><div class="val">'+fmt(ah.avgInboundDiversity)+'</div><div class="sub">Anchor text variation in inbound links. Low diversity triggers anchorMismatch spam signals. Natural profiles mix brand, keyword, and generic anchors.</div>'+bar(ah.avgInboundDiversity,1,'var(--green)')+'</div>';
       h+='<div class="signal-metric sig-authority"><div class="label">Over-Optimized</div><div class="val '+(ah.pagesOverOptimized>0?'warn':'good')+'">'+ah.pagesOverOptimized+'</div><div class="sub">Pages with suspicious anchor text patterns. BayesSpam classifier flags over-optimized anchor profiles as manipulation signals</div></div>';
     }
     h+='</div></div>';
@@ -721,7 +716,6 @@ function renderSignals(){
   if(s.passageReadinessStats||s.aiReadinessStats||s.freshnessStats){
     h+='<div class="signal-section" style="border-left:3px solid var(--teal)"><h3>Engagement Readiness (P* / NavBoost Proxy)</h3>';
     h+='<div class="source">P* is Google\'s dynamic engagement metric combining NavBoost click data with anchor signals. NavBoost is "just a big table" of 13 months of click statistics (not ML), achieving 91% accuracy. It tracks goodClicks, badClicks, and lastLongestClicks, segmented by location and device. This section measures how well your content is structured to earn those positive signals.</div>';
-    h+='<div class="cite">Rankpedia: doj:p-star, doj:navboost, doj:good-clicks, doj:last-longest-clicks, patent:US20160078102</div>';
     h+='<div class="signal-grid">';
     if(s.passageReadinessStats){
       const pr=s.passageReadinessStats;
@@ -731,12 +725,12 @@ function renderSignals(){
     }
     if(s.aiReadinessStats){
       const ai=s.aiReadinessStats;
-      h+='<div class="signal-metric sig-engagement"><div class="label">AI Readiness</div><div class="val">'+fmt(ai.avgAiReadinessScore)+'</div><div class="sub">AI Overview citation readiness (0-1). Measures concise definitions, structured answers, and schema markup that FastSearch/SnippetBrain can extract. <em style="opacity:0.6">Rankpedia: doj:fastsearch, doj:snippetbrain</em></div>'+bar(ai.avgAiReadinessScore,1,'var(--accent)')+'</div>';
+      h+='<div class="signal-metric sig-engagement"><div class="label">AI Readiness</div><div class="val">'+fmt(ai.avgAiReadinessScore)+'</div><div class="sub">AI Overview citation readiness (0-1). Measures concise definitions, structured answers, and schema markup that FastSearch/SnippetBrain can extract.</div>'+bar(ai.avgAiReadinessScore,1,'var(--accent)')+'</div>';
       h+='<div class="signal-metric sig-engagement"><div class="label">Structured Answers</div><div class="val">'+ai.pagesWithStructuredAnswer+'</div><div class="sub">Pages with a concise definition or answer near the top. Prime candidates for featured snippets and AI Overview citations</div></div>';
     }
     if(s.freshnessStats){
       const fr=s.freshnessStats;
-      h+='<div class="signal-metric sig-engagement"><div class="label">Dated Content</div><div class="val">'+pct(fr.pagesWithDate,fr.pagesWithDate+fr.pagesWithoutDate)+'</div><div class="sub">'+fr.pagesWithDate+' pages with date signals (byline, schema, meta). Google uses semanticDateInfo and bylineDate for freshness scoring. <em style="opacity:0.6">Rankpedia: patent:US8924379, patent:US8583617</em></div></div>';
+      h+='<div class="signal-metric sig-engagement"><div class="label">Dated Content</div><div class="val">'+pct(fr.pagesWithDate,fr.pagesWithDate+fr.pagesWithoutDate)+'</div><div class="sub">'+fr.pagesWithDate+' pages with date signals (byline, schema, meta). Google uses semanticDateInfo and bylineDate for freshness scoring.</div></div>';
       h+='<div class="signal-metric sig-engagement"><div class="label">Inconsistent Dates</div><div class="val '+(fr.inconsistentDates>0?'warn':'good')+'">'+fr.inconsistentDates+'</div><div class="sub">Schema datePublished vs meta/byline date mismatch. Inconsistent dates confuse freshness signals and can trigger wrong QDF treatment</div></div>';
     }
     h+='</div></div>';
@@ -747,7 +741,6 @@ function renderSignals(){
     const sf=s.seoFunnelStats;
     h+='<div class="signal-section" style="border-left:3px solid var(--yellow)"><h3>Visibility Funnel (SuperRoot / SERP)</h3>';
     h+='<div class="source">End-to-end pipeline: Trawler crawls, Alexandria indexes, Ascorer scores T*, Mustang retrieves candidates, SuperRoot assembles the SERP. Each stage filters pages. This funnel shows how many of your pages survive each gate. GSC/GA4 integration adds Visible (impressions) and Active (clicks) stages.</div>';
-    h+='<div class="cite">Rankpedia: doj:superroot, doj:mustang, doj:ascorer</div>';
     h+='<div class="signal-grid">';
     h+='<div class="signal-metric sig-funnel"><div class="label">Crawled</div><div class="val">'+comma(sf.crawled)+'</div><div class="sub">Total URLs successfully fetched by the crawler</div></div>';
     h+='<div class="signal-metric sig-funnel"><div class="label">Indexable</div><div class="val">'+comma(sf.indexable)+'</div><div class="sub">'+pct(sf.indexable,sf.crawled)+' pass rate. Pages eligible for Alexandria\'s index (200, no noindex, self-canonical)</div>'+bar(sf.indexable,sf.crawled,'var(--green)')+'</div>';

@@ -694,7 +694,7 @@ func buildAIVisibilityStats(pages []*types.PageData) *types.AIVisibilityStats {
 	}
 }
 
-// ── Rankpedia-informed stats builders ──
+// ── SEO signal stats builders ──
 
 func buildFreshnessStats(pages []*types.PageData) *types.FreshnessStats {
 	fs := &types.FreshnessStats{

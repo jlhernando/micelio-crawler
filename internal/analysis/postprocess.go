@@ -226,7 +226,7 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 	// Graph algorithms use graph.URLs and graph.StatusCodes instead of pages.
 	// Keep Title/MetaDescription/WordCount for embeddings (runs after LI).
 	// Keep Depth/ResponseTimeMs/Indexability/Headings/Canonical/Readability/SitemapData
-	// and Rankpedia signal fields for LightenPages (HTML report).
+	// and SEO signal fields for LightenPages (HTML report).
 	// This reduces per-page from ~20KB to ~500 bytes, saving ~6.5GB for 353K pages.
 	for i, p := range pages {
 		pages[i] = &types.PageData{

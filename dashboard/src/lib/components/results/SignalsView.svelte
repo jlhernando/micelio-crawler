@@ -26,7 +26,7 @@
   <!-- 1. Crawl & Index -->
   <div class="rounded-md border border-border bg-surface-2 p-5">
     <h3 class="text-sm font-semibold text-accent mb-1">Crawl & Index (Trawler / Alexandria)</h3>
-    <p class="text-[10px] text-fg-2 mb-4">Google's Trawler crawls and Alexandria indexes pages. Only indexed pages can rank. Crawl budget wasted on non-indexable URLs reduces the rate at which Googlebot discovers and refreshes your content. <span class="text-fg-2/60">Rankpedia: doj:trawler, doj:caffeine-indexing</span></p>
+    <p class="text-[10px] text-fg-2 mb-4">Google's Trawler crawls and Alexandria indexes pages. Only indexed pages can rank. Crawl budget wasted on non-indexable URLs reduces the rate at which Googlebot discovers and refreshes your content.</p>
     <div class="grid gap-3 grid-cols-2 md:grid-cols-4">
       {#if idx}
         <div class="rounded bg-surface-3 p-3">
@@ -52,7 +52,7 @@
         <div class="rounded bg-surface-3 p-3">
           <div class="text-[10px] text-fg-2 uppercase tracking-wide">NavBoost at Risk</div>
           <div class="text-xl font-bold {(redirects.navBoostAtRisk ?? 0) > 0 ? 'text-warning' : 'text-success'} mt-1">{(redirects.navBoostAtRisk ?? 0).toLocaleString()}</div>
-          <div class="text-[10px] text-fg-2">Pages behind 302/307 redirects. NavBoost click signals accumulate on the redirect URL instead of the destination, diluting ranking power. <span class="text-fg-2/60">Rankpedia: doj:navboost</span></div>
+          <div class="text-[10px] text-fg-2">Pages behind 302/307 redirects. NavBoost click signals accumulate on the redirect URL instead of the destination, diluting ranking power.</div>
         </div>
       {/if}
     </div>
@@ -62,7 +62,7 @@
   {#if topo}
     <div class="rounded-md border border-border bg-surface-2 p-5">
       <h3 class="text-sm font-semibold text-accent mb-1">Relevance (T* Topicality)</h3>
-      <p class="text-[10px] text-fg-2 mb-4">T* is Google's query-dependent topicality score combining three sub-signals: Anchors (A) what the web says about you, Body (B) what your page says about itself, and Clicks (C) what users say about you. Our proxy measures the B component (on-page alignment). Confirmed by Pandu Nayak (sworn testimony). <span class="text-fg-2/60">Rankpedia: doj:t-star, doj:abc-body, leak:Ascorer</span></p>
+      <p class="text-[10px] text-fg-2 mb-4">T* is Google's query-dependent topicality score combining three sub-signals: Anchors (A) what the web says about you, Body (B) what your page says about itself, and Clicks (C) what users say about you. Our proxy measures the B component (on-page alignment). Confirmed by Pandu Nayak (sworn testimony).</p>
       <div class="grid gap-3 grid-cols-2 md:grid-cols-4">
         <div class="rounded bg-surface-3 p-3">
           <div class="text-[10px] text-fg-2 uppercase tracking-wide">Title-Body Overlap</div>
@@ -101,7 +101,7 @@
   {#if read || rich || eeat}
     <div class="rounded-md border border-border bg-surface-2 p-5">
       <h3 class="text-sm font-semibold text-accent mb-1">Quality (Q* Score)</h3>
-      <p class="text-[10px] text-fg-2 mb-4">Q* is Google's site-wide, query-independent quality score on a 0-1 scale. Pages below 0.4 are ineligible for featured snippets and rich results. Hand-crafted (not ML), operates at subdomain level, tied to E-E-A-T. Confirmed by Pandu Nayak. Candour Agency independently verified the 0.4 threshold across 800K domains. <span class="text-fg-2/60">Rankpedia: doj:q-star, leak:contentEffort, patent:US8682892</span></p>
+      <p class="text-[10px] text-fg-2 mb-4">Q* is Google's site-wide, query-independent quality score on a 0-1 scale. Pages below 0.4 are ineligible for featured snippets and rich results. Hand-crafted (not ML), operates at subdomain level, tied to E-E-A-T. Confirmed by Pandu Nayak. Candour Agency independently verified the 0.4 threshold across 800K domains.</p>
       <div class="grid gap-3 grid-cols-2 md:grid-cols-4">
         {#if read}
           <div class="rounded bg-surface-3 p-3">
@@ -129,7 +129,7 @@
           <div class="rounded bg-surface-3 p-3">
             <div class="text-[10px] text-fg-2 uppercase tracking-wide">Content Richness</div>
             <div class="text-xl font-bold mt-1">{fmt(rich.avgRichnessScore)}</div>
-            <div class="text-[10px] text-fg-2">Proxy for contentEffort (leaked LLM signal). Measures structural diversity: headings, lists, tables, images, code blocks. <span class="text-fg-2/60">Rankpedia: leak:contentEffort</span></div>
+            <div class="text-[10px] text-fg-2">Proxy for contentEffort (leaked LLM signal). Measures structural diversity: headings, lists, tables, images, code blocks.</div>
             <div class="mt-2 h-1.5 rounded bg-surface-1 overflow-hidden">
               <div class="h-full rounded bg-success" style="width: {rich.avgRichnessScore * 100}%"></div>
             </div>
@@ -144,7 +144,7 @@
           <div class="rounded bg-surface-3 p-3">
             <div class="text-[10px] text-fg-2 uppercase tracking-wide">Author Coverage</div>
             <div class="text-xl font-bold mt-1">{fmt(eeat.authorCoverage, 0)}%</div>
-            <div class="text-[10px] text-fg-2">{eeat.pagesWithAuthor.toLocaleString()} pages with author markup. Google's authorshipMarkup patent (US9697259) uses structured author data for expertise signals. <span class="text-fg-2/60">Rankpedia: patent:US9697259</span></div>
+            <div class="text-[10px] text-fg-2">{eeat.pagesWithAuthor.toLocaleString()} pages with author markup. Google's authorshipMarkup patent (US9697259) uses structured author data for expertise signals.</div>
             <div class="mt-2 h-1.5 rounded bg-surface-1 overflow-hidden">
               <div class="h-full rounded bg-accent" style="width: {eeat.authorCoverage}%"></div>
             </div>
@@ -163,7 +163,7 @@
   {#if li || anchor}
     <div class="rounded-md border border-border bg-surface-2 p-5">
       <h3 class="text-sm font-semibold text-accent mb-1">Authority (NSR / PageRank<sub class="text-[9px]">NS</sub>)</h3>
-      <p class="text-[10px] text-fg-2 mb-4">NSR (Normalized Site Rank) is a 46-signal composite measuring site-wide authority. PageRank<sub>NS</sub> (Nearest Seed) computes link authority based on proximity to trusted seed pages, confirmed still active in the leaked API. Internal link structure directly controls how authority flows across your site. <span class="text-fg-2/60">Rankpedia: leak:pagerank-ns, leak:site-pr, doj:nsr, patent:US9165040</span></p>
+      <p class="text-[10px] text-fg-2 mb-4">NSR (Normalized Site Rank) is a 46-signal composite measuring site-wide authority. PageRank<sub>NS</sub> (Nearest Seed) computes link authority based on proximity to trusted seed pages, confirmed still active in the leaked API. Internal link structure directly controls how authority flows across your site.</p>
       <div class="grid gap-3 grid-cols-2 md:grid-cols-4">
         {#if li}
           <div class="rounded bg-surface-3 p-3">
@@ -186,7 +186,7 @@
           <div class="rounded bg-surface-3 p-3">
             <div class="text-[10px] text-fg-2 uppercase tracking-wide">Anchor Diversity</div>
             <div class="text-xl font-bold mt-1">{fmt(anchor.avgInboundDiversity)}</div>
-            <div class="text-[10px] text-fg-2">Anchor text variation in inbound links. Low diversity (same text everywhere) triggers anchorMismatch spam signals. Natural profiles mix brand, keyword, and generic anchors. <span class="text-fg-2/60">Rankpedia: patent:US7533092, doj:BayesSpam</span></div>
+            <div class="text-[10px] text-fg-2">Anchor text variation in inbound links. Low diversity (same text everywhere) triggers anchorMismatch spam signals. Natural profiles mix brand, keyword, and generic anchors.</div>
             <div class="mt-2 h-1.5 rounded bg-surface-1 overflow-hidden">
               <div class="h-full rounded bg-success" style="width: {anchor.avgInboundDiversity * 100}%"></div>
             </div>
@@ -200,7 +200,7 @@
   {#if passage || ai || fresh}
     <div class="rounded-md border border-border bg-surface-2 p-5">
       <h3 class="text-sm font-semibold text-accent mb-1">Engagement Readiness (P* / NavBoost Proxy)</h3>
-      <p class="text-[10px] text-fg-2 mb-4">P* is Google's dynamic engagement metric combining NavBoost click data with anchor signals. NavBoost is "just a big table" of 13 months of click statistics (not ML), achieving 91% accuracy. It tracks goodClicks, badClicks, and lastLongestClicks, segmented by location and device. This section measures how well your content is structured to earn those positive signals. <span class="text-fg-2/60">Rankpedia: doj:p-star, doj:navboost, doj:good-clicks, doj:last-longest-clicks, patent:US20160078102</span></p>
+      <p class="text-[10px] text-fg-2 mb-4">P* is Google's dynamic engagement metric combining NavBoost click data with anchor signals. NavBoost is "just a big table" of 13 months of click statistics (not ML), achieving 91% accuracy. It tracks goodClicks, badClicks, and lastLongestClicks, segmented by location and device. This section measures how well your content is structured to earn those positive signals.</p>
       <div class="grid gap-3 grid-cols-2 md:grid-cols-4">
         {#if passage}
           <div class="rounded bg-surface-3 p-3">
@@ -226,7 +226,7 @@
           <div class="rounded bg-surface-3 p-3">
             <div class="text-[10px] text-fg-2 uppercase tracking-wide">AI Readiness</div>
             <div class="text-xl font-bold mt-1">{fmt(ai.avgAiReadinessScore)}</div>
-            <div class="text-[10px] text-fg-2">AI Overview citation readiness (0-1). Measures concise definitions, structured answers, and schema markup that FastSearch/SnippetBrain can extract. <span class="text-fg-2/60">Rankpedia: doj:fastsearch, doj:snippetbrain</span></div>
+            <div class="text-[10px] text-fg-2">AI Overview citation readiness (0-1). Measures concise definitions, structured answers, and schema markup that FastSearch/SnippetBrain can extract.</div>
             <div class="mt-2 h-1.5 rounded bg-surface-1 overflow-hidden">
               <div class="h-full rounded bg-accent" style="width: {ai.avgAiReadinessScore * 100}%"></div>
             </div>
@@ -241,7 +241,7 @@
           <div class="rounded bg-surface-3 p-3">
             <div class="text-[10px] text-fg-2 uppercase tracking-wide">Dated Content</div>
             <div class="text-xl font-bold mt-1">{pct(fresh.pagesWithDate, fresh.pagesWithDate + fresh.pagesWithoutDate)}</div>
-            <div class="text-[10px] text-fg-2">{fresh.pagesWithDate.toLocaleString()} pages with date signals (byline, schema, meta). Google uses semanticDateInfo and bylineDate for freshness scoring. <span class="text-fg-2/60">Rankpedia: patent:US8924379, patent:US8583617</span></div>
+            <div class="text-[10px] text-fg-2">{fresh.pagesWithDate.toLocaleString()} pages with date signals (byline, schema, meta). Google uses semanticDateInfo and bylineDate for freshness scoring.</div>
           </div>
           <div class="rounded bg-surface-3 p-3">
             <div class="text-[10px] text-fg-2 uppercase tracking-wide">Inconsistent Dates</div>
@@ -257,7 +257,7 @@
   {#if funnel}
     <div class="rounded-md border border-border bg-surface-2 p-5">
       <h3 class="text-sm font-semibold text-accent mb-1">Visibility Funnel (SuperRoot / SERP)</h3>
-      <p class="text-[10px] text-fg-2 mb-4">End-to-end pipeline: Trawler crawls, Alexandria indexes, Ascorer scores T*, Mustang retrieves candidates, SuperRoot assembles the SERP. Each stage filters pages. This funnel shows how many of your pages survive each gate. GSC/GA4 integration adds Visible (impressions) and Active (clicks) stages. <span class="text-fg-2/60">Rankpedia: doj:superroot, doj:mustang, doj:ascorer</span></p>
+      <p class="text-[10px] text-fg-2 mb-4">End-to-end pipeline: Trawler crawls, Alexandria indexes, Ascorer scores T*, Mustang retrieves candidates, SuperRoot assembles the SERP. Each stage filters pages. This funnel shows how many of your pages survive each gate. GSC/GA4 integration adds Visible (impressions) and Active (clicks) stages.</p>
       <div class="grid gap-3 grid-cols-2 md:grid-cols-4">
         <div class="rounded bg-surface-3 p-3">
           <div class="text-[10px] text-fg-2 uppercase tracking-wide">Crawled</div>

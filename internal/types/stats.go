@@ -644,7 +644,7 @@ type PlausibleTopEntry struct {
 	BounceRate float64 `json:"bounceRate"`
 }
 
-// --- Rankpedia-informed aggregate stats ---
+// --- SEO signal aggregate stats ---
 
 // FreshnessStats holds aggregate content freshness metrics.
 type FreshnessStats struct {

@@ -68,12 +68,14 @@ micelio ui --port 3100
 
 The Svelte 5 dashboard is embedded in the Go binary via `go:embed`. No separate server needed.
 
-<p align="center">
-  <img src="docs/screenshot-dashboard.png" alt="Dashboard setup" width="720"><br>
-  <img src="docs/screenshot-issues.png" alt="Issues overview" width="720"><br>
-  <img src="docs/screenshot-site-graph.png" alt="Site link graph" width="720"><br>
-  <img src="docs/screenshot-table.png" alt="Pages table" width="720">
-</p>
+| | |
+|---|---|
+| <img src="docs/screenshot-dashboard.png" alt="New crawl setup with presets"><br>**New crawl**: presets, scope, and 10+ config sections | <img src="docs/screenshot-monitor.png" alt="Live crawl monitor"><br>**Monitor**: live status codes, response times, and recent pages |
+| <img src="docs/screenshot-overview.png" alt="Site overview with crawl coverage"><br>**Site overview**: headline metrics and crawl coverage | <img src="docs/screenshot-issues.png" alt="SEO issues grouped by severity"><br>**Issues**: critical, warning, and info checks with page counts |
+| <img src="docs/screenshot-site-graph.png" alt="Link Explorer graph"><br>**Link Explorer**: drill-down link graph with Depth, Authority, Hub, and PageRank modes | <img src="docs/screenshot-treemap.png" alt="Site treemap"><br>**Treemap**: directories sized by page count |
+| <img src="docs/screenshot-table.png" alt="All pages table"><br>**All Pages**: filterable table with status, timing, weight, and titles | |
+
+For a walkthrough of every screen, see the [User Guide](docs/USER-GUIDE.md). Every CLI flag is listed in the [CLI Reference](docs/CLI-REFERENCE.md).
 
 ### Dashboard Pages
 
@@ -81,7 +83,7 @@ The Svelte 5 dashboard is embedded in the Go binary via `go:embed`. No separate 
 |------|-------------|
 | **New Crawl** | Configure and start crawls with 5 presets and 10+ config sections. User-agent dropdown with Chrome DevTools-inspired presets (Desktop, Mobile, Bots). Recent sites quick-start. |
 | **Monitor** | Real-time progress via WebSocket — status codes, response times, error log, pause/resume/cancel, stop & analyze, per-pattern excluded URL counters |
-| **Results** | 7 tabs: Issues, Performance, Content, Links, Signals, AI Visibility, All Pages. Link Explorer (progressive drill-down graph) + Full Graph (WebGL), directory tree, anchor cloud. Template-based filtering with filtered stats and CSV export. |
+| **Results** | Overview with crawl coverage (exclusion reasons with example URLs) and priority issues, plus tabs for Issues, Performance, Content, Links, Signals, AI Visibility, All Pages. Link Explorer (progressive drill-down graph) + Full Graph (WebGL), directory tree, anchor cloud. Template-based filtering with filtered stats and CSV export. |
 | **History** | Crawl history with side-by-side diff comparison, active crawls sidebar, status filters |
 | **Diff** | Side-by-side comparison with visibility, segments, lifecycle tracking, topic evolution, and cannibalization detection |
 | **Logs** | Server log analysis — parallel multi-file processing with per-file aggregation, 6 formats (Apache, Nginx, CloudFront, Cloudflare, ALB/ELB, W3C/IIS), zero-alloc bot detection (100+ signatures), crawl budget/waste analysis, AI bot trends, heatmaps, log-to-crawl merge with 7-segment classification, per-phase timing |

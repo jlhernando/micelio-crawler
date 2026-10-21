@@ -116,7 +116,7 @@ export const api = {
     request<{ stats: Record<string, unknown>; pageCount: number; analysisPending?: boolean; pagesReady?: boolean; loadingProgress?: number }>('GET', `/api/crawl/${id}/stats`),
 
   getFilteredStats: (id: string, template: string) =>
-    request<{ stats: Record<string, unknown>; pageCount: number }>('GET', `/api/crawl/${id}/stats/filtered?template=${encodeURIComponent(template)}`),
+    request<{ stats: Record<string, unknown>; pageCount: number; scopedKeys?: string[]; template?: string }>('GET', `/api/crawl/${id}/stats/filtered?template=${encodeURIComponent(template)}`),
 
   getLoadingProgress: (id: string) =>
     request<{ pagesReady: boolean; loadingProgress: number; pageCount: number }>('GET', `/api/crawl/${id}/loading-progress`),

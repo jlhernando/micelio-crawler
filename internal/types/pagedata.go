@@ -98,6 +98,7 @@ type PageData struct {
 	ResponseTimeMs     int64                   `json:"responseTimeMs"`
 	InternalLinkCount  int                     `json:"internalLinkCount,omitempty"`
 	ExternalLinkCount  int                     `json:"externalLinkCount,omitempty"`
+	NofollowIntLinks   int                     `json:"nofollowInternalLinks,omitempty"` // distinct internal hrefs with rel=nofollow (set at extraction)
 	Depth              int                     `json:"depth"`
 	TextToCodeRatio    float64                 `json:"textToCodeRatio,omitempty"`
 	CanonicalCount     int                     `json:"canonicalCount,omitempty"`

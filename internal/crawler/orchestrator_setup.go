@@ -55,6 +55,9 @@ type crawlSession struct {
 	// N-grams
 	ngramAnalyzer *analysis.NgramAnalyzer
 
+	// Anchor stats collected per page before Anchors are dropped
+	anchorAgg *analysis.AnchorAggregator
+
 	// DNS cache
 	dnsCache *dnsCache
 
@@ -130,6 +133,7 @@ func newCrawlSession(ctx context.Context, config types.CrawlConfig, onProgress O
 	s.setupBrowser()
 	s.setupIntegrationClients()
 	s.setupNgrams()
+	s.anchorAgg = analysis.NewAnchorAggregator()
 	s.setupRobotsAndDelay(ctx)
 	s.setupSitemapDiscovery(ctx)
 	if err := s.seedSitemapMode(ctx); err != nil {

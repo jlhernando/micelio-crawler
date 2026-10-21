@@ -234,15 +234,17 @@ func AssignAuthoritySegments(pages []*types.PageData, scores map[string]float64)
 			continue
 		}
 		v := value(p)
+		// Strict ">" for high keeps a large block of tied pages (common on
+		// templated sites) in "medium" instead of inflating "high".
 		switch {
 		case v <= 0:
 			p.AutoSegments.Authority = "none"
-		case v < lowCut:
-			p.AutoSegments.Authority = "low"
-		case v < highCut:
+		case v > highCut:
+			p.AutoSegments.Authority = "high"
+		case v >= lowCut:
 			p.AutoSegments.Authority = "medium"
 		default:
-			p.AutoSegments.Authority = "high"
+			p.AutoSegments.Authority = "low"
 		}
 	}
 }

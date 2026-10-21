@@ -14,12 +14,16 @@ import (
 
 // PostProcessConfig holds options for post-crawl analysis.
 type PostProcessConfig struct {
-	NgramAnalyzer       *NgramAnalyzer
-	OnLIPhase           func(phase string) // Called before each LI phase (e.g. "click_depth", "hits", "centrality", "suggestions")
-	OnPersist           func()             // Called after each LI phase to persist intermediate results to DB
+	NgramAnalyzer *NgramAnalyzer
+	OnLIPhase     func(phase string) // Called before each LI phase (e.g. "click_depth", "hits", "centrality", "suggestions")
+	OnPersist     func()             // Called after each LI phase to persist intermediate results to DB
 	// InternalLinksIter, if non-nil, provides internal link edges from disk.
 	// Used by BuildAdjacencyList to avoid loading InternalLinks from pages (saves ~5GB at 1M pages).
 	InternalLinksIter func(fn func(source string, targets []string)) error
+	// Graph, if non-nil, is the link graph already built by RunCoreAnalysis.
+	// Link intelligence reuses it instead of reading every edge again.
+	Graph               *AdjacencyGraph
+	AnchorAggregator    *AnchorAggregator // anchor stats collected during the crawl (Anchors are dropped before storage)
 	SeedURL             string
 	Language            string
 	EmbeddingModel      string
@@ -30,6 +34,9 @@ type PostProcessConfig struct {
 	LIMaxPages          int // Skip heavy LI phases if page count exceeds this (0 = no limit)
 	SimilarityThreshold float64
 	SitemapEntries      []string
+	// ExternalLinkResults are post-crawl external link check results; broken
+	// ones surface as CrawlStats.BrokenExternalLinks.
+	ExternalLinkResults []types.ExternalLinkResult
 	CrawlDurationMs     int64
 	LinkIntelligence    bool
 	LINoCentrality      bool
@@ -40,6 +47,14 @@ type PostProcessConfig struct {
 // RunCoreAnalysis runs the fast synchronous analysis (reporter + n-grams + field stripping).
 // Returns CrawlStats without link intelligence or embeddings.
 func RunCoreAnalysis(ctx context.Context, pages []*types.PageData, cfg PostProcessConfig) types.CrawlStats {
+	stats, _ := RunCoreAnalysisWithGraph(ctx, pages, cfg)
+	return stats
+}
+
+// RunCoreAnalysisWithGraph is RunCoreAnalysis that also returns the link graph
+// built by the reporter. Pass it as PostProcessConfig.Graph to
+// RunDeferredAnalysis to avoid rebuilding it.
+func RunCoreAnalysisWithGraph(ctx context.Context, pages []*types.PageData, cfg PostProcessConfig) (types.CrawlStats, *AdjacencyGraph) {
 	// Parse segment rules
 	var segments []Segment
 	for _, rule := range cfg.SegmentRules {
@@ -53,12 +68,15 @@ func RunCoreAnalysis(ctx context.Context, pages []*types.PageData, cfg PostProce
 
 	// Run core reporter (always)
 	reportCfg := ReportConfig{
-		SeedURL:          cfg.SeedURL,
-		SegmentRules:     segments,
-		SitemapEntries:   cfg.SitemapEntries,
-		TotalSitemapURLs: len(cfg.SitemapEntries),
+		SeedURL:           cfg.SeedURL,
+		SegmentRules:      segments,
+		InternalLinksIter: cfg.InternalLinksIter,
+		SitemapEntries:    cfg.SitemapEntries,
+		TotalSitemapURLs:  len(cfg.SitemapEntries),
+		AnchorAggregator:  cfg.AnchorAggregator,
 	}
-	stats := GenerateReport(pages, cfg.CrawlDurationMs, reportCfg)
+	reportCfg.ExternalLinkResults = cfg.ExternalLinkResults
+	stats, graph := GenerateReportWithGraph(pages, cfg.CrawlDurationMs, reportCfg)
 
 	// N-grams (optional)
 	if cfg.Ngrams {
@@ -104,7 +122,10 @@ func RunCoreAnalysis(ctx context.Context, pages []*types.PageData, cfg PostProce
 		// Strip InternalLinks early if disk iterator is available for BuildAdjacencyList.
 		// This saves ~3-10 GB for large crawls. ExternalLinks already stripped at load.
 		if cfg.InternalLinksIter != nil {
-			p.InternalLinkCount = len(p.InternalLinks)
+			// Keep the stored count when the slice was already released.
+			if len(p.InternalLinks) > 0 {
+				p.InternalLinkCount = len(p.InternalLinks)
+			}
 			p.InternalLinks = nil
 		}
 		if p.ExternalLinkCount == 0 && len(p.ExternalLinks) > 0 {
@@ -116,7 +137,7 @@ func RunCoreAnalysis(ctx context.Context, pages []*types.PageData, cfg PostProce
 	// GC checkpoint: release report temporaries + stripped fields before next phase
 	debug.FreeOSMemory()
 
-	return stats
+	return stats, graph
 }
 
 // RunDeferredAnalysis runs link intelligence and embeddings on already-analyzed pages.
@@ -132,7 +153,7 @@ func RunDeferredAnalysis(ctx context.Context, pages []*types.PageData, cfg PostP
 		// T*-Anchors enrichment: compute anchor-title relevance now that graph is available.
 		// This adds the "A" (Anchors) sub-signal to the T* topicality score computed at extraction.
 		// Source: DOJ ABC framework (Nayak PXR0357), Patent US7260573.
-		EnrichTopicalityAnchors(pages, graph)
+		EnrichTopicalityAnchors(pages, graph, cfg.AnchorAggregator)
 
 		// GC checkpoint: release link intel temporaries
 		debug.FreeOSMemory()
@@ -170,8 +191,11 @@ func RunDeferredAnalysis(ctx context.Context, pages []*types.PageData, cfg PostP
 // RunPostCrawlAnalysis runs all analysis modules on crawled pages (synchronous).
 // Used by CLI commands that need everything computed before returning.
 func RunPostCrawlAnalysis(ctx context.Context, pages []*types.PageData, cfg PostProcessConfig) (types.CrawlStats, *AdjacencyGraph) {
-	stats := RunCoreAnalysis(ctx, pages, cfg)
-	graph := RunDeferredAnalysis(ctx, pages, cfg, &stats)
+	stats, graph := RunCoreAnalysisWithGraph(ctx, pages, cfg)
+	if cfg.Graph == nil {
+		cfg.Graph = graph
+	}
+	graph = RunDeferredAnalysis(ctx, pages, cfg, &stats)
 	return stats, graph
 }
 
@@ -194,20 +218,24 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 
 	// --- Phase: building_graph ---
 	emitPhase("building_graph")
-	var graph *AdjacencyGraph
-	if cfg.InternalLinksIter != nil {
-		graph = BuildAdjacencyListFromDisk(pages, cfg.InternalLinksIter)
-	} else {
-		graph = BuildAdjacencyList(pages)
+	graph := cfg.Graph
+	if graph == nil || graph.N != len(pages) {
+		graph = buildReportGraph(pages, cfg.InternalLinksIter)
 	}
 
 	// Capture link counts before releasing slices -- downstream consumers
 	// (CSV writer, HTML report, server API) need counts after slices are freed.
 	// Release InternalLinks/ExternalLinks now that the CSR graph has captured all edges.
 	// This frees ~3-4 GB for large crawls (37.7M URL strings for 93K pages).
+	// Only overwrite a count when its slice is present: slices are often
+	// already released (disk link store, DB reload) and len(nil) would zero it.
 	for _, p := range pages {
-		p.InternalLinkCount = len(p.InternalLinks)
-		p.ExternalLinkCount = len(p.ExternalLinks)
+		if len(p.InternalLinks) > 0 {
+			p.InternalLinkCount = len(p.InternalLinks)
+		}
+		if len(p.ExternalLinks) > 0 {
+			p.ExternalLinkCount = len(p.ExternalLinks)
+		}
 		p.InternalLinks = nil
 		p.ExternalLinks = nil
 	}
@@ -399,6 +427,10 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 			liStats.Non2xxWithInlinks++
 		}
 	}
+
+	// Link positions (from per-page LinkZones), pages without content-area
+	// inlinks, and most connected / isolated pages by graph degree.
+	fillLinkStructureStats(liStats, pages, graph, inDegree)
 
 	persist()
 

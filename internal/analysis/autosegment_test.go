@@ -329,3 +329,19 @@ func BenchmarkAutoSegments100K(b *testing.B) {
 		_ = BuildAutoSegmentStats(pages)
 	}
 }
+
+func TestAuthorityTiesStayMedium(t *testing.T) {
+	values := []int{1, 5, 5, 5, 5, 5, 5, 9, 9}
+	var pages []*types.PageData
+	for i, v := range values {
+		pages = append(pages, &types.PageData{URL: fmt.Sprintf("https://ex.com/%d", i), StatusCode: 200, Inlinks: v, AutoSegments: &types.PageSegments{}})
+	}
+	AssignAuthoritySegments(pages, nil)
+	got := map[string]int{}
+	for _, p := range pages {
+		got[p.AutoSegments.Authority]++
+	}
+	if got["medium"] != 6 || got["high"] != 2 || got["low"] != 1 {
+		t.Errorf("buckets = %v, want 6 medium, 2 high, 1 low", got)
+	}
+}

@@ -366,7 +366,8 @@ func buildRenderCompareStats(pages []*types.PageData) *types.RenderCompareStats 
 		rc.PagesWithDiffs++
 		for _, diff := range p.RenderDiffs {
 			rc.FieldDiffCounts[diff.Field]++
-			if diff.Field == "title" || diff.Field == "canonical" || diff.Field == "metaRobots" {
+			// browser.CompareRender emits "meta_robots"; keep "metaRobots" for older data.
+			if diff.Field == "title" || diff.Field == "canonical" || diff.Field == "meta_robots" || diff.Field == "metaRobots" {
 				rc.CriticalDiffs = append(rc.CriticalDiffs, types.CriticalDiff{
 					URL:      p.URL,
 					Field:    diff.Field,

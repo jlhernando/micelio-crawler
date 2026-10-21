@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/micelio/micelio/internal/analysis"
 	"github.com/micelio/micelio/internal/crawler"
@@ -331,10 +330,10 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		}
 		var sources []string
 		if results.InlinkIndex != nil {
-			// O(1) lookup from pre-computed inverted index
+			// Lookup from the inlink index (link graph or legacy map)
 			seen := make(map[string]bool)
 			for _, variant := range inlinkVariants(targetURL) {
-				for _, src := range results.InlinkIndex[variant] {
+				for _, src := range results.InlinkIndex.Sources(variant) {
 					if !seen[src] {
 						seen[src] = true
 						sources = append(sources, src)
@@ -371,7 +370,10 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		if results.AnchorStats != nil {
 			jsonOK(w, results.AnchorStats)
 		} else {
-			jsonOK(w, buildAnchorStats(results.Pages))
+			results.mu.RLock()
+			stats := anchorStatsFor(results.Stats, results.Pages)
+			results.mu.RUnlock()
+			jsonOK(w, stats)
 		}
 	})
 
@@ -452,26 +454,16 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			})
 			return
 		}
-		var filtered []*types.PageData
-		for _, p := range results.Pages {
-			if p.TemplateType == template {
-				filtered = append(filtered, p)
-			}
-		}
-		stats := analysis.GenerateReport(filtered, 0, analysis.ReportConfig{})
-		data, err := json.Marshal(stats)
-		if err != nil {
-			jsonError(w, "failed to compute filtered stats", http.StatusInternalServerError)
-			return
-		}
-		var statsMap map[string]interface{}
-		if err := json.Unmarshal(data, &statsMap); err != nil {
-			jsonError(w, "failed to serialize filtered stats", http.StatusInternalServerError)
-			return
-		}
+		// Never re-run the full reporter here: cached pages are stripped
+		// (and stubbed after link intelligence), and the reporter mutates
+		// pages. computeTemplateFilteredStats is read-only and returns only
+		// the keys that are correct for the subset.
+		res := computeTemplateFilteredStats(results.Stats, results.Pages, template)
 		jsonOK(w, map[string]interface{}{
-			"stats":     statsMap,
-			"pageCount": len(filtered),
+			"stats":      capStatsForAPI(res.Stats),
+			"pageCount":  res.PageCount,
+			"scopedKeys": res.ScopedKeys,
+			"template":   template,
 		})
 	})
 
@@ -1563,6 +1555,9 @@ func capStatsForAPI(stats map[string]interface{}) map[string]interface{} {
 		out[key] = arr[:maxItems]
 	}
 
+	// Served separately by /anchor-stats; keep the stats payload small.
+	delete(out, "anchorCloud")
+
 	capArray("redirectChains", "totalRedirectChains")
 	capArray("longRedirectChains", "totalLongRedirectChains")
 	capArray("orphanPages", "totalOrphanPages")
@@ -2616,68 +2611,31 @@ func buildDirectoryTreeFromDB(dbPath string) map[string]interface{} {
 // ── Anchor Stats ──
 
 func buildAnchorStats(pages []*types.PageData) map[string]interface{} {
-	type anchorKey struct {
-		text string
-	}
-	type anchorAgg struct {
-		Count            int  `json:"count"`
-		IsInternal       bool `json:"isInternal"`
-		IsNonDescriptive bool `json:"isNonDescriptive"`
-	}
-	agg := make(map[string]*anchorAgg, 4096)
+	return anchorCloudToMap(analysis.BuildAnchorCloud(pages))
+}
 
-	for _, p := range pages {
-		for _, a := range p.Anchors {
-			text := strings.TrimSpace(strings.ToLower(a.Text))
-			runeLen := utf8.RuneCountInString(text)
-			if runeLen < 2 || runeLen > 80 {
-				continue
-			}
-			if existing, ok := agg[text]; ok {
-				existing.Count++
-				if a.IsInternal {
-					existing.IsInternal = true
-				}
-				if a.IsNonDescriptive {
-					existing.IsNonDescriptive = true
-				}
-			} else {
-				agg[text] = &anchorAgg{
-					Count:            1,
-					IsInternal:       a.IsInternal,
-					IsNonDescriptive: a.IsNonDescriptive,
-				}
-			}
-		}
+// anchorCloudToMap converts AnchorCloudStats to the /anchor-stats response shape.
+func anchorCloudToMap(c *types.AnchorCloudStats) map[string]interface{} {
+	if c == nil {
+		return nil
 	}
-
-	type anchorEntry struct {
-		Text             string `json:"text"`
-		Count            int    `json:"count"`
-		IsInternal       bool   `json:"isInternal"`
-		IsNonDescriptive bool   `json:"isNonDescriptive"`
+	anchors := c.Anchors
+	if anchors == nil {
+		anchors = []types.AnchorCloudEntry{}
 	}
-	entries := make([]anchorEntry, 0, len(agg))
-	for text, a := range agg {
-		entries = append(entries, anchorEntry{
-			Text:             text,
-			Count:            a.Count,
-			IsInternal:       a.IsInternal,
-			IsNonDescriptive: a.IsNonDescriptive,
-		})
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Count > entries[j].Count })
-
-	// Cap at 300 to keep response small
-	if len(entries) > 300 {
-		entries = entries[:300]
-	}
-
-	totalUnique := len(agg)
 	return map[string]interface{}{
-		"anchors":     entries,
-		"totalUnique": totalUnique,
+		"anchors":     anchors,
+		"totalUnique": c.TotalUnique,
 	}
+}
+
+// anchorStatsFor returns persisted Anchor Cloud stats (collected during the
+// crawl, stored in the stats JSON) or rebuilds them from page Anchors.
+func anchorStatsFor(statsMap map[string]interface{}, pages []*types.PageData) map[string]interface{} {
+	if cloud, ok := statsMap["anchorCloud"].(map[string]interface{}); ok && cloud != nil {
+		return cloud
+	}
+	return buildAnchorStats(pages)
 }
 
 // ── Directory Tree ──
@@ -2879,23 +2837,6 @@ func finalizeDirNode(node *dirNode) {
 		})
 	}
 	node.childMap = nil // release for GC
-}
-
-// ── Inlink Index ──
-
-// buildInlinkIndex creates an inverted index: targetURL → []sourceURL for O(1) lookups.
-func buildInlinkIndex(pages []*types.PageData) map[string][]string {
-	idx := make(map[string][]string, len(pages))
-	for _, p := range pages {
-		seen := make(map[string]bool, len(p.InternalLinks))
-		for _, link := range p.InternalLinks {
-			if !seen[link] {
-				seen[link] = true
-				idx[link] = append(idx[link], p.URL)
-			}
-		}
-	}
-	return idx
 }
 
 // statsMapToCrawlStats converts a map[string]interface{} stats back to typed CrawlStats

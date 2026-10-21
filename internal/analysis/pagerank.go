@@ -65,7 +65,39 @@ func ComputePageRank(pages []*types.PageData, opts PageRankOptions) map[string]f
 		offsets[i+1] = int32(len(edges))
 	}
 
-	// Iterative PageRank
+	urls := make([]string, n)
+	for i, p := range pages {
+		urls[i] = p.URL
+	}
+	return normalizePageRank(urls, iteratePageRank(n, offsets, edges, opts))
+}
+
+// ComputePageRankGraph computes internal PageRank from a prebuilt adjacency
+// graph. Use it when pages no longer carry InternalLinks (reloaded from disk).
+// Node i of the graph is pages[i], so results are keyed by g.URLs.
+func ComputePageRankGraph(g *AdjacencyGraph, opts PageRankOptions) map[string]float64 {
+	if g == nil || g.N == 0 {
+		return make(map[string]float64)
+	}
+	if opts.Damping == 0 {
+		opts = DefaultPageRankOptions()
+	}
+	// Drop self-links so a page cannot boost itself.
+	offsets := make([]int32, g.N+1)
+	edges := make([]int32, 0, len(g.Edges))
+	for i := 0; i < g.N; i++ {
+		for _, j := range g.Neighbors(i) {
+			if int(j) != i {
+				edges = append(edges, j)
+			}
+		}
+		offsets[i+1] = int32(len(edges))
+	}
+	return normalizePageRank(g.URLs, iteratePageRank(g.N, offsets, edges, opts))
+}
+
+// iteratePageRank runs power iteration over a CSR graph.
+func iteratePageRank(n int, offsets, edges []int32, opts PageRankOptions) []float64 {
 	rank := make([]float64, n)
 	initial := 1.0 / float64(n)
 	for i := range rank {
@@ -114,22 +146,24 @@ func ComputePageRank(pages []*types.PageData, opts PageRankOptions) map[string]f
 			break
 		}
 	}
+	return rank
+}
 
-	// Normalize to 0–10 scale
+// normalizePageRank scales ranks to 0–10 (top page = 10), rounded to 2 decimals.
+func normalizePageRank(urls []string, rank []float64) map[string]float64 {
 	var maxRank float64
 	for _, r := range rank {
 		if r > maxRank {
 			maxRank = r
 		}
 	}
-
-	result := make(map[string]float64, n)
-	for i, p := range pages {
+	result := make(map[string]float64, len(urls))
+	for i, u := range urls {
 		score := 0.0
 		if maxRank > 0 {
 			score = (rank[i] / maxRank) * 10
 		}
-		result[p.URL] = math.Round(score*100) / 100
+		result[u] = math.Round(score*100) / 100
 	}
 	return result
 }

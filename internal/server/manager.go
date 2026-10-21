@@ -37,7 +37,7 @@ type CrawlResults struct {
 	AnchorStats     map[string]interface{}   `json:"-"`     // pre-computed anchor stats (survives stripPagesForCache)
 	DirTree         map[string]interface{}   `json:"-"`     // pre-computed directory tree (survives stripPagesForCache)
 	TemplateTypes   []string                 `json:"-"`     // cached distinct template types
-	InlinkIndex     map[string][]string      `json:"-"`     // targetURL → []sourceURL for O(1) inlink lookups
+	InlinkIndex     *inlinkIndex             `json:"-"`     // targetURL → source URLs, read from the link graph
 	DBPath          string                   `json:"-"`     // path to crawl DB for lazy loading
 	PageCount       int                      `json:"pageCount"`
 	AnalysisPending bool                     `json:"analysisPending"` // true while deferred analysis (link intel, embeddings) is running
@@ -606,6 +606,7 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		postCfg := analysis.PostProcessConfigFromCrawl(crawlConfig)
 		postCfg.CrawlDurationMs = elapsed
 		postCfg.NgramAnalyzer = result.NgramAnalyzer
+		postCfg.AnchorAggregator = result.AnchorAggregator
 		postCfg.InternalLinksIter = result.InternalLinksIter
 		if len(result.DiscoveredSitemapURLs) > 0 {
 			postCfg.SitemapEntries = result.DiscoveredSitemapURLs
@@ -618,6 +619,24 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 			// Even without full page weight mode, populate from available data
 			analysis.AssignPageWeightFromRefs(pages, result.ResourceRefs, result.TransferSizes)
 		}
+		// Check external links (dashboard "Check External") before releasing them.
+		var extSummary *crawler.ExternalCheckSummary
+		if crawlConfig.CheckExternal && len(result.ExternalLinks) > 0 {
+			extSummary = m.checkExternalLinks(ctx, crawlID, crawlConfig, result.ExternalLinks, stopping)
+			postCfg.ExternalLinkResults = extSummary.Broken
+			// Stop & Analyze may arrive during the check: re-read the flag so a
+			// graceful stop still runs analysis on the partial results.
+			m.mu.RLock()
+			stopping = stopping || (m.active != nil && m.active.Stopping)
+			m.mu.RUnlock()
+			if ctx.Err() == context.Canceled && !stopping {
+				log.Printf("crawl %s cancelled during external link check", crawlID)
+				if intLinksClose != nil {
+					intLinksClose()
+				}
+				return
+			}
+		}
 		// Release CrawlResult (external links, resource refs, transfer sizes)
 		// before post-crawl analysis to reduce peak RSS overlap.
 		result = nil
@@ -626,15 +645,20 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		if stopping {
 			analysisCtx = m.ctx
 		}
-		crawlStats := analysis.RunCoreAnalysis(analysisCtx, pages, postCfg)
+		crawlStats, coreGraph := analysis.RunCoreAnalysisWithGraph(analysisCtx, pages, postCfg)
+		applyExternalCheckSummary(&crawlStats, extSummary)
+		// Link intelligence reuses the reporter's graph instead of re-reading
+		// every edge from disk.
+		postCfg.Graph = coreGraph
 
 		// Assign PageRank scores to individual pages for the /pages API
 		assignPageRankScores(pages, crawlStats.PageRankScores)
 
 		// Inlink counts feed segment stats and the /pages API, so compute them
-		// before stats are serialized.
-		inlinkIdx := buildInlinkIndex(pages)
-		assignInlinksFromIndex(pages, inlinkIdx)
+		// before stats are serialized. Pages no longer carry InternalLinks, so
+		// read inlinks from the link graph.
+		inlinkIdx := newInlinkIndex(coreGraph, pages)
+		assignInlinks(pages, inlinkIdx)
 		refreshAutoSegmentStats(pages, &crawlStats)
 
 		// Evaluate alert rules against crawl stats
@@ -669,7 +693,10 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		needsDeferred := crawlConfig.LinkIntelligence || (crawlConfig.Embeddings && crawlConfig.EmbeddingKey != "")
 
 		// Pre-compute aggregations before stripping (Anchors, InternalLinks, etc.)
-		anchorStats := buildAnchorStats(pages)
+		anchorStats := anchorCloudToMap(crawlStats.AnchorCloud)
+		if anchorStats == nil {
+			anchorStats = buildAnchorStats(pages)
+		}
 		dirTree := buildDirectoryTree(pages)
 		tmplTypes := collectTemplateTypes(pages)
 
@@ -694,6 +721,7 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 			DirTree:         dirTree,
 			TemplateTypes:   tmplTypes,
 			InlinkIndex:     inlinkIdx,
+			Graph:           coreGraph,
 			DBPath:          dbPath,
 			PageCount:       pageCount,
 			AnalysisPending: needsDeferred,
@@ -844,7 +872,9 @@ func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageDa
 		res.mu.Lock()
 		stripPagesForCache(pages)
 		res.Stats = updatedMap
-		res.Graph = graph
+		if graph != nil {
+			res.Graph = graph
+		}
 		res.AnalysisPending = false
 		res.mu.Unlock()
 	} else {
@@ -920,7 +950,7 @@ func (m *CrawlManager) GetOrLoadResults(crawlID string) *CrawlResults {
 	var pages []*types.PageData
 	var anchorStats, dirTree map[string]interface{}
 	var tmplTypes []string
-	var inlinkIdx map[string][]string
+	var inlinkIdx *inlinkIndex
 	var graph *analysis.AdjacencyGraph
 	if job.DBPath != "" {
 		cs, csErr := storage.NewCrawlStore(job.DBPath)
@@ -931,51 +961,15 @@ func (m *CrawlManager) GetOrLoadResults(crawlID string) *CrawlResults {
 			if loadErr != nil {
 				log.Printf("lazy load pages for crawl %s: %v", crawlID, loadErr)
 			}
-			// Assign PageRank scores from persisted stats to pages
-			assignPageRankFromStatsMap(pages, statsMap)
-			// Pre-compute aggregations before stripping (InternalLinks still available)
-			anchorStats = buildAnchorStats(pages)
-			dirTree = buildDirectoryTree(pages)
-			tmplTypes = collectTemplateTypes(pages)
-			inlinkIdx = buildInlinkIndex(pages)
-			assignInlinksFromIndex(pages, inlinkIdx)
-			for k, v := range backfillAutoSegments(pages, job.Config) {
-				statsMap[k] = v
-			}
-			tmplTypes = collectTemplateTypes(pages)
+			agg := prepareLoadedPages(crawlID, pages, statsMap, job.DBPath, job.SeedURL, job.Config)
+			applyStatsUpdates(statsMap, agg.statsUpdates)
+			anchorStats, dirTree, tmplTypes = agg.anchorStats, agg.dirTree, agg.tmplTypes
+			inlinkIdx, graph = agg.inlinkIdx, agg.graph
 			stripPagesForCache(pages)
-			// Build adjacency graph from DB (pages' InternalLinks were already
-			// stripped by GetAllPages, so we read edges directly from the DB).
-			cs2, cs2Err := storage.NewCrawlStore(job.DBPath)
-			if cs2Err == nil {
-				graph = analysis.BuildAdjacencyListFromDisk(pages, func(fn func(source string, targets []string)) error {
-					return cs2.IterateInternalLinks(fn)
-				})
-				cs2.Close()
-			}
-			if seg := segmentStatsAfterGraph(pages, graph); seg != nil {
-				statsMap["autoSegmentStats"] = seg
-			}
-
-			// Backfill: recompute orphans from graph inDegree for old crawls
-			// that used the reporter's raw-URL matching (pre-graph methodology).
-			if graph != nil {
-				methodology, _ := statsMap["orphanMethodology"].(string)
-				if methodology != "graph" {
-					orphans := analysis.ComputeGraphOrphans(graph, job.SeedURL)
-					var oldCount int
-					if old, ok := statsMap["orphanPages"].([]interface{}); ok {
-						oldCount = len(old)
-					}
-					statsMap["orphanPages"] = orphans
-					statsMap["orphanMethodology"] = "graph"
-					log.Printf("backfill: recomputed orphans for crawl %s (%d → %d, methodology: graph)",
-						crawlID, oldCount, len(orphans))
-					// Persist updated stats
-					if updated, err := json.Marshal(statsMap); err == nil {
-						if persistErr := m.store.SaveCrawlStats(crawlID, updated); persistErr != nil {
-							log.Printf("backfill: persist orphan stats for crawl %s: %v", crawlID, persistErr)
-						}
+			if agg.persist {
+				if updated, err := json.Marshal(statsMap); err == nil {
+					if persistErr := m.store.SaveCrawlStats(crawlID, updated); persistErr != nil {
+						log.Printf("backfill: persist stats for crawl %s: %v", crawlID, persistErr)
 					}
 				}
 			}
@@ -1111,34 +1105,27 @@ func (m *CrawlManager) loadPagesInBackground(ctx context.Context, crawlID string
 	// Mark decompression complete (100%) before aggregation phase
 	result.loadingProgress.Store(100)
 
-	// Assign PageRank scores from persisted stats to pages
+	// Snapshot stats so graph backfills can run without holding the lock.
+	var statsSnapshot map[string]interface{}
 	result.mu.RLock()
 	if result.Stats != nil {
-		assignPageRankFromStatsMap(pages, result.Stats)
+		statsSnapshot = make(map[string]interface{}, len(result.Stats))
+		for k, v := range result.Stats {
+			statsSnapshot[k] = v
+		}
 	}
 	result.mu.RUnlock()
 
-	// Pre-compute aggregations before stripping
-	anchorStats := buildAnchorStats(pages)
-	dirTree := buildDirectoryTree(pages)
-	inlinkIdx := buildInlinkIndex(pages)
-	assignInlinksFromIndex(pages, inlinkIdx)
-
-	// Automatic segments are not stored with pages; recompute on every load.
 	var jobConfig map[string]interface{}
 	if job, err := m.store.GetCrawlJob(crawlID); err == nil && job != nil {
 		jobConfig = job.Config
 	}
-	if segStats := backfillAutoSegments(pages, jobConfig); segStats != nil {
-		result.mu.Lock()
-		if result.Stats != nil {
-			for k, v := range segStats {
-				result.Stats[k] = v
-			}
-		}
-		result.mu.Unlock()
-	}
-	tmplTypes := collectTemplateTypes(pages)
+
+	// Graph first, then inlinks and PageRank, then segments and the
+	// directory tree, so every aggregate sees the final values.
+	agg := prepareLoadedPages(crawlID, pages, statsSnapshot, result.DBPath, seedURL, jobConfig)
+	anchorStats, dirTree, tmplTypes := agg.anchorStats, agg.dirTree, agg.tmplTypes
+	inlinkIdx, graph := agg.inlinkIdx, agg.graph
 
 	// Build page_index for instant merge if it doesn't exist yet
 	if result.DBPath != "" {
@@ -1156,52 +1143,21 @@ func (m *CrawlManager) loadPagesInBackground(ctx context.Context, crawlID string
 
 	stripPagesForCache(pages)
 
-	// Build adjacency graph from DB (pages' InternalLinks already stripped,
-	// so we read edges directly from the crawl DB).
-	var graph *analysis.AdjacencyGraph
-	if result.DBPath != "" {
-		if csGraph, err := storage.NewCrawlStore(result.DBPath); err == nil {
-			graph = analysis.BuildAdjacencyListFromDisk(pages, func(fn func(source string, targets []string)) error {
-				return csGraph.IterateInternalLinks(fn)
-			})
-			csGraph.Close()
-		}
-	}
-	if seg := segmentStatsAfterGraph(pages, graph); seg != nil {
+	if len(agg.statsUpdates) > 0 {
 		result.mu.Lock()
 		if result.Stats != nil {
-			result.Stats["autoSegmentStats"] = seg
+			applyStatsUpdates(result.Stats, agg.statsUpdates)
 		}
 		result.mu.Unlock()
 	}
-
-	// Backfill: recompute orphans from graph inDegree for old crawls.
-	if graph != nil {
+	if agg.persist {
 		result.mu.RLock()
-		methodology, _ := result.Stats["orphanMethodology"].(string)
-		result.mu.RUnlock()
-
-		if methodology != "graph" && seedURL != "" {
-			orphans := analysis.ComputeGraphOrphans(graph, seedURL)
-			var oldCount int
-			result.mu.Lock()
-			if old, ok := result.Stats["orphanPages"].([]interface{}); ok {
-				oldCount = len(old)
+		if updated, err := json.Marshal(result.Stats); err == nil {
+			if persistErr := m.store.SaveCrawlStats(crawlID, updated); persistErr != nil {
+				log.Printf("backfill: persist stats for crawl %s: %v", crawlID, persistErr)
 			}
-			result.Stats["orphanPages"] = orphans
-			result.Stats["orphanMethodology"] = "graph"
-			result.mu.Unlock()
-			log.Printf("backfill: recomputed orphans for crawl %s (%d → %d, methodology: graph)",
-				crawlID, oldCount, len(orphans))
-			// Persist updated stats
-			result.mu.RLock()
-			if updated, err := json.Marshal(result.Stats); err == nil {
-				if persistErr := m.store.SaveCrawlStats(crawlID, updated); persistErr != nil {
-					log.Printf("backfill: persist orphan stats for crawl %s: %v", crawlID, persistErr)
-				}
-			}
-			result.mu.RUnlock()
 		}
+		result.mu.RUnlock()
 	}
 
 	result.mu.Lock()
@@ -1264,18 +1220,6 @@ func assignPageRankFromStatsMap(pages []*types.PageData, statsMap map[string]int
 			if f, ok := v.(float64); ok {
 				p.PageRank = f
 			}
-		}
-	}
-}
-
-// assignInlinksFromIndex sets Inlinks count on each page from the inlink index.
-func assignInlinksFromIndex(pages []*types.PageData, inlinkIdx map[string][]string) {
-	if len(inlinkIdx) == 0 {
-		return
-	}
-	for _, p := range pages {
-		if sources, ok := inlinkIdx[p.URL]; ok {
-			p.Inlinks = len(sources)
 		}
 	}
 }

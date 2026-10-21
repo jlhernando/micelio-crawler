@@ -91,6 +91,7 @@ func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
 	// Links
 	page.InternalLinks, page.ExternalLinks, page.Anchors = extractLinks(doc, baseURL)
 	page.LinkZones = countInternalLinkZones(page.Anchors)
+	page.NofollowIntLinks = countNofollowInternal(page.Anchors)
 
 	// Page language and template skeleton (used by automatic segmentation)
 	if lang, ok := doc.Find("html").First().Attr("lang"); ok {
@@ -106,6 +107,7 @@ func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
 
 	// Structured data
 	page.StructuredData = extractStructuredData(doc)
+	page.SchemaValidation = validatePageSchema(doc, page.StructuredData)
 
 	// Open Graph
 	page.OpenGraph = extractMetaProperties(doc, "og:")
@@ -292,6 +294,46 @@ func extractLinks(doc *goquery.Document, baseURL string) (internal []string, ext
 	})
 
 	return
+}
+
+// countNofollowInternal counts distinct internal hrefs that have at least one
+// rel="nofollow" anchor. Allocation-free when the page has no nofollow links.
+func countNofollowInternal(anchors []types.AnchorData) int {
+	var seen map[string]struct{}
+	for i := range anchors {
+		a := &anchors[i]
+		if !a.IsInternal || a.Rel == nil || !containsFoldASCII(*a.Rel, "nofollow") {
+			continue
+		}
+		if seen == nil {
+			seen = make(map[string]struct{}, 4)
+		}
+		seen[a.Href] = struct{}{}
+	}
+	return len(seen)
+}
+
+// containsFoldASCII reports whether s contains the lowercase ASCII needle,
+// ignoring ASCII case.
+func containsFoldASCII(s, needle string) bool {
+	n := len(needle)
+	for i := 0; i+n <= len(s); i++ {
+		match := true
+		for j := 0; j < n; j++ {
+			c := s[i+j]
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != needle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
 
 // countInternalLinkZones tallies internal links by the page region they sit in.

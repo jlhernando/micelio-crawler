@@ -475,6 +475,9 @@ func (s *crawlSession) collectPostCrawlData(e types.QueueEntry, result types.Fet
 }
 
 func (s *crawlSession) storePage(e types.QueueEntry, page *types.PageData) {
+	// Aggregate anchor stats while Anchors still exist (has its own lock).
+	s.anchorAgg.AddPage(page.URL, page.StatusCode, page.Anchors)
+
 	// Create stripped shallow copy for output
 	stripped := *page
 	if !s.config.FullAnchors {

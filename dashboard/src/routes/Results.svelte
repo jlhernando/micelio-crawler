@@ -34,6 +34,8 @@
   import WordCountHistogram from '../lib/components/results/WordCountHistogram.svelte';
   import SignalsView from '../lib/components/results/SignalsView.svelte';
   import SegmentsView from '../lib/components/results/SegmentsView.svelte';
+  import LinkStructure from '../lib/components/results/LinkStructure.svelte';
+  import RenderComparison from '../lib/components/results/RenderComparison.svelte';
   import type { SegmentDimension } from '../lib/segments';
 
   let { id }: { id: string } = $props();
@@ -315,7 +317,10 @@
 
     <!-- Tab Content -->
     {#if activeTab === 'issues'}
-      <IssueCards {stats} crawlId={id} />
+      <div class="space-y-4">
+        <IssueCards {stats} crawlId={id} />
+        <RenderComparison {stats} />
+      </div>
 
     {:else if activeTab === 'performance'}
       <div class="space-y-4">
@@ -542,6 +547,10 @@
               </div>
             {/if}
           </div>
+        {/if}
+
+        {#if liStats}
+          <LinkStructure {liStats} />
         {/if}
 
         <!-- Directory Tree -->

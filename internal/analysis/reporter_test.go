@@ -389,3 +389,16 @@ func TestGenerateReportDuplicateContent(t *testing.T) {
 		t.Errorf("Group size = %d, want 2", len(stats.DuplicateContentGroups[0].URLs))
 	}
 }
+
+func TestRenderCompareCountsPagesWithoutDiffs(t *testing.T) {
+	pages := []*types.PageData{
+		{URL: "https://ex.com/a", StatusCode: 200, JSRendered: true},
+		{URL: "https://ex.com/b", StatusCode: 200, JSRendered: true,
+			RenderDiffs: []types.RenderDiff{{Field: "title", Original: "A", Rendered: "B"}}},
+		{URL: "https://ex.com/c", StatusCode: 200},
+	}
+	rc := buildRenderCompareStats(pages)
+	if rc == nil || rc.PagesCompared != 2 || rc.PagesWithDiffs != 1 || len(rc.CriticalDiffs) != 1 {
+		t.Errorf("render compare = %+v, want 2 compared, 1 with diffs, 1 critical", rc)
+	}
+}

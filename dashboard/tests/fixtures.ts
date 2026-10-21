@@ -20,6 +20,12 @@ export const stats = {
   seoFunnelStats: { crawled: 1248, renderable: 1224, indexable: 1140, visible: 0, active: 0, nonIndexable: 108 },
   depthDistribution: { 0: 1, 1: 50, 2: 400, 3: 797 },
   textAmountThresholds: [180, 640],
+  renderCompareStats: { pagesCompared: 40, pagesWithDiffs: 6, fieldDiffCounts: { title: 2, word_count: 5, internal_links_count: 3 },
+    criticalDiffs: [{ url: 'https://studio.example/products/item-3', field: 'title', original: 'Loading…', rendered: 'Studio product 3' }] },
+  linkIntelligenceStats: { avgClickDepth: 2.1, maxClickDepth: 4, unreachablePagesCount: 0, linkSuggestionsCount: 0,
+    linkPositionDistribution: { content: 600, navigation: 300, footer: 100 },
+    pagesWithNoContentLinks: ['https://studio.example/legal'], pagesWithNoContentLinksCount: 12,
+    mostConnected: [{ url: 'https://studio.example/', score: 410 }], mostIsolated: [{ url: 'https://studio.example/archive/9', score: 2 }] },
   autoSegmentStats: [
     { dimension: 'template', totalValues: 3, values: [
       { value: 'pdp', pages: 612, indexablePct: 96.1, errorPct: 0.5, avgWords: 340, avgInlinks: 6.2, avgResponseMs: 280, sampleUrl: 'https://studio.example/products/item-1' },

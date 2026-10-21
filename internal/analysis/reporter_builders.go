@@ -359,10 +359,13 @@ func buildRenderCompareStats(pages []*types.PageData) *types.RenderCompareStats 
 	}
 
 	for _, p := range pages {
+		// JSRendered marks every compared page; older crawls only kept pages with diffs.
+		if p.JSRendered || len(p.RenderDiffs) > 0 {
+			rc.PagesCompared++
+		}
 		if len(p.RenderDiffs) == 0 {
 			continue
 		}
-		rc.PagesCompared++
 		rc.PagesWithDiffs++
 		for _, diff := range p.RenderDiffs {
 			rc.FieldDiffCounts[diff.Field]++

@@ -191,3 +191,18 @@ test('Segments tab explains each dimension and opens matching pages', async ({pa
   await expect(page.getByRole('combobox',{name:'Segment dimension'})).toHaveValue('');
   expect(errors).toEqual([]);
 });
+
+test('Issues show JavaScript rendering changes and Links show link structure', async ({page}) => {
+  const errors: string[]=[]; page.on('pageerror',e=>errors.push(e.message));
+  await mockApi(page); await page.goto('/#/results/crawl-6');
+  await page.getByRole('button',{name:'Issues',exact:true}).click();
+  const render=page.getByRole('region',{name:'JavaScript rendering differences'});
+  await expect(render).toContainText('6 of 40 rendered pages change after JavaScript runs');
+  await expect(render.getByRole('cell',{name:'Loading…'})).toBeVisible();
+  await page.getByRole('button',{name:'Links',exact:true}).click();
+  const links=page.getByRole('region',{name:'Link Structure'});
+  await expect(links).toContainText('60% in content, related posts or comments');
+  await expect(links).toContainText('12 pages only get links from navigation');
+  await expect(links).toContainText('410 links');
+  expect(errors).toEqual([]);
+});

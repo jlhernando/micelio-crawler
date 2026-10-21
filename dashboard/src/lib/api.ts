@@ -86,7 +86,7 @@ export const api = {
     offset?: number; limit?: number; sort?: string; order?: string;
     search?: string; status?: string; indexable?: string;
     template?: string; classification?: string; issue?: string;
-    robotsBlocked?: string;
+    robotsBlocked?: string; segment?: string;
   } = {}) => {
     const q = new URLSearchParams();
     if (params.offset !== undefined) q.set('offset', String(params.offset));
@@ -100,6 +100,7 @@ export const api = {
     if (params.classification && params.classification !== 'all') q.set('classification', params.classification);
     if (params.issue) q.set('issue', params.issue);
     if (params.robotsBlocked && params.robotsBlocked !== 'all') q.set('robotsBlocked', params.robotsBlocked);
+    if (params.segment) q.set('segment', params.segment);
     return request<{
       pages: Record<string, unknown>[]; total: number; totalAll: number;
       offset: number; limit: number; templateTypes: string[];

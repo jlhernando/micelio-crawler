@@ -33,6 +33,8 @@
   import SecurityOverview from '../lib/components/results/SecurityOverview.svelte';
   import WordCountHistogram from '../lib/components/results/WordCountHistogram.svelte';
   import SignalsView from '../lib/components/results/SignalsView.svelte';
+  import SegmentsView from '../lib/components/results/SegmentsView.svelte';
+  import type { SegmentDimension } from '../lib/segments';
 
   let { id }: { id: string } = $props();
 
@@ -47,7 +49,7 @@
   let loadingProgress = $state(0);
 
   // Active tab
-  let activeTab = $state<'overview' | 'pages' | 'issues' | 'performance' | 'content' | 'links' | 'signals' | 'ai-visibility'>('overview');
+  let activeTab = $state<'overview' | 'pages' | 'segments' | 'issues' | 'performance' | 'content' | 'links' | 'signals' | 'ai-visibility'>('overview');
   let graphSubTab = $state<'explorer' | 'full' | 'treemap'>('explorer');
 
   // Filters passed from SummaryHeader clicks
@@ -56,6 +58,7 @@
   let initialFilterIndexable = $state('all');
   let initialFilterClassification = $state('all');
   let initialFilterRobotsBlocked = $state('all');
+  let initialFilterSegment = $state('');
   let filterGeneration = $state(0);
 
   // Store original unfiltered stats for restoring when filter is cleared
@@ -71,6 +74,7 @@
     initialFilterIndexable = filter.indexable || 'all';
     initialFilterClassification = filter.classification || 'all';
     initialFilterRobotsBlocked = filter.robotsBlocked || 'all';
+    initialFilterSegment = '';
     filterGeneration++;
     // Only switch to pages tab if a non-template filter was applied
     if (filter.status || filter.indexable || filter.classification || filter.robotsBlocked) {
@@ -99,6 +103,17 @@
         filteredStatsLoading = false;
       });
     }
+  }
+
+  // Open All Pages filtered to one automatic segment value.
+  function openSegment(dimension: string, value: string) {
+    initialFilterStatus = 'all';
+    initialFilterIndexable = 'all';
+    initialFilterClassification = 'all';
+    initialFilterRobotsBlocked = 'all';
+    initialFilterSegment = `${dimension}:${value}`;
+    filterGeneration++;
+    activeTab = 'pages';
   }
 
   // ── Performance derived data ──
@@ -217,6 +232,7 @@
       {#each [
         { key: 'overview', label: 'Overview' },
         { key: 'pages', label: 'All Pages' },
+        ...(stats.autoSegmentStats ? [{ key: 'segments', label: 'Segments' }] : []),
         { key: 'issues', label: 'Issues' },
         { key: 'performance', label: 'Performance' },
         { key: 'content', label: 'Content' },
@@ -572,8 +588,11 @@
     {:else if activeTab === 'ai-visibility'}
       <AIVisibility {stats} />
 
+    {:else if activeTab === 'segments'}
+      <SegmentsView {stats} onOpenPages={openSegment} />
+
     {:else if activeTab === 'pages'}
-      <PagesTable crawlId={id} {pageCount} {pagesReady} {loadingProgress} {initialFilterStatus} {initialFilterTemplate} {initialFilterIndexable} {initialFilterClassification} {initialFilterRobotsBlocked} {filterGeneration} />
+      <PagesTable crawlId={id} {pageCount} {pagesReady} {loadingProgress} {initialFilterStatus} {initialFilterTemplate} {initialFilterIndexable} {initialFilterClassification} {initialFilterRobotsBlocked} {initialFilterSegment} {filterGeneration} segmentStats={stats.autoSegmentStats as SegmentDimension[] | undefined} />
     {/if}
   {:else}
     <div class="rounded-md border border-border bg-surface-2 p-8 text-center">

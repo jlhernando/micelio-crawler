@@ -48,6 +48,9 @@ const (
 	LinkPosFooter     LinkPosition = "footer"
 	LinkPosSidebar    LinkPosition = "sidebar"
 	LinkPosHeader     LinkPosition = "header"
+	LinkPosBreadcrumb LinkPosition = "breadcrumb"
+	LinkPosComments   LinkPosition = "comments"
+	LinkPosRelated    LinkPosition = "related"
 	LinkPosOther      LinkPosition = "other"
 )
 

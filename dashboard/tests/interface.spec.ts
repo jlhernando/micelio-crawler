@@ -171,3 +171,23 @@ test('Failed zero-page crawls still expose saved exclusion evidence', async ({pa
   await panel.locator('summary').filter({hasText:'Outside allowed domains'}).click();
   await expect(panel.getByText('https://outside.example/page',{exact:true})).toBeVisible();
 });
+
+test('Segments tab explains each dimension and opens matching pages', async ({page}) => {
+  const errors: string[]=[]; page.on('pageerror',e=>errors.push(e.message));
+  await mockApi(page); await page.goto('/#/results/crawl-6');
+  await page.getByRole('button',{name:'Segments',exact:true}).click();
+  await expect(page.getByRole('tab',{name:'Template'})).toHaveAttribute('aria-selected','true');
+  await expect(page.getByText('PDP (product detail)')).toBeVisible();
+  await expect(page.getByText('group 1 · /help/')).toBeVisible();
+  await page.getByRole('tab',{name:'Text amount'}).click();
+  await expect(page.getByText('Low is under 180 words, high is 640 or more.')).toBeVisible();
+  await expect(page.getByText('108 pages have no value here')).toBeVisible();
+  const request=page.waitForRequest(r=>r.url().includes('/pages?')&&r.url().includes('segment='));
+  await page.getByRole('button',{name:'View pages →'}).first().click();
+  expect(new URL((await request).url()).searchParams.get('segment')).toBe('textAmount:low');
+  await expect(page.getByRole('button',{name:'All Pages',exact:true})).toHaveAttribute('aria-pressed','true');
+  await expect(page.getByRole('combobox',{name:'Segment value'})).toHaveValue('low');
+  await page.getByRole('button',{name:'Clear Filters'}).click();
+  await expect(page.getByRole('combobox',{name:'Segment dimension'})).toHaveValue('');
+  expect(errors).toEqual([]);
+});

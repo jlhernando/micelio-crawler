@@ -19,6 +19,18 @@ export const stats = {
   brokenLinks: Array.from({length: 24}, (_, i) => ({url:`https://studio.example/archive/${i}`, statusCode: 404, foundOn: ['https://studio.example']})),
   seoFunnelStats: { crawled: 1248, renderable: 1224, indexable: 1140, visible: 0, active: 0, nonIndexable: 108 },
   depthDistribution: { 0: 1, 1: 50, 2: 400, 3: 797 },
+  textAmountThresholds: [180, 640],
+  autoSegmentStats: [
+    { dimension: 'template', totalValues: 3, values: [
+      { value: 'pdp', pages: 612, indexablePct: 96.1, errorPct: 0.5, avgWords: 340, avgInlinks: 6.2, avgResponseMs: 280, sampleUrl: 'https://studio.example/products/item-1' },
+      { value: 'blog_post', pages: 324, indexablePct: 99, errorPct: 0, avgWords: 1210, avgInlinks: 3.1, avgResponseMs: 310 },
+      { value: 'group 1 · /help/', pages: 96, indexablePct: 40, errorPct: 12, avgWords: 90, avgInlinks: 1, avgResponseMs: 220 },
+    ] },
+    { dimension: 'textAmount', totalValues: 2, unassigned: 108, values: [
+      { value: 'low', pages: 400, indexablePct: 90, errorPct: 0, avgWords: 120, avgInlinks: 2, avgResponseMs: 250 },
+      { value: 'high', pages: 380, indexablePct: 98, errorPct: 0, avgWords: 1400, avgInlinks: 5, avgResponseMs: 330 },
+    ] },
+  ],
 };
 const pages = Array.from({length: 8}, (_, i) => ({
   url: `https://studio.example/products/item-${i}`, statusCode: i < 2 ? 404 : 200,

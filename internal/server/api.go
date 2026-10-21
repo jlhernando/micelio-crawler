@@ -254,6 +254,9 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			q.Get("classification"), q.Get("issue"), q.Get("robotsBlocked"),
 			sortField, sortOrder,
 		)
+		if seg := q.Get("segment"); seg != "" {
+			filtered = filterBySegment(filtered, seg)
+		}
 
 		total := len(filtered)
 		end := offset + limit
@@ -650,6 +653,9 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			q.Get("classification"), q.Get("issue"), q.Get("robotsBlocked"),
 			sortField, sortOrder,
 		)
+		if seg := q.Get("segment"); seg != "" {
+			filtered = filterBySegment(filtered, seg)
+		}
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=crawl-%s-filtered-%d.csv", r.PathValue("id"), len(filtered)))
 		csvWriter := csv.NewWriter(w)

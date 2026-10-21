@@ -705,6 +705,78 @@ func extractAdDetailSignals(doc *goquery.Document) int {
 	return adSignals - ecomSignals
 }
 
+// buyButtonText matches add-to-cart style call-to-action text in common languages.
+var buyButtonText = regexp.MustCompile(`(?i)^\s*(add to (cart|basket|bag)|buy now|buy it now|añadir al (carrito|cesta)|comprar( ahora)?|ajouter au panier|in den warenkorb|aggiungi al carrello|adicionar ao carrinho|dodaj do koszyka|in winkelwagen)\s*$`)
+
+// productItemClass matches classes of repeated product cards in a grid.
+var productItemClass = regexp.MustCompile(`(?i)(^|[\s_-])product[-_]?(pod|card|item|tile|box|thumb)s?($|[\s_-])`)
+
+// extractCommerceSignals counts product cards plus the buy buttons and prices
+// that sit outside any card. A product page shows its own price and buy button
+// outside the "related" or "recently viewed" cards; a listing keeps every
+// price and button inside a card.
+func extractCommerceSignals(doc *goquery.Document) (buyButtons, productItems, prices int) {
+	doc.Find("button, input[type=submit], a[role=button], a.btn, a.button").Each(func(_ int, s *goquery.Selection) {
+		text := s.Text()
+		if goquery.NodeName(s) == "input" {
+			text, _ = s.Attr("value")
+		}
+		if len(text) < 60 && buyButtonText.MatchString(text) && !insideProductCard(s) {
+			buyButtons++
+		}
+	})
+	doc.Find("article[class], li[class], div[class]").Each(func(_ int, s *goquery.Selection) {
+		if isProductCard(s) {
+			productItems++
+		}
+	})
+	// Outermost price elements only: themes nest the currency symbol and
+	// amount in child spans that also carry "price" classes.
+	doc.Find("body [class*=price]").Each(func(_ int, s *goquery.Selection) {
+		if s.ParentsFiltered("[class*=price]").Length() > 0 {
+			return
+		}
+		if priceText.MatchString(s.Text()) && !insideProductCard(s) {
+			prices++
+		}
+	})
+	return buyButtons, productItems, prices
+}
+
+// isProductCard reports whether s is one card in a product grid: a class like
+// "product-card" or "product_pod", or an li/article with a bare "product"
+// class (WooCommerce and similar themes).
+func isProductCard(s *goquery.Selection) bool {
+	cls, ok := s.Attr("class")
+	if !ok || len(cls) >= maxAttrLen {
+		return false
+	}
+	if productItemClass.MatchString(cls) {
+		return true
+	}
+	if tag := goquery.NodeName(s); tag == "li" || tag == "article" {
+		for _, c := range strings.Fields(cls) {
+			if strings.EqualFold(c, "product") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// insideProductCard reports whether s sits within a repeated product card.
+func insideProductCard(s *goquery.Selection) bool {
+	for p, depth := s.Parent(), 0; p.Length() > 0 && depth < 10; p, depth = p.Parent(), depth+1 {
+		if isProductCard(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// priceText matches a short price such as "£51.77", "19,99 €" or "$5".
+var priceText = regexp.MustCompile(`^\s*(from\s+|desde\s+)?([£$€¥]\s?\d[\d.,]*|\d[\d.,]*\s?(€|£|\$|eur|usd|gbp|zł|kr))\s*$`)
+
 // --- E-E-A-T extraction ---
 
 var (

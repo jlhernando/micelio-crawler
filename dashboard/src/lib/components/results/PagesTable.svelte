@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api } from '../../api';
   import { onMount } from 'svelte';
+  import { segmentDimensionLabel, segmentValueLabel, type SegmentDimension } from '../../segments';
 
   let {
     crawlId,
@@ -12,6 +13,8 @@
     initialFilterIndexable = 'all',
     initialFilterClassification = 'all',
     initialFilterRobotsBlocked = 'all',
+    initialFilterSegment = '',
+    segmentStats = [],
     filterGeneration = 0,
   }: {
     crawlId: string;
@@ -23,6 +26,8 @@
     initialFilterIndexable?: string;
     initialFilterClassification?: string;
     initialFilterRobotsBlocked?: string;
+    initialFilterSegment?: string;
+    segmentStats?: SegmentDimension[];
     filterGeneration?: number;
   } = $props();
 
@@ -38,6 +43,11 @@
   let filterIndexable = $state<string>('all');
   let filterClassification = $state<string>('all');
   let filterRobotsBlocked = $state<string>('all');
+  // Automatic segment filter: dimension + value, sent as segment=dimension:value
+  let filterSegmentDim = $state<string>('');
+  let filterSegmentValue = $state<string>('');
+  let segmentValues = $derived(segmentStats.find((d) => d.dimension === filterSegmentDim)?.values ?? []);
+  let filterSegment = $derived(filterSegmentDim && filterSegmentValue ? `${filterSegmentDim}:${filterSegmentValue}` : '');
   let searchInput = $state('');
   let debouncedSearch = $state('');
 
@@ -74,6 +84,9 @@
       filterIndexable = initialFilterIndexable;
       filterClassification = initialFilterClassification;
       filterRobotsBlocked = initialFilterRobotsBlocked;
+      const sep = initialFilterSegment.indexOf(':');
+      filterSegmentDim = sep > 0 ? initialFilterSegment.slice(0, sep) : '';
+      filterSegmentValue = sep > 0 ? initialFilterSegment.slice(sep + 1) : '';
       lastGeneration = filterGeneration;
     }
   });
@@ -98,6 +111,7 @@
       template: filterTemplate,
       classification: filterClassification,
       robotsBlocked: filterRobotsBlocked,
+      segment: filterSegment,
     };
   }
 
@@ -226,7 +240,7 @@
   }
 
   let hasActiveFilters = $derived(
-    filterStatus !== 'all' || filterTemplate !== 'all' || filterIndexable !== 'all' || filterClassification !== 'all' || filterRobotsBlocked !== 'all' || debouncedSearch !== ''
+    filterStatus !== 'all' || filterTemplate !== 'all' || filterIndexable !== 'all' || filterClassification !== 'all' || filterRobotsBlocked !== 'all' || filterSegment !== '' || debouncedSearch !== ''
   );
 
   function clearFilters() {
@@ -235,6 +249,8 @@
     filterIndexable = 'all';
     filterClassification = 'all';
     filterRobotsBlocked = 'all';
+    filterSegmentDim = '';
+    filterSegmentValue = '';
     searchInput = '';
     debouncedSearch = '';
   }
@@ -250,6 +266,7 @@
     if (fp.template && fp.template !== 'all') params.set('template', fp.template);
     if (fp.classification && fp.classification !== 'all') params.set('classification', fp.classification);
     if (fp.robotsBlocked && fp.robotsBlocked !== 'all') params.set('robotsBlocked', fp.robotsBlocked);
+    if (fp.segment) params.set('segment', fp.segment);
     const qs = params.toString();
     return `/api/crawl/${crawlId}/export/filtered-csv${qs ? '?' + qs : ''}`;
   });
@@ -338,6 +355,34 @@
           <option value={t}>{t}</option>
         {/each}
       </select>
+    {/if}
+    {#if segmentStats.length > 0}
+      <select
+        class="px-3 py-1.5 rounded-md bg-surface-3 border border-border text-sm text-fg-1 outline-none cursor-pointer"
+        aria-label="Segment dimension"
+        bind:value={filterSegmentDim}
+        onchange={() => (filterSegmentValue = '')}
+      >
+        <option value="">All Segments</option>
+        {#each segmentStats as d (d.dimension)}
+          <option value={d.dimension}>{segmentDimensionLabel(d.dimension)}</option>
+        {/each}
+      </select>
+      {#if filterSegmentDim}
+        <select
+          class="px-3 py-1.5 rounded-md bg-surface-3 border border-border text-sm text-fg-1 outline-none cursor-pointer max-w-64"
+          aria-label="Segment value"
+          bind:value={filterSegmentValue}
+        >
+          <option value="">Choose value…</option>
+          {#each segmentValues as v (v.value)}
+            <option value={v.value}>{segmentValueLabel(filterSegmentDim, v.value)} ({v.pages.toLocaleString()})</option>
+          {/each}
+          {#if filterSegmentValue && !segmentValues.some((v) => v.value === filterSegmentValue)}
+            <option value={filterSegmentValue}>{segmentValueLabel(filterSegmentDim, filterSegmentValue)}</option>
+          {/if}
+        </select>
+      {/if}
     {/if}
     {#if hasActiveFilters}
       <button

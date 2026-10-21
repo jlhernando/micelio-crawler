@@ -29,19 +29,19 @@
     "better-sqlite3": "^12.6.2",
     "cheerio": "^1.0.0",
     "commander": "^12.1.0",
-    "fast-csv": "^5.0.2",
+    "fast-csv": "^5.0.8",
     "googleapis": "^171.4.0",
     "p-limit": "^6.2.0",
-    "playwright": "^1.58.2",
+    "playwright": "^1.64.1",
     "robots-parser": "^3.0.1",
     "undici": "^7.2.0",
-    "ws": "^8.19.0"
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.10.0",
-    "@types/ws": "^8.18.1",
-    "tsx": "^4.19.0",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.0",
     "vitest": "^3.2.4"
   }

@@ -106,8 +106,8 @@ func TestGenerateReportOrphanPages(t *testing.T) {
 	if len(stats.OrphanPages) > 0 && stats.OrphanPages[0] != "https://example.com/orphan" {
 		t.Errorf("OrphanPages[0] = %q, want orphan URL", stats.OrphanPages[0])
 	}
-	if stats.OrphanMethodology != "reporter" {
-		t.Errorf("OrphanMethodology = %q, want \"reporter\"", stats.OrphanMethodology)
+	if stats.OrphanMethodology != "graph" {
+		t.Errorf("OrphanMethodology = %q, want \"graph\"", stats.OrphanMethodology)
 	}
 }
 

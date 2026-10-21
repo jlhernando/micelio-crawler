@@ -19,8 +19,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -1588,7 +1586,24 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 	var brokenExternal []types.ExternalLinkResult
 	if config.CheckExternal && len(result.ExternalLinks) > 0 {
 		fmt.Fprintf(os.Stderr, "\n  Checking %d external links...\n", len(result.ExternalLinks))
-		brokenExternal = checkExternalLinks(result.ExternalLinks, config.Concurrency, config.UserAgent)
+		extSummary := crawler.CheckExternalLinks(ctx, result.ExternalLinks, crawler.ExternalCheckOptions{
+			UserAgent:   config.UserAgent,
+			Concurrency: config.Concurrency,
+			SkipSSRF:    config.SkipSSRF,
+			OnProgress: func(n, total int) {
+				if n%10 == 0 {
+					fmt.Fprintf(os.Stderr, "\r  External: %d/%d", n, total)
+				}
+			},
+		})
+		fmt.Fprintf(os.Stderr, "\r  External: %d/%d checked\n", extSummary.Checked, extSummary.Total)
+		if extSummary.Skipped > 0 {
+			fmt.Fprintf(os.Stderr, "  External links: %d not checked (cap %d or cancelled)\n", extSummary.Skipped, crawler.DefaultExternalCheckMaxURLs)
+		}
+		brokenExternal = extSummary.Broken
+		if ppCfg != nil {
+			ppCfg.ExternalLinkResults = brokenExternal
+		}
 		if len(brokenExternal) > 0 {
 			fmt.Fprintf(os.Stderr, "  External links: %d broken\n", len(brokenExternal))
 		}
@@ -1614,6 +1629,7 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 
 		ppCfg.CrawlDurationMs = result.Duration.Milliseconds()
 		ppCfg.NgramAnalyzer = result.NgramAnalyzer
+		ppCfg.AnchorAggregator = result.AnchorAggregator
 		if len(result.DiscoveredSitemapURLs) > 0 {
 			ppCfg.SitemapEntries = result.DiscoveredSitemapURLs
 		}
@@ -1774,69 +1790,6 @@ func writeStatsSummary(path string, stats types.CrawlStats) error {
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
 	return enc.Encode(stats)
-}
-
-// checkExternalLinks performs concurrent HEAD checks on external URLs.
-func checkExternalLinks(extLinks map[string][]string, concurrency int, userAgent string) []types.ExternalLinkResult {
-	var (
-		results []types.ExternalLinkResult
-		mu      sync.Mutex
-		wg      sync.WaitGroup
-		sem     = make(chan struct{}, concurrency)
-		checked atomic.Int32
-		total   = len(extLinks)
-	)
-
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("too many redirects")
-			}
-			return nil
-		},
-	}
-
-	for extURL, foundOn := range extLinks {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(u string, pages []string) {
-			defer func() { <-sem; wg.Done() }()
-
-			req, err := http.NewRequest("HEAD", u, nil)
-			if err != nil {
-				mu.Lock()
-				results = append(results, types.ExternalLinkResult{URL: u, StatusCode: 0, Error: err.Error(), FoundOn: pages})
-				mu.Unlock()
-				return
-			}
-			req.Header.Set("User-Agent", userAgent)
-
-			resp, err := client.Do(req)
-			statusCode := 0
-			errMsg := ""
-			if err != nil {
-				errMsg = err.Error()
-			} else {
-				statusCode = resp.StatusCode
-				resp.Body.Close()
-			}
-
-			if statusCode >= 400 || statusCode == 0 {
-				mu.Lock()
-				results = append(results, types.ExternalLinkResult{URL: u, StatusCode: statusCode, Error: errMsg, FoundOn: pages})
-				mu.Unlock()
-			}
-
-			n := int(checked.Add(1))
-			if n%10 == 0 {
-				fmt.Fprintf(os.Stderr, "\r  External: %d/%d", n, total)
-			}
-		}(extURL, foundOn)
-	}
-	wg.Wait()
-	fmt.Fprintf(os.Stderr, "\r  External: %d/%d done\n", total, total)
-	return results
 }
 
 // htmlReportPath derives an HTML report path from the output path.

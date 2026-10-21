@@ -93,48 +93,31 @@ func filterBySegment(pages []*types.PageData, spec string) []*types.PageData {
 	return out
 }
 
-// applyGraphInlinks fills missing inlink counts from the link graph's
-// in-degree. Pages reloaded from a crawl DB lose their InternalLinks, so the
-// usual inlink index comes back empty. Returns true when any page changed.
-func applyGraphInlinks(pages []*types.PageData, g *analysis.AdjacencyGraph) bool {
-	if g == nil || g.N == 0 {
-		return false
+// recomputeFlatPageRank repairs crawls whose stored PageRank is the same for
+// every page (computed after InternalLinks were stripped). It recomputes from
+// the on-disk link graph and assigns the scores to pages. Returns the new
+// scores, or nil when PageRank already varies or the graph has no edges.
+func recomputeFlatPageRank(pages []*types.PageData, g *analysis.AdjacencyGraph) map[string]float64 {
+	if g == nil || len(g.Edges) == 0 || len(pages) < 2 {
+		return nil
 	}
-	inDegree := make([]int32, g.N)
-	for i := 0; i < g.N; i++ {
-		for _, t := range g.Neighbors(i) {
-			if int(t) != i {
-				inDegree[t]++
-			}
+	first := pages[0].PageRank
+	for _, p := range pages[1:] {
+		if p.PageRank != first {
+			return nil
 		}
 	}
-	changed := false
-	for _, p := range pages {
-		if p.Inlinks != 0 {
-			continue
-		}
-		if idx, ok := g.URLIndex[p.URL]; ok && inDegree[idx] > 0 {
-			p.Inlinks = int(inDegree[idx])
-			changed = true
-		}
-	}
-	return changed
+	scores := analysis.ComputePageRankGraph(g, analysis.PageRankOptions{})
+	assignPageRankScores(pages, scores)
+	return scores
 }
 
-// segmentStatsAfterGraph refreshes authority and segment stats once graph
-// inlinks are known. Returns the JSON-ready stats value, or nil.
-func segmentStatsAfterGraph(pages []*types.PageData, g *analysis.AdjacencyGraph) interface{} {
-	if !applyGraphInlinks(pages, g) {
-		return nil
-	}
-	analysis.AssignAuthoritySegments(pages, nil)
-	data, err := json.Marshal(analysis.BuildAutoSegmentStats(pages))
-	if err != nil {
-		return nil
-	}
-	var out []interface{}
-	if err := json.Unmarshal(data, &out); err != nil {
-		return nil
+// scoresToJSONMap converts scores to the generic map shape that JSON-decoded
+// stats use, so API capping (capStatsForAPI) still recognises the field.
+func scoresToJSONMap(scores map[string]float64) map[string]interface{} {
+	out := make(map[string]interface{}, len(scores))
+	for k, v := range scores {
+		out[k] = v
 	}
 	return out
 }

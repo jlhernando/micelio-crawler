@@ -152,6 +152,18 @@ func ValidateStructuredData(entries []types.StructuredDataEntry) []types.SchemaV
 // validateJsonLd parses and validates a JSON-LD string.
 // Returns multiple results for @graph containers.
 func validateJsonLd(raw string) []types.SchemaValidationEntry {
+	// A top-level array of objects is valid JSON-LD: validate each element.
+	if trimmed := strings.TrimSpace(raw); strings.HasPrefix(trimmed, "[") {
+		var items []json.RawMessage
+		if err := json.Unmarshal([]byte(trimmed), &items); err == nil {
+			var results []types.SchemaValidationEntry
+			for _, item := range items {
+				results = append(results, validateJsonLd(string(item))...)
+			}
+			return results
+		}
+	}
+
 	var parsed map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return []types.SchemaValidationEntry{{

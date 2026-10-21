@@ -61,11 +61,11 @@ type ResponseTimeBuckets struct {
 
 // InlinkBuckets holds inlink count distribution across pages.
 type InlinkBuckets struct {
-	Zero       int `json:"zero"`       // 0 inlinks
-	One        int `json:"one"`        // 1 inlink
-	TwoToFive  int `json:"twoToFive"`  // 2-5 inlinks
+	Zero        int `json:"zero"`        // 0 inlinks
+	One         int `json:"one"`         // 1 inlink
+	TwoToFive   int `json:"twoToFive"`   // 2-5 inlinks
 	SixToTwenty int `json:"sixToTwenty"` // 6-20 inlinks
-	TwentyPlus int `json:"twentyPlus"` // 20+ inlinks
+	TwentyPlus  int `json:"twentyPlus"`  // 20+ inlinks
 }
 
 // URLResponseTime is a URL with its response time.
@@ -131,79 +131,82 @@ type PerformanceScores struct {
 // CrawlStats is the main aggregation structure for crawl results.
 // Kept as a struct with pointer fields for optional sections.
 type CrawlStats struct {
-	PageRankScores           map[string]float64     `json:"pageRankScores"`
-	RenderCompareStats       *RenderCompareStats    `json:"renderCompareStats"`
-	PageWeightStats          *PageWeightStats       `json:"pageWeightStats"`
-	CruxStats                *CruxStats             `json:"cruxStats"`
-	URLStructureStats        *URLStructureStats     `json:"urlStructureStats"`
-	TemplateTypeDistribution map[string]int         `json:"templateTypeDistribution"`
-	CanonicalStats           *CanonicalStats        `json:"canonicalStats"`
-	RedirectStats            *RedirectStats         `json:"redirectStats"`
-	NgramStats               *NgramStats            `json:"ngramStats"`
-	EmbeddingStats           *EmbeddingStats        `json:"embeddingStats"`
-	LinkIntelligenceStats    *LinkIntelligenceStats `json:"linkIntelligenceStats"`
-	ImageAuditStats          *ImageAuditStats       `json:"imageAuditStats"`
-	CustomSearchSummary      map[string]SearchStat  `json:"customSearchSummary"`
-	StatusCodes              map[int]int            `json:"statusCodes"`
-	GscStats                 *GscStats              `json:"gscStats"`
-	Ga4Stats                 *Ga4Stats              `json:"ga4Stats"`
-	SchemaValidationStats    *SchemaValidationStats `json:"schemaValidationStats"`
-	TextToCodeStats          *TextToCodeStats       `json:"textToCodeStats"`
-	PerformanceScores        *PerformanceScores     `json:"performanceScores"`
-	URLIssueStats            map[string][]string    `json:"urlIssueStats"`
-	ReadabilityStats         *ReadabilityStats      `json:"readabilityStats"`
-	PlausibleStats           *PlausibleStats        `json:"plausibleStats"`
-	SeoFunnelStats           *SeoFunnelStats        `json:"seoFunnelStats"`
-	AIVisibilityStats        *AIVisibilityStats     `json:"aiVisibilityStats,omitempty"`
-	FreshnessStats           *FreshnessStats        `json:"freshnessStats,omitempty"`
-	ContentRichnessStats     *ContentRichnessStats  `json:"contentRichnessStats,omitempty"`
-	EEATStats                *EEATStats             `json:"eeatStats,omitempty"`
-	PassageReadinessStats    *PassageReadinessStats `json:"passageReadinessStats,omitempty"`
-	AIReadinessStats         *AIReadinessStats      `json:"aiReadinessStats,omitempty"`
-	TopicalityStats          *TopicalityStats       `json:"topicalityStats,omitempty"`
-	AnchorHealthStats        *AnchorHealthStats     `json:"anchorHealthStats,omitempty"`
-	AlertSummary             *AlertSummary          `json:"alertSummary,omitempty"`
-	DepthDistribution        map[int]int            `json:"depthDistribution"`
-	SitemapStats             *SitemapStats          `json:"sitemapStats"`
-	BrokenExternalLinks      []ExternalLinkResult   `json:"brokenExternalLinks"`
-	LongRedirectChains       []RedirectChainInfo    `json:"longRedirectChains"`
-	MixedContentPages        []string               `json:"mixedContentPages"`
-	IndexabilityStats        IndexabilityStats      `json:"indexabilityStats"`
-	RedirectChains           []RedirectChainInfo    `json:"redirectChains"`
-	BrokenLinks              []BrokenLink           `json:"brokenLinks"`
-	NonDescriptiveAnchors    []NonDescriptiveAnchor `json:"nonDescriptiveAnchors"`
-	DuplicateContentGroups   []HashDuplicateGroup   `json:"duplicateContentGroups"`
-	ThinContentPages         []URLWordCount         `json:"thinContentPages"`
-	NonHTTPSPages            []string               `json:"nonHttpsPages"`
-	NearDuplicateGroups      []NearDuplicateGroup   `json:"nearDuplicateGroups"`
-	SegmentStats             []SegmentStat          `json:"segmentStats"`
-	HreflangIssues           []HreflangIssue        `json:"hreflangIssues"`
-	Soft404Pages             []string               `json:"soft404Pages"`
-	OrphanPages              []string               `json:"orphanPages"`
+	PageRankScores            map[string]float64     `json:"pageRankScores"`
+	RenderCompareStats        *RenderCompareStats    `json:"renderCompareStats"`
+	PageWeightStats           *PageWeightStats       `json:"pageWeightStats"`
+	CruxStats                 *CruxStats             `json:"cruxStats"`
+	URLStructureStats         *URLStructureStats     `json:"urlStructureStats"`
+	TemplateTypeDistribution  map[string]int         `json:"templateTypeDistribution"`
+	CanonicalStats            *CanonicalStats        `json:"canonicalStats"`
+	RedirectStats             *RedirectStats         `json:"redirectStats"`
+	NgramStats                *NgramStats            `json:"ngramStats"`
+	EmbeddingStats            *EmbeddingStats        `json:"embeddingStats"`
+	LinkIntelligenceStats     *LinkIntelligenceStats `json:"linkIntelligenceStats"`
+	ImageAuditStats           *ImageAuditStats       `json:"imageAuditStats"`
+	CustomSearchSummary       map[string]SearchStat  `json:"customSearchSummary"`
+	StatusCodes               map[int]int            `json:"statusCodes"`
+	GscStats                  *GscStats              `json:"gscStats"`
+	Ga4Stats                  *Ga4Stats              `json:"ga4Stats"`
+	SchemaValidationStats     *SchemaValidationStats `json:"schemaValidationStats"`
+	TextToCodeStats           *TextToCodeStats       `json:"textToCodeStats"`
+	PerformanceScores         *PerformanceScores     `json:"performanceScores"`
+	URLIssueStats             map[string][]string    `json:"urlIssueStats"`
+	ReadabilityStats          *ReadabilityStats      `json:"readabilityStats"`
+	PlausibleStats            *PlausibleStats        `json:"plausibleStats"`
+	SeoFunnelStats            *SeoFunnelStats        `json:"seoFunnelStats"`
+	AIVisibilityStats         *AIVisibilityStats     `json:"aiVisibilityStats,omitempty"`
+	FreshnessStats            *FreshnessStats        `json:"freshnessStats,omitempty"`
+	ContentRichnessStats      *ContentRichnessStats  `json:"contentRichnessStats,omitempty"`
+	EEATStats                 *EEATStats             `json:"eeatStats,omitempty"`
+	PassageReadinessStats     *PassageReadinessStats `json:"passageReadinessStats,omitempty"`
+	AIReadinessStats          *AIReadinessStats      `json:"aiReadinessStats,omitempty"`
+	TopicalityStats           *TopicalityStats       `json:"topicalityStats,omitempty"`
+	AnchorHealthStats         *AnchorHealthStats     `json:"anchorHealthStats,omitempty"`
+	AnchorCloud               *AnchorCloudStats      `json:"anchorCloud,omitempty"`
+	AlertSummary              *AlertSummary          `json:"alertSummary,omitempty"`
+	DepthDistribution         map[int]int            `json:"depthDistribution"`
+	SitemapStats              *SitemapStats          `json:"sitemapStats"`
+	BrokenExternalLinks       []ExternalLinkResult   `json:"brokenExternalLinks"`
+	LongRedirectChains        []RedirectChainInfo    `json:"longRedirectChains"`
+	MixedContentPages         []string               `json:"mixedContentPages"`
+	IndexabilityStats         IndexabilityStats      `json:"indexabilityStats"`
+	RedirectChains            []RedirectChainInfo    `json:"redirectChains"`
+	BrokenLinks               []BrokenLink           `json:"brokenLinks"`
+	NonDescriptiveAnchors     []NonDescriptiveAnchor `json:"nonDescriptiveAnchors"`
+	DuplicateContentGroups    []HashDuplicateGroup   `json:"duplicateContentGroups"`
+	ThinContentPages          []URLWordCount         `json:"thinContentPages"`
+	NonHTTPSPages             []string               `json:"nonHttpsPages"`
+	NearDuplicateGroups       []NearDuplicateGroup   `json:"nearDuplicateGroups"`
+	SegmentStats              []SegmentStat          `json:"segmentStats"`
+	HreflangIssues            []HreflangIssue        `json:"hreflangIssues"`
+	Soft404Pages              []string               `json:"soft404Pages"`
+	OrphanPages               []string               `json:"orphanPages"`
 	OrphanMethodology         string                 `json:"orphanMethodology,omitempty"` // "reporter" (basic) or "graph" (redirect-aware via link intelligence)
-	SlowPages                []URLResponseTime      `json:"slowPages"`
-	LinkAnalysis             LinkAnalysis           `json:"linkAnalysis"`
-	ResponseTimePercentiles  PercentileData         `json:"responseTimePercentiles"`
-	ResponseTimeBuckets      ResponseTimeBuckets    `json:"responseTimeBuckets"`
-	ImagesMissingAlt         int                    `json:"imagesMissingAlt"`
-	TotalExternalLinks       int                    `json:"totalExternalLinks"`
-	PagesWithStructuredData  int                    `json:"pagesWithStructuredData"`
-	TotalInternalLinks       int                    `json:"totalInternalLinks"`
-	TotalImages              int                    `json:"totalImages"`
-	CrawlDurationMs          int64                  `json:"crawlDurationMs"`
-	PagesWithoutOG           int                    `json:"pagesWithoutOg"`
-	PagesWithAIAnalysis      int                    `json:"pagesWithAiAnalysis"`
-	TotalPages               int                    `json:"totalPages"`
-	PagesWithoutH1           int                    `json:"pagesWithoutH1"`
-	PagesWithoutDescription  int                    `json:"pagesWithoutDescription"`
-	PagesWithoutTitle        int                    `json:"pagesWithoutTitle"`
-	RobotsBlockedCount       int                    `json:"robotsBlockedCount"`
-	DuplicateTitleCount      int                    `json:"duplicateTitleCount"`
-	DuplicateDescriptionCount int                   `json:"duplicateDescriptionCount"`
-	MultipleH1Count          int                    `json:"multipleH1Count"`
-	TitleTooLongCount        int                    `json:"titleTooLongCount"`
-	TitleTooShortCount       int                    `json:"titleTooShortCount"`
-	DescriptionTooLongCount  int                    `json:"descriptionTooLongCount"`
+	SlowPages                 []URLResponseTime      `json:"slowPages"`
+	LinkAnalysis              LinkAnalysis           `json:"linkAnalysis"`
+	ResponseTimePercentiles   PercentileData         `json:"responseTimePercentiles"`
+	ResponseTimeBuckets       ResponseTimeBuckets    `json:"responseTimeBuckets"`
+	ImagesMissingAlt          int                    `json:"imagesMissingAlt"`
+	TotalExternalLinks        int                    `json:"totalExternalLinks"`
+	ExternalLinksChecked      int                    `json:"externalLinksChecked,omitempty"`   // unique external URLs status-checked (Check External)
+	ExternalLinksUnchecked    int                    `json:"externalLinksUnchecked,omitempty"` // unique external URLs skipped (cap or cancellation)
+	PagesWithStructuredData   int                    `json:"pagesWithStructuredData"`
+	TotalInternalLinks        int                    `json:"totalInternalLinks"`
+	TotalImages               int                    `json:"totalImages"`
+	CrawlDurationMs           int64                  `json:"crawlDurationMs"`
+	PagesWithoutOG            int                    `json:"pagesWithoutOg"`
+	PagesWithAIAnalysis       int                    `json:"pagesWithAiAnalysis"`
+	TotalPages                int                    `json:"totalPages"`
+	PagesWithoutH1            int                    `json:"pagesWithoutH1"`
+	PagesWithoutDescription   int                    `json:"pagesWithoutDescription"`
+	PagesWithoutTitle         int                    `json:"pagesWithoutTitle"`
+	RobotsBlockedCount        int                    `json:"robotsBlockedCount"`
+	DuplicateTitleCount       int                    `json:"duplicateTitleCount"`
+	DuplicateDescriptionCount int                    `json:"duplicateDescriptionCount"`
+	MultipleH1Count           int                    `json:"multipleH1Count"`
+	TitleTooLongCount         int                    `json:"titleTooLongCount"`
+	TitleTooShortCount        int                    `json:"titleTooShortCount"`
+	DescriptionTooLongCount   int                    `json:"descriptionTooLongCount"`
 
 	// Automatic segmentation (no user rules): per-dimension value breakdown.
 	AutoSegmentStats     []SegmentDimensionStats `json:"autoSegmentStats,omitempty"`
@@ -240,13 +243,13 @@ type IndexabilityStats struct {
 
 // ReadabilityStats holds aggregate readability metrics.
 type ReadabilityStats struct {
-	Difficult     []URLScoreEntry `json:"difficult"`
-	VeryEasy      []URLScoreEntry `json:"veryEasy"`
-	AvgScore      float64         `json:"avgScore"`
+	Difficult []URLScoreEntry `json:"difficult"`
+	VeryEasy  []URLScoreEntry `json:"veryEasy"`
+	AvgScore  float64         `json:"avgScore"`
 	// Q* quality tier distribution (DOJ: Q* 0-1 scale, 0.4 threshold for rich results).
-	QualityTier1  int             `json:"qualityTier1"`  // High quality (Q* proxy > 0.7)
-	QualityTier2  int             `json:"qualityTier2"`  // Acceptable (Q* proxy 0.4-0.7)
-	QualityTier3  int             `json:"qualityTier3"`  // Below rich-result threshold (< 0.4)
+	QualityTier1 int `json:"qualityTier1"` // High quality (Q* proxy > 0.7)
+	QualityTier2 int `json:"qualityTier2"` // Acceptable (Q* proxy 0.4-0.7)
+	QualityTier3 int `json:"qualityTier3"` // Below rich-result threshold (< 0.4)
 }
 
 // URLScoreEntry holds a URL with a numeric score.
@@ -461,9 +464,9 @@ type RedirectStats struct {
 	TotalHops          int                 `json:"totalHops"`
 	TotalRedirects     int                 `json:"totalRedirects"`
 	// NavBoost signal risk: 302/307 redirects lose NavBoost click signals (DOJ: 13-month rolling window).
-	NavBoostAtRisk     int                 `json:"navBoostAtRisk"`
+	NavBoostAtRisk int `json:"navBoostAtRisk"`
 	// Long chains dilute NavBoost signals per hop.
-	NavBoostDiluted    int                 `json:"navBoostDiluted"`
+	NavBoostDiluted int `json:"navBoostDiluted"`
 }
 
 // LongestChain holds a redirect chain with its final URL.
@@ -563,12 +566,12 @@ type CruxURLCLS struct {
 
 // SeoFunnelStats holds the SEO funnel classification counts.
 type SeoFunnelStats struct {
-	Crawled      int     `json:"crawled"`
-	Renderable   int     `json:"renderable"`
-	Indexable    int     `json:"indexable"`
-	Visible      int     `json:"visible"`
-	Active       int     `json:"active"`
-	NonIndexable int     `json:"nonIndexable"`
+	Crawled       int     `json:"crawled"`
+	Renderable    int     `json:"renderable"`
+	Indexable     int     `json:"indexable"`
+	Visible       int     `json:"visible"`
+	Active        int     `json:"active"`
+	NonIndexable  int     `json:"nonIndexable"`
 	PctRenderable float64 `json:"pctRenderable"`
 	PctIndexable  float64 `json:"pctIndexable"`
 	PctVisible    float64 `json:"pctVisible"`
@@ -590,12 +593,12 @@ type SeoFunnelSegment struct {
 
 // AIVisibilityStats holds aggregate AI visibility metrics.
 type AIVisibilityStats struct {
-	TopByClicks      []AIVisibilityEntry `json:"topByClicks"`
-	TopQueries       []AIOverviewQuery   `json:"topQueries"`
-	PagesInAIOverview int                `json:"pagesInAiOverview"`
-	TotalAIImpressions int              `json:"totalAiImpressions"`
-	TotalAIClicks      int              `json:"totalAiClicks"`
-	AvgAICTR           float64          `json:"avgAiCtr"`
+	TopByClicks        []AIVisibilityEntry `json:"topByClicks"`
+	TopQueries         []AIOverviewQuery   `json:"topQueries"`
+	PagesInAIOverview  int                 `json:"pagesInAiOverview"`
+	TotalAIImpressions int                 `json:"totalAiImpressions"`
+	TotalAIClicks      int                 `json:"totalAiClicks"`
+	AvgAICTR           float64             `json:"avgAiCtr"`
 }
 
 // AIVisibilityEntry holds a URL with its AI visibility metrics.
@@ -703,17 +706,33 @@ type AIReadinessStats struct {
 
 // TopicalityStats holds aggregate T* alignment metrics.
 type TopicalityStats struct {
-	AvgTitleBodyOverlap    float64 `json:"avgTitleBodyOverlap"`
-	AvgTitleH1Alignment    float64 `json:"avgTitleH1Alignment"`
-	AvgTopicalConsistency  float64 `json:"avgTopicalConsistency"`
-	LowAlignmentPages      int     `json:"lowAlignmentPages"`
-	PerfectAlignmentPages  int     `json:"perfectAlignmentPages"`
+	AvgTitleBodyOverlap   float64 `json:"avgTitleBodyOverlap"`
+	AvgTitleH1Alignment   float64 `json:"avgTitleH1Alignment"`
+	AvgTopicalConsistency float64 `json:"avgTopicalConsistency"`
+	LowAlignmentPages     int     `json:"lowAlignmentPages"`
+	PerfectAlignmentPages int     `json:"perfectAlignmentPages"`
+}
+
+// AnchorCloudStats holds the most used anchor texts across the crawl
+// (served by GET /api/crawl/{id}/anchor-stats). Persisted with stats so the
+// Anchor Cloud survives restarts after page Anchors were dropped.
+type AnchorCloudStats struct {
+	Anchors     []AnchorCloudEntry `json:"anchors"`
+	TotalUnique int                `json:"totalUnique"`
+}
+
+// AnchorCloudEntry is one anchor text with its usage count.
+type AnchorCloudEntry struct {
+	Text             string `json:"text"`
+	Count            int    `json:"count"`
+	IsInternal       bool   `json:"isInternal"`
+	IsNonDescriptive bool   `json:"isNonDescriptive"`
 }
 
 // AnchorHealthStats holds aggregate anchor quality metrics.
 type AnchorHealthStats struct {
-	AvgInboundDiversity    float64 `json:"avgInboundDiversity"`
-	PagesOverOptimized     int     `json:"pagesOverOptimized"`
-	TotalGenericAnchors    int     `json:"totalGenericAnchors"`
-	TotalNakedURLAnchors   int     `json:"totalNakedUrlAnchors"`
+	AvgInboundDiversity  float64 `json:"avgInboundDiversity"`
+	PagesOverOptimized   int     `json:"pagesOverOptimized"`
+	TotalGenericAnchors  int     `json:"totalGenericAnchors"`
+	TotalNakedURLAnchors int     `json:"totalNakedUrlAnchors"`
 }

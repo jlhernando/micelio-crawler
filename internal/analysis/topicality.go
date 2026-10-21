@@ -193,31 +193,49 @@ func jaccard(a, b []string) float64 {
 //   - Patent US7260573: personalized anchor text ranking
 //
 // Source: DOJ (T* Anchors sub-signal). Confidence: CONFIRMED (structure), STRONG_PROXY (weights).
-func EnrichTopicalityAnchors(pages []*types.PageData, graph *AdjacencyGraph) {
+//
+// When pages no longer carry Anchors (dropped before storage), agg supplies the
+// inbound anchor texts collected during the crawl (bounded, count-weighted).
+func EnrichTopicalityAnchors(pages []*types.PageData, graph *AdjacencyGraph, agg *AnchorAggregator) {
 	if graph == nil || graph.N == 0 {
 		return
 	}
 
-	// Build URL -> page index
-	urlToIdx := make(map[string]int, len(pages))
-	for i, p := range pages {
-		urlToIdx[p.URL] = i
+	type weightedText struct {
+		text  string
+		count int
 	}
 
 	// Build reverse adjacency: for each page, collect anchor texts pointing to it
-	inboundAnchors := make(map[string][]string, len(pages))
+	inboundAnchors := make(map[string][]weightedText, len(pages))
 	for _, p := range pages {
 		for _, a := range p.Anchors {
 			if a.IsInternal && a.Text != "" && !a.IsNonDescriptive {
-				inboundAnchors[a.Href] = append(inboundAnchors[a.Href], a.Text)
+				inboundAnchors[a.Href] = append(inboundAnchors[a.Href], weightedText{a.Text, 1})
 			}
 		}
 	}
+	useAgg := len(inboundAnchors) == 0 && agg != nil
+	if useAgg {
+		agg.mu.Lock()
+		defer agg.mu.Unlock()
+	}
 
 	// Compute anchor-title relevance for each page
+	var aggTexts []weightedText
 	for _, p := range pages {
+		if p.Topicality == nil || p.Title == nil {
+			continue
+		}
 		anchors := inboundAnchors[p.URL]
-		if len(anchors) == 0 || p.Topicality == nil || p.Title == nil {
+		if useAgg {
+			aggTexts = aggTexts[:0]
+			agg.inboundTopicalTexts(p.URL, func(text string, count int) {
+				aggTexts = append(aggTexts, weightedText{text, count})
+			})
+			anchors = aggTexts
+		}
+		if len(anchors) == 0 {
 			continue
 		}
 
@@ -232,8 +250,8 @@ func EnrichTopicalityAnchors(pages []*types.PageData, graph *AdjacencyGraph) {
 
 		totalRelevance := 0.0
 		counted := 0
-		for _, anchorText := range anchors {
-			anchorTerms := tokenizeTerms(anchorText)
+		for _, anchor := range anchors {
+			anchorTerms := tokenizeTerms(anchor.text)
 			if len(anchorTerms) == 0 {
 				continue
 			}
@@ -243,8 +261,8 @@ func EnrichTopicalityAnchors(pages []*types.PageData, graph *AdjacencyGraph) {
 					matches++
 				}
 			}
-			totalRelevance += float64(matches) / float64(len(anchorTerms))
-			counted++
+			totalRelevance += float64(anchor.count) * float64(matches) / float64(len(anchorTerms))
+			counted += anchor.count
 		}
 		if counted > 0 {
 			p.Topicality.AnchorTitleRelevance = math.Round((totalRelevance/float64(counted))*1000) / 1000

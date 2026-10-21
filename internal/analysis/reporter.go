@@ -10,15 +10,21 @@ import (
 
 // ReportConfig holds options for report generation.
 type ReportConfig struct {
-	SeedURL                string
-	ExternalLinkResults    []types.ExternalLinkResult
-	SegmentRules           []Segment
+	SeedURL             string
+	ExternalLinkResults []types.ExternalLinkResult
+	SegmentRules        []Segment
+	// InternalLinksIter reads internal links from disk when pages were
+	// reloaded without InternalLinks; PageRank then uses the on-disk graph.
+	InternalLinksIter      func(fn func(source string, targets []string)) error
 	SitemapWarnings        []string
 	SitemapEntries         []string
 	SitemapExtensionCounts SitemapExtCounts
 	TotalSitemapURLs       int
 	GscDays                int
 	Ga4Days                int
+	// AnchorAggregator holds anchor stats collected during the crawl. Used when
+	// pages no longer carry Anchors (they are dropped before storage).
+	AnchorAggregator *AnchorAggregator
 }
 
 // SitemapExtCounts holds sitemap extension type counts.
@@ -30,6 +36,14 @@ type SitemapExtCounts struct {
 
 // GenerateReport aggregates all crawled pages into a CrawlStats summary.
 func GenerateReport(pages []*types.PageData, durationMs int64, cfg ReportConfig) types.CrawlStats {
+	stats, _ := GenerateReportWithGraph(pages, durationMs, cfg)
+	return stats
+}
+
+// GenerateReportWithGraph is GenerateReport that also returns the link graph it
+// built, so callers can reuse it (inlink index, link intelligence) instead of
+// reading every edge from disk again. Node i of the graph is pages[i].
+func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg ReportConfig) (types.CrawlStats, *AdjacencyGraph) {
 	stats := types.CrawlStats{
 		StatusCodes:         make(map[int]int),
 		DepthDistribution:   make(map[int]int),
@@ -47,7 +61,6 @@ func GenerateReport(pages []*types.PageData, durationMs int64, cfg ReportConfig)
 	// Index maps (pre-allocated with known sizes)
 	n := len(pages)
 	urlToPage := make(map[string]*types.PageData, n)
-	inlinkCount := make(map[string]int, n)
 	contentHashMap := make(map[string][]string, n/2)
 	responseTimes := make([]float64, 0, n)
 	performanceScores := make([]float64, 0, n/4)
@@ -118,10 +131,6 @@ func GenerateReport(pages []*types.PageData, durationMs int64, cfg ReportConfig)
 		// Links — use counts if arrays were stripped at load
 		if len(p.InternalLinks) > 0 {
 			stats.TotalInternalLinks += len(p.InternalLinks)
-			for _, link := range p.InternalLinks {
-				normalized := normalizeTrailingSlash(link)
-				inlinkCount[normalized]++
-			}
 		} else {
 			stats.TotalInternalLinks += p.InternalLinkCount
 		}
@@ -396,45 +405,24 @@ func GenerateReport(pages []*types.PageData, durationMs int64, cfg ReportConfig)
 		}
 	}
 
-	// Orphan pages: no internal links pointing to them (excluding seed URL).
-	// This uses raw URL matching (trailing-slash normalization only).
-	// When link intelligence is enabled, RunDeferredAnalysis replaces this
-	// with graph-derived orphans that resolve redirects (FinalURL mapping).
-	seedNorm := normalizeTrailingSlash(cfg.SeedURL)
-	for _, p := range pages {
-		if p.RobotsBlocked || p.StatusCode != 200 {
-			continue
-		}
-		normalized := normalizeTrailingSlash(p.URL)
-		isSeed := (seedNorm != "" && normalized == seedNorm) || (seedNorm == "" && p.Depth == 0)
-		if inlinkCount[normalized] == 0 && !isSeed {
-			stats.OrphanPages = append(stats.OrphanPages, p.URL)
-		}
-	}
-	stats.OrphanMethodology = "reporter"
+	// One link graph for orphans, broken-link sources, links to non-indexable
+	// pages and PageRank. Pages reloaded from disk (or stripped during the
+	// crawl) have no InternalLinks, so read edges from the disk iterator.
+	graph := buildReportGraph(pages, cfg.InternalLinksIter)
+	inDegree := graphInDegree(graph)
 
-	// Populate FoundOn for broken links (skip if InternalLinks stripped at load)
-	if len(stats.BrokenLinks) > 0 && len(pages) > 0 && len(pages[0].InternalLinks) > 0 {
-		brokenIdx := make(map[string]int, len(stats.BrokenLinks))
-		for i, bl := range stats.BrokenLinks {
-			brokenIdx[normalizeTrailingSlash(bl.URL)] = i
-		}
-		normCache := make(map[string]string, 256)
-		for _, p := range pages {
-			for _, link := range p.InternalLinks {
-				norm, ok := normCache[link]
-				if !ok {
-					norm = normalizeTrailingSlash(link)
-					normCache[link] = norm
-				}
-				if idx, ok := brokenIdx[norm]; ok {
-					if len(stats.BrokenLinks[idx].FoundOn) < 10 {
-						stats.BrokenLinks[idx].FoundOn = append(stats.BrokenLinks[idx].FoundOn, p.URL)
-					}
-				}
-			}
-		}
+	// Orphan pages: 200 pages with no internal links pointing to them
+	// (excluding the seed). The graph resolves trailing slashes and redirects.
+	// When no link data is available at all, skip rather than flag every page.
+	if graphHasLinkData(graph, pages) {
+		stats.OrphanPages = graphOrphanPages(graph, inDegree, pages, cfg.SeedURL)
+		stats.OrphanMethodology = "graph"
+	} else {
+		stats.OrphanMethodology = "unavailable"
 	}
+
+	// Populate FoundOn for broken links from graph in-edges (capped at 10).
+	fillBrokenLinkSources(stats.BrokenLinks, graph)
 
 	// Broken external links
 	for _, ext := range cfg.ExternalLinkResults {
@@ -456,6 +444,7 @@ func GenerateReport(pages []*types.PageData, durationMs int64, cfg ReportConfig)
 
 	// Link analysis
 	stats.LinkAnalysis = buildLinkAnalysis(pages)
+	stats.LinkAnalysis.LinksToNonIndexable = linksToNonIndexableFromGraph(graph, pages)
 
 	// Readability stats
 	stats.ReadabilityStats = buildReadabilityStats(pages)
@@ -509,7 +498,7 @@ func GenerateReport(pages []*types.PageData, durationMs int64, cfg ReportConfig)
 	}
 
 	// PageRank
-	stats.PageRankScores = ComputePageRank(pages, PageRankOptions{})
+	stats.PageRankScores = ComputePageRankGraph(graph, PageRankOptions{})
 
 	// Delegate to builders
 	stats.RedirectStats = buildRedirectStats(pages)
@@ -553,11 +542,44 @@ func GenerateReport(pages []*types.PageData, durationMs int64, cfg ReportConfig)
 		stats.NonDescriptiveAnchors = stats.NonDescriptiveAnchors[:50]
 	}
 
-	// Anchor health (Patent US7533092, DOJ BayesSpam)
-	buildAnchorHealth(pages, urlToPage)
+	// Anchor health (Patent US7533092, DOJ BayesSpam) and Anchor Cloud.
+	// Prefer in-memory Anchors; fall back to the crawl-time aggregator.
+	if anyAnchors(pages) || cfg.AnchorAggregator == nil {
+		buildAnchorHealth(pages, urlToPage)
+		stats.AnchorCloud = BuildAnchorCloud(pages)
+		if len(stats.AnchorCloud.Anchors) == 0 {
+			stats.AnchorCloud = nil
+		}
+	} else {
+		if len(stats.NonDescriptiveAnchors) == 0 {
+			stats.NonDescriptiveAnchors = cfg.AnchorAggregator.NonDescriptiveAnchors()
+		}
+		cfg.AnchorAggregator.ApplyAnchorHealth(pages)
+		stats.AnchorCloud = cfg.AnchorAggregator.AnchorCloud()
+	}
 	stats.AnchorHealthStats = buildAnchorHealthStats(pages)
 
-	return stats
+	return stats, graph
+}
+
+// anyAnchors reports whether any page still carries its Anchors.
+func anyAnchors(pages []*types.PageData) bool {
+	for _, p := range pages {
+		if len(p.Anchors) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// anyInternalLinks reports whether any page still carries its InternalLinks.
+func anyInternalLinks(pages []*types.PageData) bool {
+	for _, p := range pages {
+		if len(p.InternalLinks) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // ── Inline stats builders (small, specific to GenerateReport flow) ──
@@ -587,6 +609,12 @@ func buildLinkAnalysis(pages []*types.PageData) types.LinkAnalysis {
 					nofollowSet[a.Href] = true
 				}
 			}
+			if len(p.Anchors) == 0 && p.NofollowIntLinks > 0 {
+				// Anchors dropped before storage: use the extraction-time count.
+				n := min(p.NofollowIntLinks, len(p.InternalLinks))
+				nofollowed += n
+				followed -= n
+			}
 			for _, link := range p.InternalLinks {
 				if nofollowSet[link] {
 					nofollowed++
@@ -602,8 +630,10 @@ func buildLinkAnalysis(pages []*types.PageData) types.LinkAnalysis {
 				}
 			}
 		} else {
-			// Links stripped — count all as followed (nofollow ratio unavailable)
-			followed += p.InternalLinkCount
+			// Links stripped — use the extraction-time nofollow count.
+			n := min(p.NofollowIntLinks, p.InternalLinkCount)
+			nofollowed += n
+			followed += p.InternalLinkCount - n
 		}
 	}
 	if len(linksToNonIndexable) > 50 {

@@ -38,6 +38,7 @@ type CrawlResult struct {
 	ResourceRefs          map[string][]types.ResourceEntry
 	TransferSizes         map[string]int64
 	NgramAnalyzer         *analysis.NgramAnalyzer
+	AnchorAggregator      *analysis.AnchorAggregator
 	Pages                 []*types.PageData
 	DeadLetterQueue       []types.DeadLetterEntry
 	DiscoveredSitemapURLs []string
@@ -243,6 +244,7 @@ func CrawlWithOptions(ctx context.Context, config types.CrawlConfig, onProgress 
 		ResourceRefs:          resourceRefs,
 		TransferSizes:         s.transferSizes,
 		NgramAnalyzer:         s.ngramAnalyzer,
+		AnchorAggregator:      s.anchorAgg,
 		DeadLetterQueue:       dlqEntries,
 		DiscoveredSitemapURLs: s.discoveredSitemapURLs,
 		ChangedPages:          changedPages,

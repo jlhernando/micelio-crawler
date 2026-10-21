@@ -171,7 +171,7 @@ func TestBuildInlinkIndex(t *testing.T) {
 	idx := buildInlinkIndex(pages)
 
 	// Home links to about and blog
-	sources := idx["https://example.com/about"]
+	sources := idx.Sources("https://example.com/about")
 	if len(sources) == 0 {
 		t.Error("expected inlinks for /about")
 	}

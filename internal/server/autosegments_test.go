@@ -48,19 +48,20 @@ func TestBackfillAutoSegmentsUsesConfigRules(t *testing.T) {
 	}
 }
 
-func TestApplyGraphInlinks(t *testing.T) {
-	g := &analysis.AdjacencyGraph{
-		URLIndex: map[string]int{"a": 0, "b": 1, "c": 2},
-		URLs:     []string{"a", "b", "c"},
-		Offsets:  []int32{0, 2, 3, 4},
-		Edges:    []int32{1, 2, 2, 2}, // a->b, a->c, b->c, c->c (self link ignored)
-		N:        3,
+func TestRecomputeFlatPageRank(t *testing.T) {
+	pages := []*types.PageData{{URL: "a", PageRank: 10}, {URL: "b", PageRank: 10}, {URL: "c", PageRank: 10}}
+	g := analysis.BuildAdjacencyListFromDisk(pages, func(fn func(string, []string)) error {
+		fn("a", []string{"b", "c"})
+		fn("b", []string{"c"})
+		return nil
+	})
+	if recomputeFlatPageRank(pages, g) == nil {
+		t.Fatal("flat PageRank should be recomputed")
 	}
-	pages := []*types.PageData{{URL: "a"}, {URL: "b"}, {URL: "c"}, {URL: "d", Inlinks: 5}}
-	if !applyGraphInlinks(pages, g) {
-		t.Fatal("expected changes")
+	if !(pages[2].PageRank > pages[1].PageRank && pages[1].PageRank > pages[0].PageRank) {
+		t.Errorf("PageRank order wrong: a=%v b=%v c=%v", pages[0].PageRank, pages[1].PageRank, pages[2].PageRank)
 	}
-	if pages[0].Inlinks != 0 || pages[1].Inlinks != 1 || pages[2].Inlinks != 2 || pages[3].Inlinks != 5 {
-		t.Errorf("inlinks = %d %d %d %d, want 0 1 2 5", pages[0].Inlinks, pages[1].Inlinks, pages[2].Inlinks, pages[3].Inlinks)
+	if recomputeFlatPageRank(pages, g) != nil {
+		t.Error("varied PageRank must not be recomputed")
 	}
 }

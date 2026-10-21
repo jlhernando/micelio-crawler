@@ -65,6 +65,8 @@
   let baseStats = $state<Record<string, unknown> | null>(null);
   let basePageCount = $state(0);
   let filteredStatsLoading = $state(false);
+  // True when stats hold a template subset merged over the whole-site stats.
+  let templateScoped = $state(false);
   // Preserve original template distribution so pills don't disappear when filtered
   let originalTemplateDist = $state<Record<string, number> | null>(null);
 
@@ -88,6 +90,7 @@
         stats = baseStats;
         pageCount = basePageCount;
       }
+      templateScoped = false;
     } else {
       // Save original stats if not saved yet
       if (!baseStats && stats) {
@@ -96,8 +99,11 @@
       }
       filteredStatsLoading = true;
       api.getFilteredStats(id, template).then((data) => {
-        stats = data.stats as Record<string, unknown>;
+        // The server only returns metrics it can compute for the subset.
+        // Everything else keeps its whole-site value (see banner below).
+        stats = { ...(baseStats || {}), ...(data.stats as Record<string, unknown>) };
         pageCount = data.pageCount as number;
+        templateScoped = true;
         filteredStatsLoading = false;
       }).catch(() => {
         filteredStatsLoading = false;
@@ -226,6 +232,12 @@
   {:else if stats}
     <!-- Summary Header -->
     <SummaryHeader {stats} {pageCount} onFilter={handleSummaryFilter} activeTemplate={initialFilterTemplate} templateDistribution={originalTemplateDist} />
+    {#if templateScoped && initialFilterTemplate !== 'all'}
+      <p class="rounded-md border border-border bg-surface-2 px-4 py-2 text-xs text-fg-2" data-testid="template-scope-note">
+        Showing <strong>{initialFilterTemplate}</strong> pages for counts, status codes, indexability, titles, meta, H1, response times, depth, thin content, orphans, broken links and PageRank.
+        Images, Open Graph, structured data, canonicals, duplicates, link intelligence and integrations still show whole-site values.
+      </p>
+    {/if}
 
     <!-- Tab Navigation -->
     <div class="section-tabs">

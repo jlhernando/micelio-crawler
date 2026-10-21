@@ -45,11 +45,15 @@
       });
     }
 
-    const brokenExternal = (stats.brokenExternalLinks as { url: string; statusCode: number }[]) || [];
+    const brokenExternal = (stats.brokenExternalLinks as { url: string; statusCode: number; error?: string; foundOn?: string[] }[]) || [];
     if (brokenExternal.length > 0) {
       cards.push({
         id: 'broken-external', label: 'Broken External Links', count: brokenExternal.length, severity: 'critical',
-        details: brokenExternal.slice(0, 50).map(l => ({ url: l.url, info: `Status: ${l.statusCode}` })),
+        details: brokenExternal.slice(0, 50).map(l => {
+          const status = l.statusCode ? `Status: ${l.statusCode}` : `Error: ${l.error || 'request failed'}`;
+          const source = l.foundOn?.length ? ` · linked from ${l.foundOn[0]}${l.foundOn.length > 1 ? ` (+${l.foundOn.length - 1})` : ''}` : '';
+          return { url: l.url, info: status + source };
+        }),
       });
     }
 

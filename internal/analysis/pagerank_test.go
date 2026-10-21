@@ -105,3 +105,50 @@ func TestPageRankSelfLinksIgnored(t *testing.T) {
 		t.Errorf("B score = %f, want 10", result["https://example.com/b"])
 	}
 }
+
+func TestPageRankGraphMatchesInMemory(t *testing.T) {
+	pages := []*types.PageData{
+		{URL: "https://ex.com/", InternalLinks: []string{"https://ex.com/a", "https://ex.com/b"}},
+		{URL: "https://ex.com/a", InternalLinks: []string{"https://ex.com/b", "https://ex.com/a"}},
+		{URL: "https://ex.com/b", InternalLinks: []string{"https://ex.com/"}},
+		{URL: "https://ex.com/c"},
+	}
+	want := ComputePageRank(pages, PageRankOptions{})
+	links := map[string][]string{}
+	for _, p := range pages {
+		links[p.URL] = p.InternalLinks
+		p.InternalLinks = nil
+	}
+	g := BuildAdjacencyListFromDisk(pages, func(fn func(string, []string)) error {
+		for src, targets := range links {
+			fn(src, targets)
+		}
+		return nil
+	})
+	got := ComputePageRankGraph(g, PageRankOptions{})
+	for u, w := range want {
+		if got[u] != w {
+			t.Errorf("%s: graph PageRank %.2f, in-memory %.2f", u, got[u], w)
+		}
+	}
+	if got["https://ex.com/b"] == got["https://ex.com/c"] {
+		t.Error("PageRank should differ between a linked page and an orphan")
+	}
+}
+
+func TestGenerateReportUsesDiskLinksForPageRank(t *testing.T) {
+	pages := []*types.PageData{
+		{URL: "https://ex.com/", StatusCode: 200},
+		{URL: "https://ex.com/a", StatusCode: 200},
+		{URL: "https://ex.com/b", StatusCode: 200},
+	}
+	iter := func(fn func(string, []string)) error {
+		fn("https://ex.com/", []string{"https://ex.com/a", "https://ex.com/b"})
+		fn("https://ex.com/a", []string{"https://ex.com/b"})
+		return nil
+	}
+	stats := GenerateReport(pages, 0, ReportConfig{SeedURL: "https://ex.com/", InternalLinksIter: iter})
+	if stats.PageRankScores["https://ex.com/b"] <= stats.PageRankScores["https://ex.com/"] {
+		t.Errorf("expected /b (2 inlinks) above / (0 inlinks): %v", stats.PageRankScores)
+	}
+}

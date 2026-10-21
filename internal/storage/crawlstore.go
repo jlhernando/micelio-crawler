@@ -415,8 +415,10 @@ func (s *CrawlStore) GetAllPagesWithProgress(ctx context.Context, onProgress fun
 				page.ExternalLinks = nil
 				page.SnippetResults = nil
 				page.JSErrors = nil
-				page.SchemaValidation = nil
-				page.RenderDiffs = nil
+				// SchemaValidation and RenderDiffs are kept: they are small
+				// (bounded per page) and GenerateReport needs them for
+				// SchemaValidationStats / RenderCompareStats. RunCoreAnalysis
+				// and stripPagesForCache release them after the report.
 				page.CustomExtractions = nil
 				pages = append(pages, &page)
 				loaded++

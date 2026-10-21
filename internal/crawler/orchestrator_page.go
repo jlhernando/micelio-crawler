@@ -309,8 +309,11 @@ func (s *crawlSession) enrichPage(ctx context.Context, e types.QueueEntry, resul
 		} else if renderResult != nil && renderResult.HTML != "" {
 			renderedHTML = renderResult.HTML
 			diffs, diffErr := browser.CompareRender(result.HTML, renderResult.HTML)
-			if diffErr == nil && len(diffs) > 0 {
-				page.RenderDiffs = diffs
+			if diffErr == nil {
+				page.JSRendered = true
+				if len(diffs) > 0 {
+					page.RenderDiffs = diffs
+				}
 			}
 			if len(renderResult.JSErrors) > 0 {
 				page.JSErrors = renderResult.JSErrors

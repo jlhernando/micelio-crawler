@@ -477,6 +477,13 @@ func GenerateReport(pages []*types.PageData, durationMs int64, cfg ReportConfig)
 			}
 		}
 	}
+	// Template clusters: unclassified pages inherit their DOM cluster's template.
+	// Skipped when pages already carry segments (filtered re-reports on a subset).
+	freshSegments := needsAutoSegments(pages)
+	var groupLabels map[string]string
+	if freshSegments {
+		groupLabels = PropagateTemplateClusters(pages)
+	}
 	stats.TemplateTypeDistribution = BuildTemplateStats(pages)
 
 	// URL structure stats
@@ -512,6 +519,13 @@ func GenerateReport(pages []*types.PageData, durationMs int64, cfg ReportConfig)
 	stats.Ga4Stats = buildGa4Stats(pages, cfg.Ga4Days)
 	stats.PlausibleStats = buildPlausibleStats(pages, cfg.Ga4Days)
 	ClassifyURLs(pages)
+	if freshSegments {
+		AssignAutoSegments(pages, groupLabels, AutoSegmentOptions{Rules: cfg.SegmentRules, PageRank: stats.PageRankScores})
+	}
+	stats.AutoSegmentStats = BuildAutoSegmentStats(pages)
+	if low, high := wordCountTerciles(pages); low > 0 {
+		stats.TextAmountThresholds = []int{low, high}
+	}
 	stats.SeoFunnelStats = buildSeoFunnelStats(pages)
 	stats.AIVisibilityStats = buildAIVisibilityStats(pages)
 	stats.RenderCompareStats = buildRenderCompareStats(pages)

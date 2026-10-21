@@ -119,3 +119,29 @@ type SimhashItem struct {
 	URL         string
 	Fingerprint uint64
 }
+
+// SimhashTokens computes a 64-bit SimHash over a set of pre-built tokens.
+// Callers dedupe tokens first when only presence (not frequency) should count.
+func SimhashTokens(tokens []string) uint64 {
+	if len(tokens) == 0 {
+		return 0
+	}
+	var v [64]int
+	for _, t := range tokens {
+		hash := hashToken(t)
+		for bit := 0; bit < 64; bit++ {
+			if (hash>>uint(bit))&1 == 1 {
+				v[bit]++
+			} else {
+				v[bit]--
+			}
+		}
+	}
+	var fingerprint uint64
+	for bit := 0; bit < 64; bit++ {
+		if v[bit] > 0 {
+			fingerprint |= 1 << uint(bit)
+		}
+	}
+	return fingerprint
+}

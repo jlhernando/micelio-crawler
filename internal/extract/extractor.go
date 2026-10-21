@@ -90,6 +90,13 @@ func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
 
 	// Links
 	page.InternalLinks, page.ExternalLinks, page.Anchors = extractLinks(doc, baseURL)
+	page.LinkZones = countInternalLinkZones(page.Anchors)
+
+	// Page language and template skeleton (used by automatic segmentation)
+	if lang, ok := doc.Find("html").First().Attr("lang"); ok {
+		page.HTMLLang = strings.TrimSpace(lang)
+	}
+	page.DOMFingerprint = domFingerprint(doc)
 
 	// Images
 	page.Images = extractImages(doc, baseURL)
@@ -151,6 +158,19 @@ func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
 
 	// Ad detail signals (classifieds/marketplace ad detail vs e-commerce product)
 	page.AdDetailSignals = extractAdDetailSignals(doc)
+
+	// Commerce signals: a single buy button marks a product page; a grid of
+	// product cards or many buy buttons marks a product listing.
+	// Prices and buy buttons are only counted outside product cards, so a
+	// product page with a "related products" strip still reads as a product.
+	buy, items, prices := extractCommerceSignals(doc)
+	switch {
+	case buy >= 3 || (items >= 3 && buy == 0 && prices == 0):
+		page.ListingSignals = min(page.ListingSignals+2, 5)
+	case (buy > 0 && buy <= 2) || (prices > 0 && prices <= 3):
+		// A mini-cart total or sticky buy bar adds one more of each.
+		page.ProductSignals = buy + prices
+	}
 
 	// E-E-A-T signals (DOJ, Patent US9697259)
 	page.EEAT = extractEEAT(doc, page.StructuredData, page.Anchors, page.ExternalLinks, baseURL)
@@ -274,6 +294,17 @@ func extractLinks(doc *goquery.Document, baseURL string) (internal []string, ext
 	return
 }
 
+// countInternalLinkZones tallies internal links by the page region they sit in.
+func countInternalLinkZones(anchors []types.AnchorData) *types.LinkZoneCounts {
+	zones := &types.LinkZoneCounts{}
+	for i := range anchors {
+		if anchors[i].IsInternal {
+			zones.Add(anchors[i].Position)
+		}
+	}
+	return zones
+}
+
 var nonDescriptivePatterns = regexp.MustCompile(`(?i)^(click here|here|read more|more|learn more|link|this|go|see more|details|continue|next|previous|download|visit|open|view|source|full article|full story)$`)
 
 func isNonDescriptiveAnchor(text string) bool {
@@ -286,6 +317,12 @@ func isNonDescriptiveAnchor(text string) bool {
 func detectLinkPosition(s *goquery.Selection) types.LinkPosition {
 	for p := s.Parent(); p.Length() > 0; p = p.Parent() {
 		tag := goquery.NodeName(p)
+		// Class/id hints first: themes mark breadcrumbs, comment lists and
+		// related-post blocks inside nav/article elements, and often build
+		// footers and sidebars without semantic tags.
+		if pos, ok := zoneFromClassID(p); ok {
+			return pos
+		}
 		if tag == "nav" {
 			return types.LinkPosNavigation
 		}
@@ -318,6 +355,38 @@ func detectLinkPosition(s *goquery.Selection) types.LinkPosition {
 		}
 	}
 	return types.LinkPosOther
+}
+
+// zoneHints maps class/id substrings to link zones, most specific first.
+var zoneHints = []struct {
+	pos   types.LinkPosition
+	hints []string
+}{
+	{types.LinkPosBreadcrumb, []string{"breadcrumb"}},
+	{types.LinkPosComments, []string{"comment", "disqus"}},
+	{types.LinkPosRelated, []string{"related", "recommend", "similar-", "upsell", "cross-sell", "crosssell", "also-like", "you-may-like"}},
+	{types.LinkPosSidebar, []string{"sidebar", "widget-area"}},
+	{types.LinkPosFooter, []string{"footer"}},
+	{types.LinkPosNavigation, []string{"navbar", "main-menu", "nav-menu", "megamenu", "mega-menu", "main-nav", "site-nav"}},
+}
+
+// zoneFromClassID infers a link zone from an element's class, id, or aria-label.
+func zoneFromClassID(s *goquery.Selection) (types.LinkPosition, bool) {
+	class, _ := s.Attr("class")
+	id, _ := s.Attr("id")
+	label, _ := s.Attr("aria-label")
+	if class == "" && id == "" && label == "" {
+		return "", false
+	}
+	attrs := strings.ToLower(class + " " + id + " " + label)
+	for _, z := range zoneHints {
+		for _, h := range z.hints {
+			if strings.Contains(attrs, h) {
+				return z.pos, true
+			}
+		}
+	}
+	return "", false
 }
 
 // --- Images ---

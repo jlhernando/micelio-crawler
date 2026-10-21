@@ -262,6 +262,9 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 			Inlinks:           p.Inlinks,
 			PageRank:          p.PageRank,
 			TruncatedElements: p.TruncatedElements,
+			AutoSegments:      p.AutoSegments,
+			Segments:          p.Segments,
+			LinkZones:         p.LinkZones,
 		}
 	}
 	debug.FreeOSMemory()

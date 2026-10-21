@@ -80,6 +80,10 @@ type PageData struct {
 	Headings           HeadingData             `json:"headings"`
 	Anchors            []AnchorData            `json:"anchors,omitempty"`
 	Segments           []string                `json:"segments,omitempty"`
+	AutoSegments       *PageSegments           `json:"autoSegments,omitempty"`
+	LinkZones          *LinkZoneCounts         `json:"linkZones,omitempty"`
+	HTMLLang           string                  `json:"htmlLang,omitempty"`
+	DOMFingerprint     uint64                  `json:"domFingerprint,omitempty"` // simhash of the main-content tag/class skeleton
 	RedirectChain      []RedirectHop           `json:"redirectChain,omitempty"`
 	StructuredData     []StructuredDataEntry   `json:"structuredData,omitempty"`
 	Hreflang           []HreflangEntry         `json:"hreflang,omitempty"`
@@ -101,9 +105,10 @@ type PageData struct {
 	Inlinks            int                     `json:"inlinks,omitempty"`
 	PageRank           float64                 `json:"pageRank,omitempty"`
 	StatusCode         int                     `json:"statusCode"`
-	ListingSignals     int                     `json:"listingSignals,omitempty"`   // count of HTML elements matching listing/grid/results patterns
-	AdDetailSignals    int                     `json:"adDetailSignals,omitempty"`  // net score: ad detail signals minus e-commerce signals
-	OriginalityScore   int                     `json:"originalityScore,omitempty"` // 0-127, proxy for Google's OriginalContentScore (Leak)
+	ListingSignals     int                     `json:"listingSignals,omitempty"`    // count of HTML elements matching listing/grid/results patterns
+	AdDetailSignals    int                     `json:"adDetailSignals,omitempty"`   // net score: ad detail signals minus e-commerce signals
+	ProductSignals     int                     `json:"productSignals,omitempty"`    // own price or buy button outside product cards
+	OriginalityScore   int                     `json:"originalityScore,omitempty"`  // 0-127, proxy for Google's OriginalContentScore (Leak)
 	TruncatedElements  []string                `json:"truncatedElements,omitempty"` // SEO elements beyond Googlebot's 2MB cutoff
 	BodySize           int64                   `json:"bodySize,omitempty"`          // uncompressed HTML body size in bytes
 	IsSoft404          bool                    `json:"isSoft404,omitempty"`

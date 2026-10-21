@@ -43,6 +43,12 @@ var (
 	h1LegalRe   = regexp.MustCompile(`(?i)\b(privacy|terms|legal|disclaimer|cookie)\b`)
 )
 
+// templatePriority breaks score ties, most specific template first.
+var templatePriority = []string{
+	TemplateProduct, TemplateAdDetail, TemplateFAQ, TemplateContact, TemplateLegal,
+	TemplateLogin, TemplateSearch, TemplateListing, TemplateArticle, TemplateHomepage,
+}
+
 // DetectTemplateType classifies a page into a template type using weighted heuristic scoring.
 func DetectTemplateType(page *types.PageData, seedURL string) string {
 	scores := map[string]int{
@@ -206,6 +212,12 @@ func DetectTemplateType(page *types.PageData, seedURL string) string {
 		scores[TemplateAdDetail] -= 2
 	}
 
+	// Own price or buy button outside product cards (weight 4): stronger than
+	// URL patterns like /shop/ that both listings and products use.
+	if page.ProductSignals > 0 {
+		scores[TemplateProduct] += 4
+	}
+
 	// Ad detail content heuristic: moderate text + many images = typical ad page
 	if page.WordCount >= 100 && page.WordCount <= 800 && len(page.Images) >= 5 {
 		scores[TemplateAdDetail] += 1
@@ -261,11 +273,12 @@ func DetectTemplateType(page *types.PageData, seedURL string) string {
 		}
 	}
 
-	// Find best
+	// Find best. Iterate in a fixed priority order so ties resolve the same
+	// way on every run (map iteration order is random).
 	bestType := TemplateOther
 	bestScore := 0
-	for tpl, score := range scores {
-		if score > bestScore {
+	for _, tpl := range templatePriority {
+		if score := scores[tpl]; score > bestScore {
 			bestScore = score
 			bestType = tpl
 		}

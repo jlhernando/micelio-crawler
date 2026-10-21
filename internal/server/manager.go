@@ -631,6 +631,12 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		// Assign PageRank scores to individual pages for the /pages API
 		assignPageRankScores(pages, crawlStats.PageRankScores)
 
+		// Inlink counts feed segment stats and the /pages API, so compute them
+		// before stats are serialized.
+		inlinkIdx := buildInlinkIndex(pages)
+		assignInlinksFromIndex(pages, inlinkIdx)
+		refreshAutoSegmentStats(pages, &crawlStats)
+
 		// Evaluate alert rules against crawl stats
 		crawlStats.AlertSummary = alerts.Evaluate(&crawlStats)
 		if crawlStats.AlertSummary != nil {
@@ -666,8 +672,6 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		anchorStats := buildAnchorStats(pages)
 		dirTree := buildDirectoryTree(pages)
 		tmplTypes := collectTemplateTypes(pages)
-		inlinkIdx := buildInlinkIndex(pages)
-		assignInlinksFromIndex(pages, inlinkIdx)
 
 		// Build page_index for instant merge lookups (before stripping)
 		if crawlStore != nil {
@@ -812,6 +816,8 @@ func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageDa
 
 	// Run deferred analysis (link intelligence + embeddings)
 	graph := analysis.RunDeferredAnalysis(m.ctx, pages, cfg, &crawlStats)
+	// Link intelligence adds graph in-degree; refresh segment inlink averages.
+	refreshAutoSegmentStats(pages, &crawlStats)
 
 	// Convert updated stats to map for JSON API
 	updatedData, err := json.Marshal(crawlStats)
@@ -933,6 +939,10 @@ func (m *CrawlManager) GetOrLoadResults(crawlID string) *CrawlResults {
 			tmplTypes = collectTemplateTypes(pages)
 			inlinkIdx = buildInlinkIndex(pages)
 			assignInlinksFromIndex(pages, inlinkIdx)
+			for k, v := range backfillAutoSegments(pages, job.Config) {
+				statsMap[k] = v
+			}
+			tmplTypes = collectTemplateTypes(pages)
 			stripPagesForCache(pages)
 			// Build adjacency graph from DB (pages' InternalLinks were already
 			// stripped by GetAllPages, so we read edges directly from the DB).
@@ -942,6 +952,9 @@ func (m *CrawlManager) GetOrLoadResults(crawlID string) *CrawlResults {
 					return cs2.IterateInternalLinks(fn)
 				})
 				cs2.Close()
+			}
+			if seg := segmentStatsAfterGraph(pages, graph); seg != nil {
+				statsMap["autoSegmentStats"] = seg
 			}
 
 			// Backfill: recompute orphans from graph inDegree for old crawls
@@ -1108,9 +1121,24 @@ func (m *CrawlManager) loadPagesInBackground(ctx context.Context, crawlID string
 	// Pre-compute aggregations before stripping
 	anchorStats := buildAnchorStats(pages)
 	dirTree := buildDirectoryTree(pages)
-	tmplTypes := collectTemplateTypes(pages)
 	inlinkIdx := buildInlinkIndex(pages)
 	assignInlinksFromIndex(pages, inlinkIdx)
+
+	// Automatic segments are not stored with pages; recompute on every load.
+	var jobConfig map[string]interface{}
+	if job, err := m.store.GetCrawlJob(crawlID); err == nil && job != nil {
+		jobConfig = job.Config
+	}
+	if segStats := backfillAutoSegments(pages, jobConfig); segStats != nil {
+		result.mu.Lock()
+		if result.Stats != nil {
+			for k, v := range segStats {
+				result.Stats[k] = v
+			}
+		}
+		result.mu.Unlock()
+	}
+	tmplTypes := collectTemplateTypes(pages)
 
 	// Build page_index for instant merge if it doesn't exist yet
 	if result.DBPath != "" {
@@ -1138,6 +1166,13 @@ func (m *CrawlManager) loadPagesInBackground(ctx context.Context, crawlID string
 			})
 			csGraph.Close()
 		}
+	}
+	if seg := segmentStatsAfterGraph(pages, graph); seg != nil {
+		result.mu.Lock()
+		if result.Stats != nil {
+			result.Stats["autoSegmentStats"] = seg
+		}
+		result.mu.Unlock()
 	}
 
 	// Backfill: recompute orphans from graph inDegree for old crawls.

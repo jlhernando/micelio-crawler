@@ -204,6 +204,10 @@ type CrawlStats struct {
 	TitleTooLongCount        int                    `json:"titleTooLongCount"`
 	TitleTooShortCount       int                    `json:"titleTooShortCount"`
 	DescriptionTooLongCount  int                    `json:"descriptionTooLongCount"`
+
+	// Automatic segmentation (no user rules): per-dimension value breakdown.
+	AutoSegmentStats     []SegmentDimensionStats `json:"autoSegmentStats,omitempty"`
+	TextAmountThresholds []int                   `json:"textAmountThresholds,omitempty"` // [low, high] word-count cut points
 }
 
 // SearchStat holds found/total for custom search.

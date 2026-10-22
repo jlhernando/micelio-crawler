@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
@@ -93,13 +94,13 @@ func NewRenderer(proxy string, cfg ...RenderConfig) *Renderer {
 // waitForDOMStability polls document.body.innerHTML.length until stable.
 // Requires 2 consecutive stable intervals (3 matching measurements) to handle
 // phased SPA rendering where the DOM briefly stabilizes between render phases.
-func waitForDOMStability() chromedp.ActionFunc {
-	return func(ctx context.Context) error {
+func waitForDOMStability() chromedp.Action[chromedp.Void] {
+	return chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
 		// Wait for document.readyState === "complete"
 		deadline := time.After(5 * time.Second)
 		for {
-			var readyState string
-			if err := chromedp.Evaluate(`document.readyState`, &readyState).Do(ctx); err != nil {
+			readyState, err := chromedp.Evaluate[string](`document.readyState`)(ctx, t)
+			if err != nil {
 				return nil // best-effort
 			}
 			if readyState == "complete" {
@@ -122,8 +123,8 @@ func waitForDOMStability() chromedp.ActionFunc {
 				return ctx.Err()
 			case <-time.After(300 * time.Millisecond):
 			}
-			var curLen int64
-			if err := chromedp.Evaluate(`document.body ? document.body.innerHTML.length : 0`, &curLen).Do(ctx); err != nil {
+			curLen, err := chromedp.Evaluate[int64](`document.body ? document.body.innerHTML.length : 0`)(ctx, t)
+			if err != nil {
 				return nil
 			}
 			if i > 0 && curLen == prevLen {
@@ -137,19 +138,24 @@ func waitForDOMStability() chromedp.ActionFunc {
 			prevLen = curLen
 		}
 		return nil // max iterations, proceed
-	}
+	})
 }
 
 // setupResourceBlocking enables fetch domain interception to block images/fonts/analytics.
-func setupResourceBlocking() chromedp.ActionFunc {
-	return func(ctx context.Context) error {
-		if err := fetch.Enable().WithPatterns([]*fetch.RequestPattern{
-			{RequestStage: fetch.RequestStageRequest},
-		}).Do(ctx); err != nil {
+func setupResourceBlocking() chromedp.Action[chromedp.Void] {
+	return chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+		// Subscribe before enabling so no paused request is missed.
+		events := cdp.Events(ctx, t, fetch.RequestPaused)
+		if _, err := cdp.Call(ctx, t, fetch.Enable, fetch.EnableParams{
+			Patterns: []*fetch.RequestPattern{{RequestStage: fetch.RequestStageRequest}},
+		}); err != nil {
 			return nil // non-fatal
 		}
-		chromedp.ListenTarget(ctx, func(ev interface{}) {
-			if req, ok := ev.(*fetch.EventRequestPaused); ok {
+		go func() {
+			for req, err := range events {
+				if err != nil {
+					return
+				}
 				go func() {
 					defer func() { recover() }()
 					blocked := false
@@ -179,25 +185,45 @@ func setupResourceBlocking() chromedp.ActionFunc {
 						}
 					}
 					if blocked {
-						_ = fetch.FailRequest(req.RequestID, network.ErrorReasonBlockedByClient).Do(ctx)
+						_, _ = cdp.Call(ctx, t, fetch.FailRequest, fetch.FailRequestParams{
+							RequestID: req.RequestID, ErrorReason: network.ErrorReasonBlockedByClient,
+						})
 					} else {
-						_ = fetch.ContinueRequest(req.RequestID).Do(ctx)
+						_, _ = cdp.Call(ctx, t, fetch.ContinueRequest, fetch.ContinueRequestParams{RequestID: req.RequestID})
 					}
 				}()
 			}
-		})
+		}()
 		return nil
-	}
+	})
+}
+
+// setUserAgent overrides the tab's user agent when one is given.
+func setUserAgent(userAgent string) chromedp.Action[chromedp.Void] {
+	return chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+		if userAgent == "" {
+			return nil
+		}
+		_, err := cdp.Call(ctx, t, emulation.SetUserAgentOverride, emulation.SetUserAgentOverrideParams{UserAgent: userAgent})
+		return err
+	})
 }
 
 // collectJSErrors enables runtime domain and collects console errors.
-func collectJSErrors(errors *[]string, mu *sync.Mutex) chromedp.ActionFunc {
-	return func(ctx context.Context) error {
-		if err := runtime.Enable().Do(ctx); err != nil {
+func collectJSErrors(errors *[]string, mu *sync.Mutex) chromedp.Action[chromedp.Void] {
+	return chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+		events := cdp.Events(ctx, t, runtime.ExceptionThrown)
+		if _, err := cdp.Call(ctx, t, runtime.Enable, cdp.Empty{}); err != nil {
 			return nil // non-fatal
 		}
-		chromedp.ListenTarget(ctx, func(ev interface{}) {
-			if e, ok := ev.(*runtime.EventExceptionThrown); ok && e.ExceptionDetails != nil {
+		go func() {
+			for e, err := range events {
+				if err != nil {
+					return
+				}
+				if e.ExceptionDetails == nil {
+					continue
+				}
 				msg := e.ExceptionDetails.Text
 				if e.ExceptionDetails.Exception != nil && e.ExceptionDetails.Exception.Description != "" {
 					msg = e.ExceptionDetails.Exception.Description
@@ -210,9 +236,9 @@ func collectJSErrors(errors *[]string, mu *sync.Mutex) chromedp.ActionFunc {
 					mu.Unlock()
 				}
 			}
-		})
+		}()
 		return nil
-	}
+	})
 }
 
 // RenderPage navigates to a URL and returns the rendered HTML after JS execution.
@@ -226,29 +252,26 @@ func (r *Renderer) RenderPage(ctx context.Context, pageURL, userAgent string) (*
 	var jsErrors []string
 	var errorMu sync.Mutex
 
-	actions := []chromedp.Action{
+	actions := []chromedp.Action[chromedp.Void]{
 		chromedp.EmulateViewport(1920, 1080),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			if userAgent != "" {
-				return emulation.SetUserAgentOverride(userAgent).Do(ctx)
-			}
-			return nil
-		}),
+		setUserAgent(userAgent),
 		collectJSErrors(&jsErrors, &errorMu),
 	}
 	if r.config.BlockResources {
 		actions = append(actions, setupResourceBlocking())
 	}
 
-	var html string
 	actions = append(actions,
 		chromedp.Navigate(pageURL),
 		chromedp.WaitReady("body"),
 		waitForDOMStability(),
-		chromedp.OuterHTML("html", &html),
 	)
 
-	if err := chromedp.Run(timeoutCtx, actions...); err != nil {
+	if err := chromedp.Do(timeoutCtx, actions...); err != nil {
+		return nil, fmt.Errorf("render page: %w", err)
+	}
+	html, err := chromedp.Run(timeoutCtx, chromedp.OuterHTML("html"))
+	if err != nil {
 		return nil, fmt.Errorf("render page: %w", err)
 	}
 
@@ -267,27 +290,24 @@ func (r *Renderer) RunSnippet(ctx context.Context, pageURL, userAgent, jsCode st
 	timeoutCtx, timeoutCancel := context.WithTimeout(taskCtx, snippetTimeout)
 	defer timeoutCancel()
 
-	actions := []chromedp.Action{
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			if userAgent != "" {
-				return emulation.SetUserAgentOverride(userAgent).Do(ctx)
-			}
-			return nil
-		}),
+	actions := []chromedp.Action[chromedp.Void]{
+		setUserAgent(userAgent),
 	}
 	if r.config.BlockResources {
 		actions = append(actions, setupResourceBlocking())
 	}
 
-	var result any
 	actions = append(actions,
 		chromedp.Navigate(pageURL),
 		chromedp.WaitReady("body"),
 		waitForDOMStability(),
-		chromedp.Evaluate(jsCode, &result),
 	)
 
-	if err := chromedp.Run(timeoutCtx, actions...); err != nil {
+	if err := chromedp.Do(timeoutCtx, actions...); err != nil {
+		return nil, fmt.Errorf("run snippet: %w", err)
+	}
+	result, err := chromedp.Run(timeoutCtx, chromedp.Evaluate[any](jsCode))
+	if err != nil {
 		return nil, fmt.Errorf("run snippet: %w", err)
 	}
 	return result, nil

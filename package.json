@@ -28,7 +28,7 @@
     "@google-cloud/bigquery": "^8.1.1",
     "better-sqlite3": "^13.0.3",
     "cheerio": "^1.0.0",
-    "commander": "^12.1.0",
+    "commander": "^15.0.0",
     "fast-csv": "^5.0.8",
     "googleapis": "^171.4.0",
     "p-limit": "^6.2.0",

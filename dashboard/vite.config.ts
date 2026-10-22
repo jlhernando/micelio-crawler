@@ -12,9 +12,10 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       output: {
-        manualChunks: {
-          sigma: ['sigma', 'graphology', 'graphology-layout-forceatlas2'],
-          cosmos: ['@cosmos.gl/graph'],
+        // Vite 8 (Rolldown) only accepts the function form.
+        manualChunks(id) {
+          if (/[\\/]node_modules[\\/](sigma|graphology|graphology-layout-forceatlas2)[\\/]/.test(id)) return 'sigma';
+          if (/[\\/]node_modules[\\/]@cosmos\.gl[\\/]graph[\\/]/.test(id)) return 'cosmos';
         },
       },
     },

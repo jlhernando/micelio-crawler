@@ -383,7 +383,7 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 		}
 	}
 
-	// Originality score (Leak: OriginalContentScore 0-127 scale)
+	// Originality score (Micelio heuristic, 0-127 scale)
 	// 127 = fully unique, lower for pages with exact/near duplicates
 	for _, p := range pages {
 		if p.StatusCode != 200 || p.ContentHash == "" {
@@ -547,7 +547,7 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 		stats.NonDescriptiveAnchors = stats.NonDescriptiveAnchors[:50]
 	}
 
-	// Anchor health (Patent US7533092, DOJ BayesSpam) and Anchor Cloud.
+	// Anchor health (Patent US7533092) and Anchor Cloud.
 	// Prefer in-memory Anchors; fall back to the crawl-time aggregator.
 	if anyAnchors(pages) || cfg.AnchorAggregator == nil {
 		buildAnchorHealth(pages, urlToPage)
@@ -665,7 +665,7 @@ func buildReadabilityStats(pages []*types.PageData) *types.ReadabilityStats {
 			} else if p.Readability.FleschKincaid > 80 {
 				veryEasy = append(veryEasy, types.URLScoreEntry{URL: p.URL, Score: p.Readability.FleschKincaid})
 			}
-			// Q* quality tier proxy (DOJ: Q* 0-1 scale, 0.4 threshold)
+			// Quality tier proxy (Micelio 0-1 scale; 0.4/0.7 are Micelio cut-offs)
 			// Composite: readability (accessible=good) + word count + content richness
 			qProxy := 0.0
 			// Readable content (FK Grade Level: 6-12 = accessible for most adults)

@@ -1,13 +1,11 @@
-// Package analysis: topicality.go computes T* (Topicality) alignment signals.
+// Package analysis: topicality.go computes topicality alignment signals.
 //
-// T* is one of three Ascorer pillars (T*, Q*, P*). It measures query-dependent
-// relevance via three sub-signals known as the ABC framework:
-//   - A (Anchors): what the web says about the page via inbound link text
-//   - B (Body): what the page says about itself (title, headings, content)
-//   - C (Clicks): what users say via NavBoost (not available at crawl time)
+// Topicality is a crawl-time proxy for how clearly a page states its topic:
+//   - Anchors: what inbound link text says about the page
+//   - Body: what the page says about itself (title, headings, content)
+//   - User behaviour is not available at crawl time (use GSC/analytics)
 //
-// Source: DOJ (HJ Kim PXR0356, Nayak PXR0357), Leak (Ascorer T* pillar).
-// Confidence: CONFIRMED for structure; STRONG_PROXY for composite weights.
+// Heuristic; weights are Micelio estimates. Validate with GSC data.
 package analysis
 
 import (
@@ -18,10 +16,9 @@ import (
 	"github.com/micelio/micelio/internal/types"
 )
 
-// ComputeTopicality calculates T*-Body proxy scores for a page at extraction time.
-// This covers the "B" (Body) sub-signal of T*. The "A" (Anchors) sub-signal
+// ComputeTopicality calculates body topicality proxy scores for a page at extraction time.
+// This covers the body sub-signal. The anchor sub-signal
 // requires graph-level data and is computed post-crawl via EnrichTopicalityAnchors.
-// Source: DOJ ABC framework (Body sub-signal), Leak (titlematchScore).
 func ComputeTopicality(title string, h1 []string, headings []string, bodyText string, wordCount int) *types.TopicalityData {
 	return computeTopicality(title, h1, headings, bodyText, wordCount, nil)
 }
@@ -35,8 +32,7 @@ func computeTopicality(title string, h1 []string, headings []string, bodyText st
 	titleTerms := tokenizeTerms(title)
 	bodyTerms := tokenizeTermsToSet(bodyText)
 
-	// T*-Body: Title-body overlap — fraction of title terms found in body.
-	// Source: Leak (titlematchScore). Confidence: CONFIRMED.
+	// Body: title-body overlap, the fraction of title terms found in body.
 	if len(titleTerms) > 0 {
 		matches := 0
 		for _, term := range titleTerms {
@@ -47,14 +43,13 @@ func computeTopicality(title string, h1 []string, headings []string, bodyText st
 		t.TitleBodyOverlap = math.Round(float64(matches)/float64(len(titleTerms))*1000) / 1000
 	}
 
-	// T*-Body: Title-H1 alignment — Jaccard similarity.
-	// Source: SEO best practice + Leak (titlematchScore). Confidence: STRONG_PROXY.
+	// Body: title-H1 alignment (Jaccard similarity). SEO best practice.
 	if len(h1) > 0 {
 		h1Terms := tokenizeTerms(h1[0])
 		t.TitleH1Alignment = jaccard(titleTerms, h1Terms)
 	}
 
-	// T*-Body: Heading-body coverage — fraction of heading terms in body.
+	// Body: heading-body coverage — fraction of heading terms in body.
 	// Source: General content analysis. Confidence: HEURISTIC.
 	if len(headings) > 0 {
 		allHeadingTerms := make(map[string]bool)
@@ -74,10 +69,8 @@ func computeTopicality(title string, h1 []string, headings []string, bodyText st
 		}
 	}
 
-	// T*-Anchors: How well inbound anchor text aligns with the page title.
-	// This is the "A" in ABC — what the web says about the page.
-	// Source: DOJ (T* Anchors sub-signal), Patent US7260573 (personalized anchor text).
-	// Confidence: CONFIRMED (DOJ testimony), STRONG_PROXY (implementation).
+	// Anchors: how well inbound anchor text aligns with the page title.
+	// Source: Patent US7260573 (anchor text). Heuristic implementation.
 	if len(inboundAnchorTexts) > 0 && len(titleTerms) > 0 {
 		titleSet := make(map[string]bool, len(titleTerms))
 		for _, term := range titleTerms {
@@ -184,15 +177,12 @@ func jaccard(a, b []string) float64 {
 	return math.Round(float64(intersection)/float64(union)*1000) / 1000
 }
 
-// EnrichTopicalityAnchors adds the T*-Anchors sub-signal to existing topicality data.
+// EnrichTopicalityAnchors adds the anchor sub-signal to existing topicality data.
 // Called post-crawl when the full link graph is available. For each page, it computes
 // how well inbound anchor text from other pages aligns with this page's title.
 //
-// This is the "A" in ABC (Anchors, Body, Clicks):
-//   - "What the web says about the page" (DOJ, Nayak PXR0357)
-//   - Patent US7260573: personalized anchor text ranking
-//
-// Source: DOJ (T* Anchors sub-signal). Confidence: CONFIRMED (structure), STRONG_PROXY (weights).
+// Source: Patent US7260573 (anchor text ranking).
+// Heuristic; weights are Micelio estimates. Validate with GSC data.
 //
 // When pages no longer carry Anchors (dropped before storage), agg supplies the
 // inbound anchor texts collected during the crawl (bounded, count-weighted).

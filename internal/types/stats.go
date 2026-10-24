@@ -254,9 +254,9 @@ type ReadabilityStats struct {
 	Difficult []URLScoreEntry `json:"difficult"`
 	VeryEasy  []URLScoreEntry `json:"veryEasy"`
 	AvgScore  float64         `json:"avgScore"`
-	// Q* quality tier distribution (DOJ: Q* 0-1 scale, 0.4 threshold for rich results).
-	QualityTier1 int `json:"qualityTier1"` // High quality (Q* proxy > 0.7)
-	QualityTier2 int `json:"qualityTier2"` // Acceptable (Q* proxy 0.4-0.7)
+	// Quality tier distribution (Micelio proxy 0-1 scale; 0.4/0.7 are Micelio cut-offs).
+	QualityTier1 int `json:"qualityTier1"` // High quality (proxy > 0.7)
+	QualityTier2 int `json:"qualityTier2"` // Acceptable (proxy 0.4-0.7)
 	QualityTier3 int `json:"qualityTier3"` // Below rich-result threshold (< 0.4)
 }
 
@@ -518,7 +518,7 @@ type NearOrphanEntry struct {
 }
 
 // DilutionWarningEntry holds a page with link dilution issues.
-// Source: Reasonable Surfer patent (US7716225), DOJ (log transform).
+// Source: Reasonable Surfer patent (US7716225).
 type DilutionWarningEntry struct {
 	URL           string          `json:"url"`
 	Warning       DilutionWarning `json:"warning"`
@@ -542,9 +542,9 @@ type RedirectStats struct {
 	MaxChainLength     int                 `json:"maxChainLength"`
 	TotalHops          int                 `json:"totalHops"`
 	TotalRedirects     int                 `json:"totalRedirects"`
-	// NavBoost signal risk: 302/307 redirects lose NavBoost click signals (DOJ: 13-month rolling window).
+	// Redirect risk: 302/307 redirects may split signals between URLs (heuristic).
 	NavBoostAtRisk int `json:"navBoostAtRisk"`
-	// Long chains dilute NavBoost signals per hop.
+	// Long chains may dilute signals per hop.
 	NavBoostDiluted int `json:"navBoostDiluted"`
 }
 
@@ -783,7 +783,7 @@ type AIReadinessStats struct {
 	PagesWithHowToSchema       int     `json:"pagesWithHowToSchema"`
 }
 
-// TopicalityStats holds aggregate T* alignment metrics.
+// TopicalityStats holds aggregate topicality alignment metrics.
 type TopicalityStats struct {
 	AvgTitleBodyOverlap   float64 `json:"avgTitleBodyOverlap"`
 	AvgTitleH1Alignment   float64 `json:"avgTitleH1Alignment"`

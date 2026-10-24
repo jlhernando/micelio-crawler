@@ -113,7 +113,7 @@ type PageData struct {
 	AdDetailSignals    int                     `json:"adDetailSignals,omitempty"`   // net score: ad detail signals minus e-commerce signals
 	ProductSignals     int                     `json:"productSignals,omitempty"`    // own price or buy button outside product cards
 	JSRendered         bool                    `json:"jsRendered,omitempty"`        // raw and rendered HTML were compared
-	OriginalityScore   int                     `json:"originalityScore,omitempty"`  // 0-127, proxy for Google's OriginalContentScore (Leak)
+	OriginalityScore   int                     `json:"originalityScore,omitempty"`  // 0-127, Micelio originality heuristic
 	TruncatedElements  []string                `json:"truncatedElements,omitempty"` // SEO elements beyond Googlebot's 2MB cutoff
 	BodySize           int64                   `json:"bodySize,omitempty"`          // uncompressed HTML body size in bytes
 	IsSoft404          bool                    `json:"isSoft404,omitempty"`

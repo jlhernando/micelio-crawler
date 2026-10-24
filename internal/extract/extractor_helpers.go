@@ -1061,9 +1061,8 @@ func extractAIReadiness(doc *goquery.Document, sd []types.StructuredDataEntry, h
 }
 
 // --- Consensus readiness extraction ---
-// Google evaluates passages for agreement/contradiction with "general consensus."
-// Source: Candour Agency exploit (Mark Williams-Cook, Dec 2024).
-// Confidence: CONFIRMED (exploit data, $13,337 Google VRP bounty, 800K domains).
+// Counts claim-like passages, supporting evidence, FAQs and myth/fact corrections.
+// Heuristic content check; validate with GSC data.
 
 // consensusClaimPatterns detects claim-like sentences (assertions, statements of fact).
 var consensusClaimPatterns = []string{

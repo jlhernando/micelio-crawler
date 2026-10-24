@@ -4,7 +4,7 @@
 
 ## Problem Statement
 
-The current `LinkGraph.svelte` component uses **D3 force-directed simulation with SVG rendering**. For the kelisto.es crawl (1,644 pages), the graph creates **205K SVG DOM nodes** (1,644 circles + 203K lines). This causes:
+The current `LinkGraph.svelte` component uses **D3 force-directed simulation with SVG rendering**. For a 1,644-page crawl, the graph creates **205K SVG DOM nodes** (1,644 circles + 203K lines). This causes:
 
 - **300-600ms UI freeze** per search keystroke or filter toggle
 - **100-150ms per hover** (updates all 203K link opacities)

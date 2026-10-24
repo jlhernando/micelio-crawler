@@ -13,8 +13,8 @@ import (
 //
 // Pages with low in-degree linked only from deep pages are practically invisible
 // to both users and Googlebot. Crawl budget allocation favors well-linked pages.
-// Source: Google crawl budget guidance, DOJ (Trawler/Alexandria index tiering).
-// Confidence: STRONG_PROXY (thresholds are configurable heuristics, not Google's values).
+// Source: Google crawl budget documentation.
+// Heuristic: thresholds are configurable Micelio values, not Google's. Validate with GSC/log data.
 
 // NearOrphanInfo describes a near-orphan page.
 type NearOrphanInfo struct {
@@ -100,11 +100,9 @@ func DetectNearOrphans(
 
 // ── Link Equity Dilution ─────────────────────────────────
 //
-// Google's ranking formula uses log transformation on signals before scoring
-// (DOJ: Nayak PXR0357 — "linear combination of log of individual raw signals").
-// Link equity per outlink decays logarithmically, not via hard cutoffs.
-// Source: Reasonable Surfer patent (US7716225), DOJ (sigmoid/log transform).
-// Confidence: CONFIRMED (log transform), STRONG_PROXY (specific decay formula).
+// Link equity per outlink is modelled with logarithmic decay, not hard cutoffs.
+// Source: Reasonable Surfer patent (US7716225).
+// Heuristic: the decay formula is a Micelio estimate. Validate with GSC/log data.
 
 // LinkDilutionInfo describes a page with diluted outgoing link equity.
 type LinkDilutionInfo struct {
@@ -115,8 +113,7 @@ type LinkDilutionInfo struct {
 }
 
 // ComputeLinkDilution finds pages with diluted outgoing link equity.
-// Uses logarithmic decay instead of hard cutoffs, matching Google's
-// log-transformed signal processing (DOJ: Nayak PXR0357).
+// Uses logarithmic decay instead of hard cutoffs (heuristic).
 func ComputeLinkDilution(graph *AdjacencyGraph) []LinkDilutionInfo {
 	var warnings []LinkDilutionInfo
 	for i := 0; i < graph.N; i++ {

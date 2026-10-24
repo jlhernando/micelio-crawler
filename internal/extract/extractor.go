@@ -149,10 +149,10 @@ func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
 		page.Readability = computeReadability(bodyText)
 	}
 
-	// Freshness signals (Patent US8924379, DOJ)
+	// Freshness signals (Patent US8924379)
 	page.Freshness = extractFreshness(doc, page.OpenGraph, page.StructuredData, opts.Headers, time.Now())
 
-	// Content richness (DOJ contentEffort, Patent US8682892)
+	// Content richness (Patent US8682892)
 	page.ContentRichness = extractContentRichness(doc, page.Headings, page.WordCount)
 
 	// Listing signals (HTML structure patterns for listing/grid/results pages)
@@ -174,19 +174,19 @@ func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
 		page.ProductSignals = buy + prices
 	}
 
-	// E-E-A-T signals (DOJ, Patent US9697259)
+	// E-E-A-T signals (Patent US9697259)
 	page.EEAT = extractEEAT(doc, page.StructuredData, page.Anchors, page.ExternalLinks, baseURL)
 
 	// Passage readiness (Patent US20160078102)
 	page.PassageReadiness = extractPassageReadiness(doc, page.StructuredData, page.Headings, bodyText, page.WordCount)
 
-	// AI Overview readiness (DOJ FastSearch, Leak SnippetBrain)
+	// AI answer readiness (heuristic)
 	page.AIReadiness = extractAIReadiness(doc, page.StructuredData, page.Headings, bodyText, page.WordCount)
 
-	// Consensus readiness (Candour exploit: passages aligned with general consensus)
+	// Consensus readiness (claims backed by evidence; heuristic)
 	page.ConsensusReadiness = extractConsensusReadiness(doc, bodyText, page.WordCount)
 
-	// Topicality alignment (DOJ T* body, titlematchScore, Leak Ascorer)
+	// Topicality alignment (heuristic)
 	if page.Title != nil && page.Title.Text != "" {
 		allHeadings := make([]string, 0, len(page.Headings.H2)+len(page.Headings.H3))
 		allHeadings = append(append(allHeadings, page.Headings.H2...), page.Headings.H3...)

@@ -110,9 +110,8 @@ type RenderDiff struct {
 // --- SEO signals ---
 
 // FreshnessData holds content freshness signals.
-// Source: Patent US8924379, US8583617, DOJ (semanticDateInfo, bylineDate).
-// Google applies FreshnessTwiddler to top 20-30 results for time-sensitive queries.
-// Confidence: CONFIRMED (DOJ FreshnessTwiddler, Leak QDF signals).
+// Source: Patent US8924379, US8583617.
+// Freshness matters most for time-sensitive queries. Heuristic; validate with GSC data.
 type FreshnessData struct {
 	BylineDate      *time.Time `json:"bylineDate,omitempty"`
 	ModifiedDate    *time.Time `json:"modifiedDate,omitempty"`
@@ -122,8 +121,8 @@ type FreshnessData struct {
 }
 
 // ContentRichnessData holds content effort/richness signals.
-// Proxy for Google's contentEffort LLM signal (DOJ, Patent US8682892).
-// Confidence: STRONG_PROXY (contentEffort confirmed in leak; weights are estimates).
+// Crawl-time proxy for content effort (Patent US8682892).
+// Heuristic; weights are Micelio estimates.
 type ContentRichnessData struct {
 	HeadingDepth       int     `json:"headingDepth"`
 	HeadingCount       int     `json:"headingCount"`
@@ -140,7 +139,7 @@ type ContentRichnessData struct {
 }
 
 // EEATData holds E-E-A-T (Experience, Expertise, Authoritativeness, Trust) signals.
-// Source: DOJ (expertise signals), Patent US9697259 (authorshipMarkup).
+// Source: Patent US9697259 (authorship markup).
 // Confidence: STRONG_PROXY (E-E-A-T is a quality rater concept; proxy signals are heuristic).
 // Note: CitationCount by TLD (.edu/.gov) is HEURISTIC — not in official E-E-A-T docs.
 type EEATData struct {
@@ -168,8 +167,8 @@ type PassageReadinessData struct {
 	HasHowToStructure  bool    `json:"hasHowToStructure"`
 }
 
-// AIReadinessData holds AI Overview readiness signals.
-// Source: DOJ (FastSearch, SnippetBrain), Leak (Q* >= 0.4 gate).
+// AIReadinessData holds AI answer readiness signals.
+// Heuristic: concise, structured passages are easier to quote. Validate with GSC data.
 type AIReadinessData struct {
 	TopPassageLength     int     `json:"topPassageLength"`
 	AIReadinessScore     float64 `json:"aiReadinessScore"`
@@ -180,9 +179,8 @@ type AIReadinessData struct {
 }
 
 // ConsensusReadinessData holds signals indicating content aligns with consensus patterns.
-// Google counts passages that agree with, contradict, or remain neutral to "general consensus."
-// Source: Candour Agency exploit (Mark Williams-Cook, Dec 2024), $13,337 Google VRP bounty.
-// Confidence: CONFIRMED (exploit data across 800K domains).
+// Counts claims, supporting evidence, FAQs and myth/fact corrections.
+// Heuristic content check; validate with GSC data.
 type ConsensusReadinessData struct {
 	ClaimCount      int     `json:"claimCount"`      // Passages with claim-like structure
 	EvidenceCount   int     `json:"evidenceCount"`   // Passages with supporting evidence/citations
@@ -191,23 +189,21 @@ type ConsensusReadinessData struct {
 	ConsensusScore  float64 `json:"consensusScore"`  // Composite readiness (0-1)
 }
 
-// TopicalityData holds T* (Topicality) alignment signals.
-// T* has three sub-signals (DOJ ABC framework): Anchors (what the web says),
-// Body (what the page says), Clicks (what users say via NavBoost).
-// This struct captures Anchors + Body. Clicks require user data (not crawl-time).
-// Source: DOJ (HJ Kim PXR0356, Nayak PXR0357), Leak (Ascorer T* pillar).
-// Confidence: CONFIRMED (DOJ testimony) for structure; STRONG_PROXY for weights.
+// TopicalityData holds topicality alignment signals.
+// Captures anchor text (what the web says) and body (what the page says).
+// User behaviour is not available at crawl time.
+// Heuristic; weights are Micelio estimates.
 type TopicalityData struct {
 	TitleBodyOverlap    float64 `json:"titleBodyOverlap"`
 	TitleH1Alignment    float64 `json:"titleH1Alignment"`
 	HeadingBodyCoverage float64 `json:"headingBodyCoverage"`
-	AnchorTitleRelevance float64 `json:"anchorTitleRelevance"` // T*-Anchors: how well inbound anchor text aligns with title
+	AnchorTitleRelevance float64 `json:"anchorTitleRelevance"` // anchors: how well inbound anchor text aligns with title
 	TopicalConsistency  float64 `json:"topicalConsistency"`
 }
 
 // AnchorHealthData holds anchor text quality signals.
-// Source: Patent US7533092 (anchorMismatch), DOJ (BayesSpam, link spam detection).
-// Confidence: CONFIRMED (anchor diversity is a known spam signal).
+// Source: Patent US7533092 (anchor mismatch).
+// Heuristic: low anchor diversity is a common link spam pattern.
 type AnchorHealthData struct {
 	InboundAnchorDiversity float64 `json:"inboundAnchorDiversity"`
 	OverOptimizedAnchors   int     `json:"overOptimizedAnchors"`

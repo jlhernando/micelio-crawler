@@ -150,9 +150,9 @@ func RunDeferredAnalysis(ctx context.Context, pages []*types.PageData, cfg PostP
 		liStats, graph = runLinkIntelligence(pages, cfg, stats)
 		stats.LinkIntelligenceStats = liStats
 
-		// T*-Anchors enrichment: compute anchor-title relevance now that graph is available.
-		// This adds the "A" (Anchors) sub-signal to the T* topicality score computed at extraction.
-		// Source: DOJ ABC framework (Nayak PXR0357), Patent US7260573.
+		// Anchor enrichment: compute anchor-title relevance now that the graph is available.
+		// This adds the anchor sub-signal to the topicality score computed at extraction.
+		// Source: Patent US7260573. Heuristic; validate with GSC data.
 		EnrichTopicalityAnchors(pages, graph, cfg.AnchorAggregator)
 	}
 

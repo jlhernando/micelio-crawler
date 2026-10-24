@@ -16,7 +16,7 @@ import (
 // (700K+ pages) while staying exact for typical sites.
 const (
 	// maxAnchorTexts caps distinct anchor texts kept for the Anchor Cloud and
-	// for T*-Anchors text lookups. When reached, rare texts are pruned.
+	// for topicality anchor text lookups. When reached, rare texts are pruned.
 	maxAnchorTexts = 200_000
 	// maxAnchorTextRunes is the longest anchor text kept in the text table.
 	maxAnchorTextRunes = 80
@@ -48,7 +48,7 @@ type targetText struct {
 	hash       uint64
 	count      uint32
 	meaningful bool // not empty, not generic, not a naked URL
-	topical    bool // usable for T*-Anchors (extractor non-descriptive flag false)
+	topical    bool // usable for topicality anchor (extractor non-descriptive flag false)
 }
 
 type anchorTarget struct {
@@ -95,7 +95,7 @@ type preparedAnchor struct {
 	targetHash  uint64
 	href        string
 	internal    bool
-	nonDescExtr bool // extractor flag (T*-Anchors filter)
+	nonDescExtr bool // extractor flag (topicality anchor filter)
 	generic     bool // reporter non-descriptive or empty
 	naked       bool
 	cloud       bool // eligible for the text table
@@ -416,7 +416,7 @@ func (a *AnchorAggregator) ApplyAnchorHealth(pages []*types.PageData) {
 }
 
 // inboundTopicalTexts returns tracked inbound anchor texts (with counts) usable
-// for T*-Anchors relevance. Texts pruned from the text table are skipped.
+// for topicality anchor relevance. Texts pruned from the text table are skipped.
 func (a *AnchorAggregator) inboundTopicalTexts(pageURL string, fn func(text string, count int)) {
 	t := a.targets[maphash.String(a.seed, normalizeTrailingSlash(pageURL))]
 	if t == nil {

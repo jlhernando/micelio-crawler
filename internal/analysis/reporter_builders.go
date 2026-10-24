@@ -92,9 +92,9 @@ func buildRedirectStats(pages []*types.PageData) *types.RedirectStats {
 
 	rs.TopRedirectTargets = sortedURLCounts(targetCount, 20)
 
-	// NavBoost risk: 302/307 redirects lose click signal equity (DOJ: NavBoost 13-month window)
+	// Redirect risk: 302/307 redirects may split signals between URLs (heuristic)
 	rs.NavBoostAtRisk = len(rs.TemporaryRedirects)
-	// Long chains (>2 hops) dilute NavBoost signals
+	// Long chains (>2 hops) may dilute signals
 	for _, p := range pages {
 		if len(p.RedirectChain) > 2 {
 			rs.NavBoostDiluted++

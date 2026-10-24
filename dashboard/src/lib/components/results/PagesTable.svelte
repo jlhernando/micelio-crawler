@@ -596,7 +596,7 @@
                       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
                         {#if tpc}
                           <div class="bg-surface-3 rounded px-2.5 py-2">
-                            <span class="text-[10px] text-fg-2 font-medium block mb-1">T* Topicality</span>
+                            <span class="text-[10px] text-fg-2 font-medium block mb-1">Topicality (proxy)</span>
                             <div class="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
                               <span class="text-fg-2">Consistency</span><span class="font-mono text-right {(tpc.topicalConsistency ?? 0) >= 0.7 ? 'text-success' : (tpc.topicalConsistency ?? 0) >= 0.4 ? 'text-warning' : 'text-danger'}">{tpc.topicalConsistency?.toFixed(2) ?? '—'}</span>
                               <span class="text-fg-2">Title-Body</span><span class="font-mono text-right">{tpc.titleBodyOverlap?.toFixed(2) ?? '—'}</span>

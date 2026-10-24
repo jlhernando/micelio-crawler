@@ -17,7 +17,7 @@ func bigList(n int) []interface{} {
 }
 
 // TestStatsConcurrentRequests hits /stats concurrently. Before the fix,
-// ensureRankpediaSEO and capNestedArray wrote into the shared Stats map under
+// stats backfill and capNestedArray wrote into the shared Stats map under
 // a read lock ("concurrent map writes" crash, caught by -race) and
 // capNestedArray permanently truncated the cached lists.
 func TestStatsConcurrentRequests(t *testing.T) {

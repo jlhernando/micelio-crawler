@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatBytes, formatDuration, timeAgo } from '../lib/format';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
@@ -73,14 +74,6 @@
   let dragOver = $state(false);
   let error = $state<string | null>(null);
   let selectedFormat = $state('');
-
-  function formatBytes(n: number): string {
-    if (!n || n <= 0) return '0 B';
-    if (n < 1024) return n + ' B';
-    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
-    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
-    return (n / 1073741824).toFixed(2) + ' GB';
-  }
 
   async function loadJobs() {
     try {
@@ -275,29 +268,6 @@
   }
 
   const formatSize = formatBytes;
-
-  function formatDuration(ms: number | undefined | null): string {
-    if (!ms) return '-';
-    if (ms < 1000) return ms + 'ms';
-    const totalSec = Math.floor(ms / 1000);
-    if (totalSec < 60) return totalSec + 's';
-    const mins = Math.floor(totalSec / 60);
-    const secs = totalSec % 60;
-    if (mins < 60) return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
-    const hours = Math.floor(mins / 60);
-    const remMins = mins % 60;
-    return remMins > 0 ? `${hours}h ${remMins}m` : `${hours}h`;
-  }
-
-  function timeAgo(dateStr: string): string {
-    const diff = Date.now() - new Date(dateStr).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return mins + 'm ago';
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return hrs + 'h ago';
-    return Math.floor(hrs / 24) + 'd ago';
-  }
 
   let wsClient: { close: () => void } | null = null;
   onMount(() => {

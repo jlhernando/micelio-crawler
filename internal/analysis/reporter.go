@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/micelio/micelio/internal/types"
+	"github.com/micelio/micelio/internal/urlutil"
 )
 
 // ReportConfig holds options for report generation.
@@ -415,7 +416,7 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 	// (excluding the seed). The graph resolves trailing slashes and redirects.
 	// When no link data is available at all, skip rather than flag every page.
 	if graphHasLinkData(graph, pages) {
-		stats.OrphanPages = graphOrphanPages(graph, inDegree, pages, cfg.SeedURL)
+		stats.SetOrphanPages(graphOrphanPages(graph, inDegree, pages, cfg.SeedURL))
 		stats.OrphanMethodology = "graph"
 	} else {
 		stats.OrphanMethodology = "unavailable"
@@ -451,6 +452,9 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 
 	// Text-to-code ratio stats
 	stats.TextToCodeStats = buildTextToCodeStats(pages)
+
+	// Word count histogram (Content tab)
+	stats.WordCountBuckets = BuildWordCountBuckets(pages)
 
 	// Image audit stats
 	stats.ImageAuditStats = buildImageAuditStats(pages)
@@ -497,8 +501,9 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 		}
 	}
 
-	// PageRank
-	stats.PageRankScores = ComputePageRankGraph(graph, PageRankOptions{})
+	// PageRank: stored on each page (node i is pages[i]); stats keep a
+	// histogram, and the full URL map only for small crawls.
+	assignPageRankFromGraph(&stats, pages, graph, ComputePageRankGraph(graph, PageRankOptions{}))
 
 	// Delegate to builders
 	stats.RedirectStats = buildRedirectStats(pages)
@@ -509,7 +514,7 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 	stats.PlausibleStats = buildPlausibleStats(pages, cfg.Ga4Days)
 	ClassifyURLs(pages)
 	if freshSegments {
-		AssignAutoSegments(pages, groupLabels, AutoSegmentOptions{Rules: cfg.SegmentRules, PageRank: stats.PageRankScores})
+		AssignAutoSegments(pages, groupLabels, AutoSegmentOptions{Rules: cfg.SegmentRules})
 	}
 	stats.AutoSegmentStats = BuildAutoSegmentStats(pages)
 	if low, high := wordCountTerciles(pages); low > 0 {
@@ -728,22 +733,51 @@ func buildTextToCodeStats(pages []*types.PageData) *types.TextToCodeStats {
 	}
 }
 
+// wordCountEdges are the lower bounds of the Content tab histogram buckets:
+// 0-100, 100-300, 300-500, 500-1K, 1K-2K, 2K+.
+var wordCountEdges = []int{0, 100, 300, 500, 1000, 2000}
+
+// BuildWordCountBuckets buckets every page by word count so the dashboard can
+// draw the histogram without downloading page objects. Read-only, so it is
+// safe on cached (stripped) pages. Returns nil when there are no pages.
+func BuildWordCountBuckets(pages []*types.PageData) *types.WordCountBuckets {
+	counts := make([]int, len(wordCountEdges))
+	n, total := 0, 0
+	for _, p := range pages {
+		if p == nil {
+			continue
+		}
+		wc := max(p.WordCount, 0)
+		i := len(wordCountEdges) - 1
+		for i > 0 && wc < wordCountEdges[i] {
+			i--
+		}
+		counts[i]++
+		n++
+		total += wc
+	}
+	if n == 0 {
+		return nil
+	}
+	return &types.WordCountBuckets{
+		Edges:    append([]int(nil), wordCountEdges...),
+		Counts:   counts,
+		AvgWords: float64(total) / float64(n),
+		Pages:    n,
+	}
+}
+
 // ── Helper functions ──
 
-func normalizeTrailingSlash(u string) string {
-	return strings.TrimRight(u, "/")
-}
+// normalizeTrailingSlash is the reporter's URL-matching key: every trailing
+// slash removed (the root "/" becomes "").
+func normalizeTrailingSlash(u string) string { return urlutil.TrimTrailingSlashes(u) }
 
 // ComputeGraphOrphans returns orphan page URLs using the graph's redirect-aware
 // inDegree. Pages with zero inlinks (excluding the seed URL) are considered orphan.
 // This is used for backfilling old crawls that used the reporter's raw-URL matching.
 func ComputeGraphOrphans(graph *AdjacencyGraph, seedURL string) []string {
-	inDegree := make([]int, graph.N)
-	for _, j := range graph.Edges {
-		if int(j) < len(inDegree) {
-			inDegree[j]++
-		}
-	}
+	inDegree := graph.InDegree()
 	seedNorm := normalizeTrailingSlash(seedURL)
 	var orphans []string
 	for i := 0; i < graph.N; i++ {
@@ -757,6 +791,33 @@ func ComputeGraphOrphans(graph *AdjacencyGraph, seedURL string) []string {
 		}
 	}
 	return orphans
+}
+
+// assignPageRankFromGraph copies PageRank scores onto pages and fills the
+// stats PageRank fields: a histogram always, the URL map only when the crawl
+// has at most types.PageRankScoresInlineMax pages.
+func assignPageRankFromGraph(stats *types.CrawlStats, pages []*types.PageData, g *AdjacencyGraph, scores map[string]float64) {
+	if g != nil && g.N == len(pages) {
+		for i, p := range pages {
+			p.PageRank = scores[g.URLs[i]]
+		}
+	} else {
+		for _, p := range pages {
+			p.PageRank = scores[p.URL]
+		}
+	}
+	stats.PageRankHistogram = nil
+	if len(scores) > 0 {
+		stats.PageRankHistogram = types.NewPageRankHistogram(func(yield func(float64)) {
+			for _, v := range scores {
+				yield(v)
+			}
+		})
+	}
+	stats.PageRankScores = nil
+	if len(scores) <= types.PageRankScoresInlineMax {
+		stats.PageRankScores = scores
+	}
 }
 
 var nonDescriptiveTexts = map[string]bool{

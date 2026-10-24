@@ -25,27 +25,46 @@ func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
 		return
 	}
 
-	// Robots.txt check
-	if s.robotsChecker != nil && !s.robotsChecker.IsAllowed(e.URL, s.config.UserAgent) {
+	// Robots.txt check (per origin: seed, post-redirect host, allowed domains)
+	if s.robots != nil && !s.robots.IsAllowed(ctx, e.URL) {
 		s.queue.RecordExclusion("robots", "", e.URL)
 		s.handleRobotsBlocked(e)
 		return
 	}
 
-	// Rate limiting: token bucket ensures even spacing across all workers.
-	// Falls back to per-worker jittered sleep only when no bucket is configured.
-	if s.rateBucket != nil {
-		s.rateBucket.Wait(ctx)
+	// Rate limiting: per-host token bucket ensures even spacing across all
+	// workers, never below the configured delay / robots Crawl-delay, and is
+	// paused for everyone when the server sends 429/503 + Retry-After.
+	if s.hostRL != nil {
+		s.hostRL.Wait(ctx, e.URL)
 	} else if s.delay > 0 {
 		sleepCtx(ctx, jitter(s.delay))
+	}
+	if ctx.Err() != nil {
+		// Cancelled while waiting: put the URL back so a resume picks it up.
+		s.queue.Requeue(e)
+		return
 	}
 
 	// Fetch (with conditional headers if cached)
 	result := s.fetchWithCache(ctx, e)
+	if ctx.Err() != nil && result.StatusCode == 0 {
+		// Cancelled mid-request: not a real failure, keep it for resume.
+		s.queue.Requeue(e)
+		return
+	}
 
-	// Record response for adaptive rate limiting
+	// Record response for adaptive rate limiting (every attempt, including
+	// 429/503 and network errors, so the limiter slows down).
 	if s.adaptiveRL != nil {
 		s.recordAdaptiveResponse(e.URL, result)
+	}
+
+	// Same-host redirect: mark the target as seen so it is not fetched a
+	// second time when some page links to it directly.
+	if result.FinalURL != "" && result.FinalURL != e.URL && result.StatusCode > 0 &&
+		extractDomain(result.FinalURL) == extractDomain(e.URL) {
+		s.queue.MarkSeen(result.FinalURL)
 	}
 
 	// Tor circuit management: count requests, rotate on errors
@@ -62,18 +81,14 @@ func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
 		return
 	}
 
-	// Re-enqueue 429s for later retry (up to maxRequeues times)
-	const maxRequeues = 2
-	if result.StatusCode == 429 && e.Requeues < maxRequeues {
-		e.Requeues++
-		s.queue.Requeue(e)
-		fmt.Fprintf(os.Stderr, "\n  [429] re-queued %s (attempt %d/%d)\n", e.URL, e.Requeues, maxRequeues)
+	// 429/503/network errors: pause the host for everyone and re-queue.
+	if s.handleRetryable(e, result) {
 		return
 	}
-	// DLQ: 429 after retry exhaustion. Page is still stored below with 429 status
-	// so it appears in results; DLQ provides the structured failure record.
-	if result.StatusCode == 429 && e.Requeues >= maxRequeues {
-		s.addToDeadLetter(e, 429, "rate limited after max requeues")
+	// DLQ: 429/503 after retry exhaustion. Page is still stored below with its
+	// status so it appears in results; DLQ provides the structured failure record.
+	if result.StatusCode == 429 || result.StatusCode == 503 {
+		s.addToDeadLetter(e, result.StatusCode, "rate limited / unavailable after max attempts")
 	}
 	// DLQ: network-level failures (no HTTP response). Page is still stored below
 	// as an error entry so it appears in results alongside the DLQ record.
@@ -106,21 +121,15 @@ func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
 	// Collect post-crawl data to disk accumulators
 	s.collectPostCrawlData(e, result, &page)
 
-	// Store HTML source and/or rendered DOM (if configured and DB available)
-	// Written directly to disk (zstd → SQLite) without holding in memory.
+	// HTML source and/or rendered DOM to store (if configured and DB
+	// available). Compressed by storePage and written with the page row.
+	var srcHTML, renHTML string
 	if s.crawlDB != nil && (s.config.SaveHTML || s.config.SaveRendered) {
-		var srcHTML string
-		if s.config.SaveHTML && result.HTML != "" {
+		if s.config.SaveHTML {
 			srcHTML = result.HTML
 		}
-		var renHTML string
-		if s.config.SaveRendered && renderedHTML != "" {
+		if s.config.SaveRendered {
 			renHTML = renderedHTML
-		}
-		if srcHTML != "" || renHTML != "" {
-			if err := s.crawlDB.SavePageHTML(e.URL, srcHTML, renHTML); err != nil {
-				fmt.Fprintf(os.Stderr, "\n  [warn] save html: %v\n", err)
-			}
 		}
 	}
 
@@ -137,7 +146,8 @@ func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
 	}
 
 	// Store result and report progress
-	s.storePage(e, &page)
+	s.storePage(e, &page, srcHTML, renHTML)
+	srcHTML, renHTML = "", ""
 
 	// Release InternalLinks from the in-memory page to save ~5KB per page.
 	// Links are already streamed to disk (above) and written to JSONL/DB (storePage).
@@ -145,6 +155,99 @@ func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
 		page.InternalLinkCount = len(page.InternalLinks)
 		page.InternalLinks = nil
 	}
+}
+
+// resourceSizer returns a page-weight sizer that HEAD-fetches resources with
+// the crawl client and waits on the per-host rate limiter. Cookies and custom
+// headers are only sent to the crawled site's own hosts, never to third-party
+// CDNs.
+func (s *crawlSession) resourceSizer() analysis.ResourceSizer {
+	opts := s.fetchOpts
+	opts.NoRetry = true
+	opts.Referrer = ""
+	opts.IfNoneMatch = ""
+	opts.IfModifiedSince = ""
+	thirdParty := opts
+	thirdParty.Cookies = ""
+	thirdParty.CustomHeaders = nil
+
+	internal := map[string]bool{}
+	if s.queue != nil {
+		internal[strings.ToLower(s.queue.SeedDomain())] = true
+	}
+	for _, d := range s.config.AllowedDomains {
+		internal[strings.ToLower(d)] = true
+	}
+	hostRL := s.hostRL
+
+	return func(ctx context.Context, u string) (int64, bool) {
+		if hostRL != nil {
+			hostRL.Wait(ctx, u)
+		}
+		if ctx.Err() != nil {
+			return 0, false
+		}
+		o := thirdParty
+		if p, err := url.Parse(u); err == nil && internal[strings.ToLower(p.Hostname())] {
+			o = opts
+		}
+		r := FetchHead(ctx, u, o)
+		if r.StatusCode == 429 || r.StatusCode == 503 {
+			if hostRL != nil {
+				pause, ok := RetryAfterDuration(r.Headers["retry-after"], MaxServerRetryAfter)
+				if !ok {
+					pause = retryBackoff(0)
+				}
+				hostRL.Pause(u, pause)
+			}
+			return 0, false
+		}
+		if r.Error != "" || r.StatusCode >= 400 || r.ContentLength == nil {
+			return 0, false
+		}
+		return *r.ContentLength, true
+	}
+}
+
+// maxFetchAttempts caps total fetches of one URL (first try + re-queues).
+const maxFetchAttempts = 3
+
+// retryBackoff is the host pause used when a 429/503/network error carries
+// no Retry-After header: 1s, 2s, 4s... by attempt.
+func retryBackoff(attempt int) time.Duration {
+	return backoffDelay(attempt)
+}
+
+// handleRetryable deals with 429, 503 and retryable network errors.
+// It pauses the host's shared bucket (Retry-After, capped, or exponential
+// backoff) so every worker waits, then re-queues the URL if attempts remain.
+// Returns true when the entry was re-queued and must not be stored yet.
+func (s *crawlSession) handleRetryable(e types.QueueEntry, result types.FetchResult) bool {
+	status := result.StatusCode
+	retryable := status == 429 || status == 503 || (status == 0 && result.Error != "" && result.Retryable)
+	if !retryable {
+		return false
+	}
+
+	pause, hasRetryAfter := RetryAfterDuration(result.Headers["retry-after"], MaxServerRetryAfter)
+	if !hasRetryAfter {
+		pause = retryBackoff(e.Requeues)
+	}
+	if s.hostRL != nil {
+		s.hostRL.Pause(e.URL, pause)
+	}
+
+	if e.Requeues+1 >= maxFetchAttempts {
+		return false
+	}
+	e.Requeues++
+	s.queue.Requeue(e)
+	label := strconv.Itoa(status)
+	if status == 0 {
+		label = "network error"
+	}
+	fmt.Fprintf(os.Stderr, "\n  [%s] host paused %v, re-queued %s (attempt %d/%d)\n", label, pause.Round(time.Millisecond), e.URL, e.Requeues+1, maxFetchAttempts)
+	return true
 }
 
 func (s *crawlSession) handleRobotsBlocked(e types.QueueEntry) {
@@ -162,17 +265,18 @@ func (s *crawlSession) handleRobotsBlocked(e types.QueueEntry) {
 	if !s.canReloadFromDisk {
 		s.pages = append(s.pages, &page)
 	}
-	if s.writer != nil {
-		if writeErr := s.writer.Write(&page); writeErr != nil {
-			fmt.Fprintf(os.Stderr, "\n  [warn] write robots-blocked: %v\n", writeErr)
-		}
-	}
-	if s.crawlDB != nil {
-		if dbErr := s.crawlDB.InsertPage(&page); dbErr != nil {
-			fmt.Fprintf(os.Stderr, "\n  [warn] db robots-blocked: %v\n", dbErr)
-		}
-	}
 	s.pagesMu.Unlock()
+	s.emitPage(&page, "", "")
+}
+
+// emitPage hands a page to the output sink (JSONL/CSV file and crawl DB).
+// Encoding and compression run here, in the calling worker; out must not be
+// modified afterwards.
+func (s *crawlSession) emitPage(out *types.PageData, sourceHTML, renderedHTML string) {
+	if s.sink == nil {
+		return
+	}
+	s.sink.put(s.sink.encode(out, sourceHTML, renderedHTML))
 }
 
 func (s *crawlSession) fetchWithCache(ctx context.Context, e types.QueueEntry) types.FetchResult {
@@ -200,10 +304,15 @@ func (s *crawlSession) recordAdaptiveResponse(entryURL string, result types.Fetc
 			rlReset = v
 		}
 	}
-	s.adaptiveRL.RecordResponse(entryURL, result.StatusCode, result.ResponseTimeMs, rlRemaining, rlReset)
-	// Sync token bucket interval with the updated per-domain delay
-	if s.rateBucket != nil {
-		s.rateBucket.SetInterval(s.adaptiveRL.CurrentDelay(entryURL))
+	status := result.StatusCode
+	if status == 0 && !result.Retryable {
+		return // SSRF block / cancelled: says nothing about server load
+	}
+	s.adaptiveRL.RecordResponse(entryURL, status, result.ResponseTimeMs, rlRemaining, rlReset)
+	// Sync the host's token bucket with the updated per-domain delay
+	// (hostRL clamps it to the configured delay / Crawl-delay floor).
+	if s.hostRL != nil {
+		s.hostRL.SetInterval(entryURL, s.adaptiveRL.CurrentDelay(entryURL))
 	}
 }
 
@@ -224,12 +333,8 @@ func (s *crawlSession) handle304(e types.QueueEntry, result types.FetchResult) {
 		s.pages = append(s.pages, &page)
 	}
 	s.pagesMu.Unlock()
-	if s.crawlDB != nil {
-		s.crawlDB.InsertPage(&page)
-	}
-	if s.writer != nil {
-		s.writer.Write(&page)
-	}
+	out := page // the sink reads its own copy
+	s.emitPage(&out, "", "")
 	if s.onProgress != nil {
 		elapsed := time.Since(s.rateStart).Seconds()
 		rate := 0.0
@@ -477,7 +582,7 @@ func (s *crawlSession) collectPostCrawlData(e types.QueueEntry, result types.Fet
 	}
 }
 
-func (s *crawlSession) storePage(e types.QueueEntry, page *types.PageData) {
+func (s *crawlSession) storePage(e types.QueueEntry, page *types.PageData, sourceHTML, renderedHTML string) {
 	// Aggregate anchor stats while Anchors still exist (has its own lock).
 	s.anchorAgg.AddPage(page.URL, page.StatusCode, page.Anchors)
 
@@ -492,28 +597,22 @@ func (s *crawlSession) storePage(e types.QueueEntry, page *types.PageData) {
 		stripped.PageWeight = &pw
 	}
 
+	// Encoding, compression and n-gram tokenising run here in the worker,
+	// outside any shared lock; the sink goroutine only writes bytes and
+	// commits batched SQL.
+	s.emitPage(&stripped, sourceHTML, renderedHTML)
+	if s.ngramAnalyzer != nil && page.StatusCode == 200 && page.BodyText != "" {
+		s.ngramAnalyzer.AddPrepared(s.ngramAnalyzer.PreparePage(page.BodyText))
+	}
+
 	s.pagesMu.Lock()
 	if !s.canReloadFromDisk {
 		s.pages = append(s.pages, page)
 	}
-	if s.writer != nil {
-		if writeErr := s.writer.Write(&stripped); writeErr != nil {
-			fmt.Fprintf(os.Stderr, "\n  [warn] write error: %v\n", writeErr)
-			s.errorCount.Add(1)
-		}
-	}
-	if s.crawlDB != nil {
-		if dbErr := s.crawlDB.InsertPage(&stripped); dbErr != nil {
-			fmt.Fprintf(os.Stderr, "\n  [warn] db write error: %v\n", dbErr)
-		}
-	}
-	if s.ngramAnalyzer != nil && page.StatusCode == 200 && page.BodyText != "" {
-		s.ngramAnalyzer.AddPage(page.BodyText)
-	}
+	s.pagesMu.Unlock()
 	if !s.canReloadFromDisk && !s.config.Embeddings {
 		page.BodyText = ""
 	}
-	s.pagesMu.Unlock()
 
 	// Progress
 	n := int(s.crawled.Add(1))

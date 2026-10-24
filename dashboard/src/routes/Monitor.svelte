@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { formatDuration } from '../lib/format';
+  import { statusBadgeClass } from '../lib/status';
+  import { STATUS_GROUP_HEX } from '../lib/palette';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import { createWsClient, type WsMessage } from '../lib/ws';
@@ -114,33 +117,6 @@
     const d = Math.floor(h / 24);
     return `${d}d ${h % 24}h ${m % 60}m`;
   });
-
-  function formatDuration(ms: number): string {
-    const s = Math.floor(ms / 1000);
-    if (s < 60) return `${s}s`;
-    const m = Math.floor(s / 60);
-    if (m < 60) return `${m}m ${s % 60}s`;
-    const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ${m % 60}m`;
-    const d = Math.floor(h / 24);
-    return `${d}d ${h % 24}h ${m % 60}m`;
-  }
-
-  function statusColor(code: number): string {
-    if (code >= 200 && code < 300) return 'bg-green-500/20 text-green-400';
-    if (code >= 300 && code < 400) return 'bg-yellow-500/20 text-yellow-400';
-    if (code >= 400 && code < 500) return 'bg-orange-500/20 text-orange-400';
-    if (code >= 500) return 'bg-red-500/20 text-red-400';
-    return 'bg-gray-500/20 text-gray-400';
-  }
-
-  function statusGroupColor(group: string): string {
-    if (group === '2xx') return '#22c55e';
-    if (group === '3xx') return '#eab308';
-    if (group === '4xx') return '#f97316';
-    if (group === '5xx') return '#ef4444';
-    return '#6b7280';
-  }
 
   // ── WebSocket handler ──
   function handleMessage(msg: WsMessage) {
@@ -344,7 +320,7 @@
         group: g,
         count: statusCodes[g] || 0,
         pct: ((statusCodes[g] || 0) / maxCount) * 100,
-        color: statusGroupColor(g),
+        color: STATUS_GROUP_HEX[g] ?? '#6b7280',
       }));
   });
 
@@ -593,7 +569,7 @@
         {:else}
           {#each recentPages as page}
             <div class="flex items-center gap-2 py-1 px-2 rounded hover:bg-surface-3 text-xs">
-              <span class="px-1.5 py-0.5 rounded font-mono {statusColor(page.statusCode)}">{page.statusCode}</span>
+              <span class="px-1.5 py-0.5 rounded font-mono {statusBadgeClass(page.statusCode)}">{page.statusCode}</span>
               <span class="flex-1 truncate font-mono text-fg-2">{page.url}</span>
               <span class="text-fg-2 shrink-0">{page.responseTimeMs}ms</span>
             </div>

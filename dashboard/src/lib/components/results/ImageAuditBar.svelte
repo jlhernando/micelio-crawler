@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { C } from '../../palette';
   let { stats }: { stats: Record<string, unknown> } = $props();
 
   type ImageAudit = { missingAltAttribute: number; emptyAlt: number; altTooLong: unknown[] | null; missingDimensions: number; oversizedImages: unknown[] | null; totalImages: number; totalImageBytes: number };
@@ -9,11 +10,11 @@
   let bars = $derived.by(() => {
     if (!audit) return [];
     const items: [string, number, string][] = [];
-    if (audit.missingAltAttribute > 0) items.push(['Missing alt', audit.missingAltAttribute, '#f58f98']);
-    if (audit.emptyAlt > 0) items.push(['Empty alt', audit.emptyAlt, '#f97316']);
-    if (audit.altTooLong?.length) items.push(['Alt too long', audit.altTooLong.length, '#e5b66e']);
+    if (audit.missingAltAttribute > 0) items.push(['Missing alt', audit.missingAltAttribute, C.danger]);
+    if (audit.emptyAlt > 0) items.push(['Empty alt', audit.emptyAlt, C.orange]);
+    if (audit.altTooLong?.length) items.push(['Alt too long', audit.altTooLong.length, C.warning]);
     if (audit.missingDimensions > 0) items.push(['No dimensions', audit.missingDimensions, '#9ca3af']);
-    if (audit.oversizedImages?.length) items.push(['Oversized', audit.oversizedImages.length, '#f97316']);
+    if (audit.oversizedImages?.length) items.push(['Oversized', audit.oversizedImages.length, C.orange]);
     return items;
   });
 </script>

@@ -1,5 +1,5 @@
 <script lang="ts">
-
+  import { formatDuration } from '../../format';
 
   let { stats, pageCount, onFilter, activeTemplate = 'all', templateDistribution = null }: {
     stats: Record<string, unknown>;
@@ -13,17 +13,6 @@
   let duration = $derived(((stats.crawlDurationMs as number) || 0));
   // Use the passed-in (stable) distribution, falling back to stats for backwards compat
   let templateDist = $derived(templateDistribution || (stats.templateTypeDistribution as Record<string, number>) || null);
-
-  function formatDuration(ms: number): string {
-    const s = Math.floor(ms / 1000);
-    if (s < 60) return `${s}s`;
-    const m = Math.floor(s / 60);
-    if (m < 60) return `${m}m ${s % 60}s`;
-    const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ${m % 60}m`;
-    const d = Math.floor(h / 24);
-    return `${d}d ${h % 24}h ${m % 60}m`;
-  }
 
   let indexability = $derived(stats.indexabilityStats as { indexable: number; nonIndexable: number } | undefined);
   let httpErrors = $derived(stats.statusCodes ? Object.entries(stats.statusCodes as Record<string, number>).reduce((n, [code, count]) => Number(code) >= 400 ? n + count : n, 0) : null);

@@ -58,9 +58,10 @@
     }
 
     const orphans = (stats.orphanPages as string[]) || [];
-    if (orphans.length > 0) {
+    const orphanTotal = (stats.totalOrphanPages as number) || orphans.length; // list is capped at 1,000
+    if (orphanTotal > 0) {
       cards.push({
-        id: 'orphan-pages', label: 'Possible Orphan Pages', count: orphans.length, severity: 'info',
+        id: 'orphan-pages', label: 'Possible Orphan Pages', count: orphanTotal, severity: 'info',
         details: orphans.slice(0, 50).map(url => ({ url })),
       });
     }

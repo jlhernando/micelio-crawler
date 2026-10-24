@@ -42,6 +42,9 @@ type CrawlResult struct {
 	Pages                 []*types.PageData
 	DeadLetterQueue       []types.DeadLetterEntry
 	DiscoveredSitemapURLs []string
+	// ResourceSizer HEAD-fetches resource sizes for page weight using the
+	// crawl's HTTP client (proxy/Tor/SSRF guard) and per-host rate limiter.
+	ResourceSizer analysis.ResourceSizer
 	// InternalLinksIter yields per-page internal links from disk.
 	// Used by BuildAdjacencyList to avoid holding links in memory.
 	// Caller must call InternalLinksClose when done.
@@ -123,13 +126,17 @@ func CrawlWithOptions(ctx context.Context, config types.CrawlConfig, onProgress 
 	}
 	s.onPhase = phaseFn
 	defer s.cleanup()
+	s.sink = newPageSink(s.writer, s.crawlDB, &s.errorCount)
 
 	// Main crawl loop
 	sem := make(chan struct{}, s.config.Concurrency)
 	var wg sync.WaitGroup
 	cancelled := false
-	lastScavenge := int32(0)
-	const scavengeInterval = 1000 // force OS memory return every N pages
+	lastScavenge := time.Now()
+	// Force OS memory return at most this often. FreeOSMemory runs a full
+	// GC; every 1000 pages it cost ~1000 full collections of a multi-GB
+	// heap on a 1M-page crawl.
+	const scavengeEvery = time.Minute
 
 	for !cancelled {
 		if s.shouldAbort() {
@@ -163,8 +170,8 @@ func CrawlWithOptions(ctx context.Context, config types.CrawlConfig, onProgress 
 		// Periodically force the Go runtime to return memory to the OS.
 		// Without this, macOS MADV_FREE pages inflate RSS even though
 		// they are logically free.
-		if n := s.crawled.Load(); n-lastScavenge >= scavengeInterval {
-			lastScavenge = n
+		if time.Since(lastScavenge) >= scavengeEvery {
+			lastScavenge = time.Now()
 			debug.FreeOSMemory()
 		}
 
@@ -181,6 +188,9 @@ func CrawlWithOptions(ctx context.Context, config types.CrawlConfig, onProgress 
 	}
 
 	wg.Wait()
+	// Write and commit every queued page before the queue flush, status
+	// update and reload below read the output file / crawl DB.
+	s.sink.Close()
 
 	coverage := s.queue.CoverageSnapshot()
 	coverage.Final = true
@@ -249,6 +259,7 @@ func CrawlWithOptions(ctx context.Context, config types.CrawlConfig, onProgress 
 		DiscoveredSitemapURLs: s.discoveredSitemapURLs,
 		ChangedPages:          changedPages,
 		UnchangedPages:        unchangedPages,
+		ResourceSizer:         s.resourceSizer(),
 	}
 	if s.intLinksDisk != nil {
 		result.InternalLinksIter = s.intLinksDisk.Iterate
@@ -296,14 +307,6 @@ func (s *crawlSession) loadResourceRefs() map[string][]types.ResourceEntry {
 	}
 	fmt.Fprintf(os.Stderr, "  [memory] Loaded %d page resource refs from disk\n", len(refs))
 	return refs
-}
-
-// normalizeURL strips trailing slashes for consistent lookup.
-func normalizeURL(u string) string {
-	if len(u) > 1 && u[len(u)-1] == '/' {
-		return u[:len(u)-1]
-	}
-	return u
 }
 
 // runBatchIntegrations fetches GSC, GA4, CrUX, and Plausible data for all crawled pages.

@@ -278,6 +278,14 @@ type EmbeddingStats struct {
 	CannibalizationGroups []CannibalizationGroup `json:"cannibalizationGroups"`
 	PagesEmbedded         int                    `json:"pagesEmbedded"`
 	Dimensions            int                    `json:"dimensions"`
+	// SimilarPairsTotal counts every pair over the threshold (SimilarPairs
+	// keeps the top 100).
+	SimilarPairsTotal int `json:"similarPairsTotal,omitempty"`
+	// ComparisonScope is "all" (every pair compared) or "folder" (large
+	// crawls: pages compared within their first URL folder only, each folder
+	// capped). PagesCompared counts pages that took part.
+	ComparisonScope string `json:"comparisonScope,omitempty"`
+	PagesCompared   int    `json:"pagesCompared,omitempty"`
 }
 
 // CannibalizationGroup holds a group of URLs with high similarity.

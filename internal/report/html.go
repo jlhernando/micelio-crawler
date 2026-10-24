@@ -408,7 +408,7 @@ function computeHealth(){
   const broken=(s.brokenLinks?s.brokenLinks.length:0)+(s.brokenExternalLinks?s.brokenExternalLinks.length:0);
   score+=Math.max(0,10-broken*0.5);
   if(s.canonicalStats){const cs=s.canonicalStats;score+=10*((cs.selfReferencing+cs.canonicalized)/Math.max(total,1))}else{score+=10}
-  const orphans=s.orphanPages?s.orphanPages.length:0;
+  const orphans=s.totalOrphanPages||(s.orphanPages?s.orphanPages.length:0);
   score+=Math.max(0,5-orphans*0.25);
   return Math.round(Math.min(100,Math.max(0,score)));
 }
@@ -435,7 +435,7 @@ function renderOverview(){
   h+='<div class="card"><div class="label">Indexable</div><div class="value good">'+comma(s.indexabilityStats?s.indexabilityStats.indexable:0)+'</div><div class="sub">'+pct(s.indexabilityStats?s.indexabilityStats.indexable:0,total)+' of total</div></div>';
   h+='<div class="card"><div class="label">Broken Links</div><div class="value '+(s.brokenLinks&&s.brokenLinks.length?'bad':'good')+'">'+(s.brokenLinks?s.brokenLinks.length:0)+'</div></div>';
   if(s.responseTimePercentiles){const p=s.responseTimePercentiles;const c=p.p50<500?'good':p.p50<1000?'warn':'bad';h+='<div class="card"><div class="label">Response Time</div><div class="value '+c+'">'+Math.round(p.p50)+'ms</div><div class="sub">p90: '+Math.round(p.p90)+'ms · p99: '+Math.round(p.p99)+'ms</div></div>'}
-  h+='<div class="card"><div class="label">Orphans</div><div class="value '+(s.orphanPages&&s.orphanPages.length?'warn':'good')+'">'+(s.orphanPages?s.orphanPages.length:0)+'</div></div>';
+  h+='<div class="card"><div class="label">Orphans</div><div class="value '+(s.orphanPages&&s.orphanPages.length?'warn':'good')+'">'+(s.totalOrphanPages||(s.orphanPages?s.orphanPages.length:0))+'</div></div>';
   h+='</div></div>';
 
   // Page Types
@@ -642,7 +642,7 @@ function renderSignals(){
   const idx=s.indexabilityStats?s.indexabilityStats.indexable:0;
   const nonIdx=s.indexabilityStats?s.indexabilityStats.nonIndexable:0;
   const broken=s.brokenLinks?s.brokenLinks.length:0;
-  const orphans=s.orphanPages?s.orphanPages.length:0;
+  const orphans=s.totalOrphanPages||(s.orphanPages?s.orphanPages.length:0);
 
   // 1. Crawl & Index
   h+='<div class="signal-section" style="border-left:3px solid var(--green)"><h3>Crawl &amp; Index (Trawler / Alexandria)</h3>';

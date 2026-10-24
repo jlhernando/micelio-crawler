@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { C } from '../../palette';
   import DonutChart from './DonutChart.svelte';
 
   let { stats }: { stats: Record<string, unknown> } = $props();
@@ -14,9 +15,9 @@
     const cross = cs.crossDomain?.length || 0;
     const missing = cs.totalWithoutCanonical || 0;
     const items: [string, number, string][] = [];
-    if (self > 0) items.push(['Self-referencing', self, '#73d9ac']);
-    if (canonicalized > 0) items.push(['Canonicalized', canonicalized, '#e5b66e']);
-    if (cross > 0) items.push(['Cross-domain', cross, '#75a6ff']);
+    if (self > 0) items.push(['Self-referencing', self, C.success]);
+    if (canonicalized > 0) items.push(['Canonicalized', canonicalized, C.warning]);
+    if (cross > 0) items.push(['Cross-domain', cross, C.blue]);
     if (missing > 0) items.push(['Missing', missing, '#9ca3af']);
     return items;
   });

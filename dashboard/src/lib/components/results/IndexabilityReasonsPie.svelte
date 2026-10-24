@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { C } from '../../palette';
   import DonutChart from './DonutChart.svelte';
 
   let { stats, onFilter }: {
@@ -6,7 +7,7 @@
     onFilter?: (filter: { indexable?: string }) => void;
   } = $props();
 
-  const REASON_COLORS = ['#bc8cff', '#e5b66e', '#f97316', '#9ca3af', '#39d2c0', '#f778ba', '#75a6ff', '#f58f98'];
+  const REASON_COLORS = ['#bc8cff', C.warning, C.orange, '#9ca3af', '#39d2c0', '#f778ba', C.blue, C.danger];
 
   let indexability = $derived((stats.indexabilityStats as { indexable: number; nonIndexable: number; reasons: Record<string, number> }) || null);
   let entries = $derived.by(() => {

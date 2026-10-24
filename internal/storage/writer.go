@@ -261,6 +261,26 @@ func (w *ResultWriter) RewriteAll(pages []*types.PageData) error {
 	return w.buf.Flush()
 }
 
+// IsJSONL reports whether the writer emits one JSON object per line, i.e.
+// whether WriteJSONLine can be used.
+func (w *ResultWriter) IsJSONL() bool { return w.format != "csv" }
+
+// WriteJSONLine writes a page that the caller already encoded with
+// json.Marshal (JSONL only). Lets callers encode outside their locks.
+func (w *ResultWriter) WriteJSONLine(data []byte) error {
+	if w.format == "csv" {
+		return fmt.Errorf("WriteJSONLine on a CSV writer")
+	}
+	if _, err := w.buf.Write(data); err != nil {
+		return err
+	}
+	if err := w.buf.WriteByte('\n'); err != nil {
+		return err
+	}
+	w.count++
+	return nil
+}
+
 func (w *ResultWriter) writeJSONL(page *types.PageData) error {
 	data, err := json.Marshal(page)
 	if err != nil {

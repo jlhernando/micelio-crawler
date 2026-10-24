@@ -1,4 +1,4 @@
-node_modules
+**/node_modules
 dist
 .git
 .claude
@@ -6,8 +6,11 @@ dist
 .playwright-mcp
 docs
 *.png
-*.jsonl
+**/*.jsonl
+**/*.db
 *.html
-*.db
 CLAUDE.md
 BACKLOG.md
+dashboard/test-results
+dashboard/playwright-report
+micelio

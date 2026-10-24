@@ -131,7 +131,13 @@ type PerformanceScores struct {
 // CrawlStats is the main aggregation structure for crawl results.
 // Kept as a struct with pointer fields for optional sections.
 type CrawlStats struct {
-	PageRankScores            map[string]float64     `json:"pageRankScores"`
+	// PageRankScores maps URL -> PageRank. Stored stats only carry it for
+	// crawls of at most PageRankScoresInlineMax pages (it would otherwise be
+	// one entry per page, re-encoded on every stats save); per-page scores
+	// live on PageData.PageRank and in the crawl DB (page_scores table).
+	// Old stored crawls may still carry the full map; readers accept both.
+	PageRankScores            map[string]float64     `json:"pageRankScores,omitempty"`
+	PageRankHistogram         *PageRankHistogram     `json:"pageRankHistogram,omitempty"`
 	RenderCompareStats        *RenderCompareStats    `json:"renderCompareStats"`
 	PageWeightStats           *PageWeightStats       `json:"pageWeightStats"`
 	CruxStats                 *CruxStats             `json:"cruxStats"`
@@ -149,6 +155,7 @@ type CrawlStats struct {
 	Ga4Stats                  *Ga4Stats              `json:"ga4Stats"`
 	SchemaValidationStats     *SchemaValidationStats `json:"schemaValidationStats"`
 	TextToCodeStats           *TextToCodeStats       `json:"textToCodeStats"`
+	WordCountBuckets          *WordCountBuckets      `json:"wordCountBuckets,omitempty"`
 	PerformanceScores         *PerformanceScores     `json:"performanceScores"`
 	URLIssueStats             map[string][]string    `json:"urlIssueStats"`
 	ReadabilityStats          *ReadabilityStats      `json:"readabilityStats"`
@@ -180,7 +187,8 @@ type CrawlStats struct {
 	SegmentStats              []SegmentStat          `json:"segmentStats"`
 	HreflangIssues            []HreflangIssue        `json:"hreflangIssues"`
 	Soft404Pages              []string               `json:"soft404Pages"`
-	OrphanPages               []string               `json:"orphanPages"`
+	OrphanPages               []string               `json:"orphanPages"` // capped at StatsListCap; see TotalOrphanPages
+	TotalOrphanPages          int                    `json:"totalOrphanPages,omitempty"`
 	OrphanMethodology         string                 `json:"orphanMethodology,omitempty"` // "reporter" (basic) or "graph" (redirect-aware via link intelligence)
 	SlowPages                 []URLResponseTime      `json:"slowPages"`
 	LinkAnalysis              LinkAnalysis           `json:"linkAnalysis"`
@@ -276,6 +284,16 @@ type LinkPair struct {
 type TextToCodeStats struct {
 	ContentPoor []URLRatioEntry `json:"contentPoor"`
 	AvgRatio    float64         `json:"avgRatio"`
+}
+
+// WordCountBuckets is a histogram of page word counts across every crawled
+// page. Edges holds each bucket's inclusive lower bound; the last bucket is
+// open-ended. Counts[i] is the number of pages in bucket i.
+type WordCountBuckets struct {
+	Edges    []int   `json:"edges"`
+	Counts   []int   `json:"counts"`
+	AvgWords float64 `json:"avgWords"`
+	Pages    int     `json:"pages"`
 }
 
 // URLRatioEntry holds a URL with its ratio.
@@ -398,6 +416,67 @@ type ImageSizeIssue struct {
 	URL       string `json:"url"`
 	Src       string `json:"src"`
 	SizeBytes int64  `json:"sizeBytes"`
+}
+
+// StatsListCap bounds per-URL lists stored in CrawlStats (orphans,
+// unreachable pages, near-orphans, dilution warnings). Without a cap these
+// grow with the crawl (one entry per page on many sites) and the stats blob
+// is re-encoded several times during analysis. The matching count fields
+// (TotalOrphanPages, UnreachablePagesCount, ...) keep the real totals.
+const StatsListCap = 1000
+
+// PageRankScoresInlineMax is the largest crawl whose full URL -> PageRank
+// map is kept in CrawlStats.PageRankScores.
+const PageRankScoresInlineMax = 500
+
+// PageRankHistogram counts pages per PageRank band (0-10 scale). Buckets
+// are [0,1), [1,3), [3,5), [5,10), [10,inf) — the bands the dashboard
+// PageRank distribution card shows.
+type PageRankHistogram struct {
+	Buckets []int `json:"buckets"`
+	Total   int   `json:"total"`
+}
+
+// PageRankBucketBounds are the lower bounds of PageRankHistogram.Buckets.
+var PageRankBucketBounds = []float64{0, 1, 3, 5, 10}
+
+// NewPageRankHistogram buckets scores into a PageRankHistogram.
+func NewPageRankHistogram(scores func(yield func(float64))) *PageRankHistogram {
+	h := &PageRankHistogram{Buckets: make([]int, len(PageRankBucketBounds))}
+	scores(h.Add)
+	return h
+}
+
+// Add counts one score.
+func (h *PageRankHistogram) Add(score float64) {
+	b := 0
+	for i := len(PageRankBucketBounds) - 1; i >= 0; i-- {
+		if score >= PageRankBucketBounds[i] {
+			b = i
+			break
+		}
+	}
+	h.Buckets[b]++
+	h.Total++
+}
+
+// OrphanCount returns the number of orphan pages, including those cut from
+// the capped OrphanPages list.
+func (s *CrawlStats) OrphanCount() int {
+	if s.TotalOrphanPages > len(s.OrphanPages) {
+		return s.TotalOrphanPages
+	}
+	return len(s.OrphanPages)
+}
+
+// SetOrphanPages stores the orphan list capped at StatsListCap and records
+// the full count.
+func (s *CrawlStats) SetOrphanPages(orphans []string) {
+	s.TotalOrphanPages = len(orphans)
+	if len(orphans) > StatsListCap {
+		orphans = append([]string(nil), orphans[:StatsListCap]...) // drop the large backing array
+	}
+	s.OrphanPages = orphans
 }
 
 // LinkIntelligenceStats holds aggregate link intelligence metrics.

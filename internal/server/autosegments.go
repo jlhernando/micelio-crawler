@@ -77,20 +77,25 @@ func filterBySegment(pages []*types.PageData, spec string) []*types.PageData {
 	}
 	out := make([]*types.PageData, 0, len(pages)/4)
 	for _, p := range pages {
-		if dim == "rule" {
-			for _, name := range p.Segments {
-				if name == value {
-					out = append(out, p)
-					break
-				}
-			}
-			continue
-		}
-		if p.AutoSegments.Value(dim) == value {
+		if pageInSegment(p, dim, value) {
 			out = append(out, p)
 		}
 	}
 	return out
+}
+
+// pageInSegment reports whether p is in segment dim:value ("rule" = a
+// user segment rule name, else an automatic segment dimension).
+func pageInSegment(p *types.PageData, dim, value string) bool {
+	if dim == "rule" {
+		for _, name := range p.Segments {
+			if name == value {
+				return true
+			}
+		}
+		return false
+	}
+	return p.AutoSegments.Value(dim) == value
 }
 
 // recomputeFlatPageRank repairs crawls whose stored PageRank is the same for

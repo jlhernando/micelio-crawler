@@ -201,10 +201,10 @@ func checkMissingDescriptions(stats *types.CrawlStats) *types.AlertResult {
 }
 
 func checkOrphanPages(stats *types.CrawlStats) *types.AlertResult {
-	if stats.TotalPages == 0 || len(stats.OrphanPages) == 0 {
+	orphans := stats.OrphanCount()
+	if stats.TotalPages == 0 || orphans == 0 {
 		return nil
 	}
-	orphans := len(stats.OrphanPages)
 	rate := float64(orphans) / float64(stats.TotalPages) * 100
 	if rate > 5 {
 		return &types.AlertResult{

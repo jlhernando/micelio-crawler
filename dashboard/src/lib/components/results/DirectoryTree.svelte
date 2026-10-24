@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatNumber } from '../../format';
   import { api } from '../../api';
 
   interface TreeNode {
@@ -222,11 +223,7 @@
   }
 
   function traffic(node: TreeNode, v: number | undefined): string {
-    return node.trafficMissing ? '—' : fmt(v ?? 0);
-  }
-
-  function fmt(n: number): string {
-    return n.toLocaleString();
+    return node.trafficMissing ? '—' : formatNumber(v ?? 0);
   }
 
   function fmtDec(n: number, d = 2): string {
@@ -384,7 +381,7 @@
                       style="width: {barWidth(node.pages, maxPages)}; background: {depthColor}; opacity: 0.6"
                     ></div>
                   </div>
-                  <span class="w-10 text-right">{fmt(node.pages)}</span>
+                  <span class="w-10 text-right">{formatNumber(node.pages)}</span>
                 </div>
               </td>
 
@@ -398,7 +395,7 @@
               {/if}
 
               <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{fmtDec(node.avgInternalLinks, 1)}</td>
-              <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{fmt(node.totalInlinks)}</td>
+              <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{formatNumber(node.totalInlinks)}</td>
 
               <td class="text-right px-1.5 text-fg-2/60 tabular-nums opacity-0 group-hover:opacity-100 transition-opacity">
                 {#if node.avgResponseTime > 0}{node.avgResponseTime}ms{/if}

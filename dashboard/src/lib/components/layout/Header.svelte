@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { api } from '../../api';
   let { currentPath, mobileOpen = false, onMenu }: { currentPath: string; mobileOpen?: boolean; onMenu: () => void } = $props();
 
   function getTitle(path: string): string {
@@ -25,11 +26,11 @@
   $effect(() => {
     if (crawlId && crawlId !== lastFetchedId) {
       lastFetchedId = crawlId;
-      fetch(`/api/crawl/${crawlId}/status`)
-        .then(r => r.json())
+      api.getCrawlStatus(crawlId)
         .then(job => {
-          try { domain = new URL(job.seedUrl).hostname; } catch { domain = job.seedUrl; }
-          crawlConfig = job.config;
+          const seedUrl = String(job.seedUrl ?? '');
+          try { domain = new URL(seedUrl).hostname; } catch { domain = seedUrl; }
+          crawlConfig = (job.config as Record<string, unknown>) ?? null;
         })
         .catch(() => { domain = null; crawlConfig = null; });
     } else if (!crawlId) {
@@ -42,12 +43,7 @@
     if (!crawlConfig || recrawling) return;
     recrawling = true;
     try {
-      const res = await fetch('/api/crawl/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(crawlConfig),
-      });
-      const { id } = await res.json();
+      const { id } = await api.startCrawl(crawlConfig);
       window.location.hash = `/monitor/${id}`;
     } catch {
       recrawling = false;

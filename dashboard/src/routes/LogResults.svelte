@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { formatBytes, formatCompact, formatDate, pct } from '../lib/format';
+  import { statusBadgeClass } from '../lib/status';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount, untrack } from 'svelte';
   import { api } from '../lib/api';
@@ -10,9 +12,9 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
   let tab = $state<'overview' | 'bots' | 'urls' | 'dirs' | 'hourly' | 'trends' | 'google' | 'waste' | 'merge' | 'heatmap' | 'ai'>('overview');
-  let stats = $state<Record<string, unknown> | null>(null);
+  let stats = $state.raw<Record<string, unknown> | null>(null);
   let job = $state<Record<string, unknown> | null>(null);
-  let botData = $state<Record<string, unknown> | null>(null);
+  let botData = $state.raw<Record<string, unknown> | null>(null);
 
   // Sort state
   let botSort = $state<{ col: string; asc: boolean }>({ col: 'hits', asc: false });
@@ -621,7 +623,6 @@
     if (data.phase === 'error' && data.error) mergeError = data.error;
   }
 
-
   const segmentLabels: Record<string, string> = {
     healthy: 'Healthy',
     crawled_not_indexed: 'Crawled, Not Indexed',
@@ -694,21 +695,6 @@
     return `M ${start.x} ${start.y} A ${r} ${r} 0 ${large} 1 ${end.x} ${end.y}`;
   }
 
-  function formatNum(n: number): string {
-    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-    if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
-    return n.toLocaleString();
-  }
-
-  function formatBytes(bytes: number): string {
-    if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB';
-    if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
-    if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return bytes + ' B';
-  }
-
-  function pct(n: number): string { return (n * 100).toFixed(1) + '%'; }
-
   function sortBots(col: string) {
     if (botSort.col === col) botSort.asc = !botSort.asc;
     else { botSort.col = col; botSort.asc = false; }
@@ -737,19 +723,6 @@
     if (cat === 'feed_crawler') return '#fb923c';
     if (cat === 'monitoring') return '#22d3ee';
     return '#94a3b8';
-  }
-
-  function statusColor(code: number): string {
-    if (code >= 500) return 'bg-red-500/20 text-red-400';
-    if (code >= 400) return 'bg-orange-500/20 text-orange-400';
-    if (code >= 300) return 'bg-yellow-500/20 text-yellow-400';
-    if (code >= 200) return 'bg-green-500/20 text-green-400';
-    return 'bg-surface-3 text-fg-2';
-  }
-
-  function formatDate(s: string): string {
-    if (!s) return '-';
-    return new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }
 
   function formatShortDate(s: string): string {
@@ -835,11 +808,11 @@
       <!-- Summary Cards -->
       <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {#each [
-          ['Total Hits', formatNum(totalHits)],
-          ['Bot Hits', formatNum(botHitsTotal)],
-          ['Human Hits', formatNum(humanHits)],
+          ['Total Hits', formatCompact(totalHits)],
+          ['Bot Hits', formatCompact(botHitsTotal)],
+          ['Human Hits', formatCompact(humanHits)],
           ['Date Range', dateRange[0] ? formatDate(dateRange[0]) + ' - ' + formatDate(dateRange[1]) : '-'],
-          ['Unique URLs', formatNum((crawlBudget.uniqueUrlsCrawled as number) || 0)],
+          ['Unique URLs', formatCompact((crawlBudget.uniqueUrlsCrawled as number) || 0)],
           ['Total Bytes', formatBytes((stats?.totalBytes as number) || 0)],
         ] as [label, value]}
           <div class="rounded-xl bg-surface-1 border border-border p-4">
@@ -911,10 +884,10 @@
                 <button
                   class="px-2.5 py-1 rounded text-xs font-mono cursor-pointer transition-colors
                     {statusFilter === code ? 'ring-2 ring-accent' : ''}
-                    {statusColor(code)}"
+                    {statusBadgeClass(code)}"
                   onclick={() => { statusFilter = statusFilter === code ? null : code; tab = 'urls'; }}
                   title="Click to filter URLs by {code}"
-                >{code}: {formatNum(count)}</button>
+                >{code}: {formatCompact(count)}</button>
               {/each}
             </div>
           </div>
@@ -924,10 +897,10 @@
       <!-- Crawl Budget KPIs -->
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
         {#each [
-          ['Crawl Efficiency', pct((crawlBudget.crawlEfficiency as number) || 0), (crawlBudget.crawlEfficiency as number) >= 0.7 ? 'text-green-400' : 'text-orange-400'],
-          ['Error Rate', pct((crawlBudget.errorRate as number) || 0), (crawlBudget.errorRate as number) < 0.05 ? 'text-green-400' : 'text-red-400'],
-          ['Mobile Crawl Share', pct((crawlBudget.mobileCrawlShare as number) || 0), 'text-blue-400'],
-          ['AI Bot Share', pct((crawlBudget.aiBotShare as number) || 0), 'text-purple-400'],
+          ['Crawl Efficiency', pct((crawlBudget.crawlEfficiency as number) || 0, 1), (crawlBudget.crawlEfficiency as number) >= 0.7 ? 'text-green-400' : 'text-orange-400'],
+          ['Error Rate', pct((crawlBudget.errorRate as number) || 0, 1), (crawlBudget.errorRate as number) < 0.05 ? 'text-green-400' : 'text-red-400'],
+          ['Mobile Crawl Share', pct((crawlBudget.mobileCrawlShare as number) || 0, 1), 'text-blue-400'],
+          ['AI Bot Share', pct((crawlBudget.aiBotShare as number) || 0, 1), 'text-purple-400'],
         ] as [label, value, color]}
           <div class="rounded-xl bg-surface-1 border border-border p-4">
             <div class="text-xs text-fg-2 mb-1">{label}</div>
@@ -949,7 +922,7 @@
                   <div class="h-full rounded transition-all duration-300" style="width: {barPct}%; background: {categoryBg(bot.category)}"></div>
                 </div>
                 <span class="w-20 text-xs text-fg-2 text-right">{formatBytes(bot.bytes)}</span>
-                <span class="w-16 text-xs text-fg-2 text-right">{formatNum(bot.hits)} hits</span>
+                <span class="w-16 text-xs text-fg-2 text-right">{formatCompact(bot.hits)} hits</span>
               </div>
             {/each}
           </div>
@@ -977,7 +950,7 @@
                 <div class="flex items-center gap-2">
                   <span class="inline-block w-3 h-3 rounded" style="background: {categoryBg(seg.cat)}"></span>
                   <span class="text-xs text-fg w-28">{seg.cat.replace(/_/g, ' ')}</span>
-                  <span class="text-xs text-fg-2">{formatNum(seg.hits)}</span>
+                  <span class="text-xs text-fg-2">{formatCompact(seg.hits)}</span>
                   <span class="text-xs text-fg-2">({botHitsTotal > 0 ? ((seg.hits / botHitsTotal) * 100).toFixed(0) : 0}%)</span>
                 </div>
               {/each}
@@ -1108,7 +1081,7 @@
             bind:value={urlSearch}
           />
           {#if statusFilter !== null}
-            <span class="px-2 py-1 rounded text-xs font-mono {statusColor(statusFilter)}">
+            <span class="px-2 py-1 rounded text-xs font-mono {statusBadgeClass(statusFilter)}">
               {statusFilter}
               <button class="ml-1 cursor-pointer" onclick={() => statusFilter = null}>x</button>
             </span>
@@ -1137,7 +1110,7 @@
                 <td class="px-4 py-3 text-fg-2">{url.humanHits.toLocaleString()}</td>
                 <td class="px-4 py-3 text-fg-2 text-xs">{url.topBot || '-'}</td>
                 <td class="px-4 py-3">
-                  <span class="px-2 py-0.5 rounded text-xs font-mono {statusColor(url.status)}">{url.status}</span>
+                  <span class="px-2 py-0.5 rounded text-xs font-mono {statusBadgeClass(url.status)}">{url.status}</span>
                 </td>
               </tr>
             {/each}
@@ -1164,8 +1137,8 @@
                     <div class="bg-accent/40" style="width: {100 - botPct}%"></div>
                   </div>
                 </div>
-                <span class="w-16 text-xs text-fg-2 text-right">{formatNum(d.total)}</span>
-                <span class="w-20 text-xs text-fg-2 text-right">{formatNum(d.bot)} bot</span>
+                <span class="w-16 text-xs text-fg-2 text-right">{formatCompact(d.total)}</span>
+                <span class="w-20 text-xs text-fg-2 text-right">{formatCompact(d.bot)} bot</span>
               </div>
             {/each}
           </div>
@@ -1190,9 +1163,9 @@
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
           {#each [
             ['Directories', dirStats.length.toLocaleString()],
-            ['Total Hits', formatNum(totalDirHits)],
+            ['Total Hits', formatCompact(totalDirHits)],
             ['Top Directory', dirStats[0]?.dir || '-'],
-            ['Top Dir Hits', formatNum(dirStats[0]?.total || 0) + ' (' + (totalDirHits > 0 ? ((dirStats[0]?.total || 0) / totalDirHits * 100).toFixed(0) : '0') + '%)'],
+            ['Top Dir Hits', formatCompact(dirStats[0]?.total || 0) + ' (' + (totalDirHits > 0 ? ((dirStats[0]?.total || 0) / totalDirHits * 100).toFixed(0) : '0') + '%)'],
           ] as [label, value]}
             <div class="rounded-lg bg-surface-1 border border-border px-4 py-3">
               <div class="text-[10px] text-fg-2 uppercase tracking-wider">{label}</div>
@@ -1217,7 +1190,7 @@
                     <div class="bg-accent/40" style="width: {100 - botPct}%"></div>
                   </div>
                 </div>
-                <span class="w-16 text-xs text-fg text-right">{formatNum(d.total)}</span>
+                <span class="w-16 text-xs text-fg text-right">{formatCompact(d.total)}</span>
                 <span class="w-12 text-xs text-fg-2 text-right">{sharePct.toFixed(1)}%</span>
               </div>
             {/each}
@@ -1232,7 +1205,7 @@
                     <div class="bg-accent/40" style="width: {100 - othersBotPct}%"></div>
                   </div>
                 </div>
-                <span class="w-16 text-xs text-fg-2 text-right">{formatNum(othersTotal)}</span>
+                <span class="w-16 text-xs text-fg-2 text-right">{formatCompact(othersTotal)}</span>
                 <span class="w-12 text-xs text-fg-2 text-right">{(othersTotal / totalDirHits * 100).toFixed(1)}%</span>
               </div>
             {/if}
@@ -1263,7 +1236,7 @@
                   {@const x2 = 50 + 40 * Math.cos(endRad)}
                   {@const y2 = 50 + 40 * Math.sin(endRad)}
                   <path d="M 50 50 L {x1} {y1} A 40 40 0 {largeArc} 1 {x2} {y2} Z" fill={seg.color} opacity="0.85">
-                    <title>{seg.label}: {formatNum(seg.value)} ({(seg.value / donutTotal * 100).toFixed(1)}%)</title>
+                    <title>{seg.label}: {formatCompact(seg.value)} ({(seg.value / donutTotal * 100).toFixed(1)}%)</title>
                   </path>
                 {/each}
                 <circle cx="50" cy="50" r="22" fill="var(--surface-1)" />
@@ -1297,7 +1270,7 @@
                   <div class="flex-1 h-4 rounded bg-surface-3 overflow-hidden">
                     <div class="h-full rounded {isHot ? 'bg-orange-500/70' : 'bg-accent/60'}" style="width: {barPct}%"></div>
                   </div>
-                  <span class="w-20 text-xs text-right {isHot ? 'text-orange-400' : 'text-fg-2'}">{formatNum(Math.round(avg))} avg</span>
+                  <span class="w-20 text-xs text-right {isHot ? 'text-orange-400' : 'text-fg-2'}">{formatCompact(Math.round(avg))} avg</span>
                 </div>
               {/each}
             </div>
@@ -1340,9 +1313,9 @@
                         </div>
                       </div>
                     </td>
-                    <td class="px-4 py-2 text-xs text-fg text-right">{formatNum(d.total)}</td>
-                    <td class="px-4 py-2 text-xs text-fg-2 text-right">{formatNum(d.bot)}</td>
-                    <td class="px-4 py-2 text-xs text-fg-2 text-right">{formatNum(d.human)}</td>
+                    <td class="px-4 py-2 text-xs text-fg text-right">{formatCompact(d.total)}</td>
+                    <td class="px-4 py-2 text-xs text-fg-2 text-right">{formatCompact(d.bot)}</td>
+                    <td class="px-4 py-2 text-xs text-fg-2 text-right">{formatCompact(d.human)}</td>
                     <td class="px-4 py-2 text-xs text-fg-2 text-right">{d.urls.toLocaleString()}</td>
                     <td class="px-4 py-2 text-xs text-fg-2 text-right">{sharePct.toFixed(1)}%</td>
                     <td class="px-4 py-2 text-xs text-right {botPct > 90 ? 'text-red-400' : botPct > 50 ? 'text-yellow-400' : 'text-green-400'}">{botPct.toFixed(0)}%</td>
@@ -1386,9 +1359,9 @@
                           </div>
                         </div>
                       </td>
-                      <td class="px-4 py-2 text-xs text-fg text-right">{formatNum(p.total)}</td>
-                      <td class="px-4 py-2 text-xs text-fg-2 text-right">{formatNum(p.bot)}</td>
-                      <td class="px-4 py-2 text-xs text-fg-2 text-right">{formatNum(p.human)}</td>
+                      <td class="px-4 py-2 text-xs text-fg text-right">{formatCompact(p.total)}</td>
+                      <td class="px-4 py-2 text-xs text-fg-2 text-right">{formatCompact(p.bot)}</td>
+                      <td class="px-4 py-2 text-xs text-fg-2 text-right">{formatCompact(p.human)}</td>
                       <td class="px-4 py-2 text-xs text-fg-2 text-right">{p.urls.toLocaleString()}</td>
                       <td class="px-4 py-2 text-xs text-right {botPct > 90 ? 'text-red-400' : botPct > 50 ? 'text-yellow-400' : 'text-green-400'}">{botPct.toFixed(0)}%</td>
                     </tr>
@@ -1417,7 +1390,7 @@
           {#if avgHourly > 0}
             {@const avgY = 180 - (avgHourly / maxHourly) * 180}
             <div class="absolute left-0 right-0 border-t border-dashed border-fg-2/30" style="bottom: {180 - avgY}px;">
-              <span class="absolute -top-4 right-0 text-[9px] text-fg-2">avg {formatNum(Math.round(avgHourly))}</span>
+              <span class="absolute -top-4 right-0 text-[9px] text-fg-2">avg {formatCompact(Math.round(avgHourly))}</span>
             </div>
           {/if}
           {#each hourlyHits as hits, hour}
@@ -1597,7 +1570,7 @@
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div class="rounded-xl bg-surface-1 border border-border p-4">
             <div class="text-xs text-fg-2 mb-1">Total Googlebot Hits</div>
-            <div class="text-lg font-semibold text-fg">{formatNum(googlebotTotalHits)}</div>
+            <div class="text-lg font-semibold text-fg">{formatCompact(googlebotTotalHits)}</div>
           </div>
           <div class="rounded-xl bg-surface-1 border border-border p-4">
             <div class="text-xs text-fg-2 mb-1">% of All Bot Hits</div>
@@ -1634,11 +1607,11 @@
               <div class="flex flex-col gap-3">
                 <div class="flex items-center gap-2">
                   <span class="inline-block w-3 h-3 rounded bg-blue-400"></span>
-                  <span class="text-sm text-fg">Mobile: {formatNum(googlebotMobileHits)} ({((googlebotMobileHits / googlebotTotalHits) * 100).toFixed(0)}%)</span>
+                  <span class="text-sm text-fg">Mobile: {formatCompact(googlebotMobileHits)} ({((googlebotMobileHits / googlebotTotalHits) * 100).toFixed(0)}%)</span>
                 </div>
                 <div class="flex items-center gap-2">
                   <span class="inline-block w-3 h-3 rounded bg-gray-400"></span>
-                  <span class="text-sm text-fg">Desktop: {formatNum(googlebotDesktopHits)} ({((googlebotDesktopHits / googlebotTotalHits) * 100).toFixed(0)}%)</span>
+                  <span class="text-sm text-fg">Desktop: {formatCompact(googlebotDesktopHits)} ({((googlebotDesktopHits / googlebotTotalHits) * 100).toFixed(0)}%)</span>
                 </div>
               </div>
             </div>

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { C } from '../../palette';
+  import { pct } from '../../format';
   let { stats, pageCount }: { stats: Record<string, unknown>; pageCount: number } = $props();
 
   interface TagHealth { label: string; good: number; tooLong: number; duplicate: number; missing: number; }
@@ -20,7 +22,6 @@
     return [t, h, d];
   });
 
-  function pct(v: number): string { return pageCount > 0 ? Math.round((v / pageCount) * 100) + '%' : '0%'; }
   function w(v: number): string { return pageCount > 0 ? ((v / pageCount) * 100) + '%' : '0%'; }
 </script>
 
@@ -31,19 +32,19 @@
       <div class="flex items-center gap-2">
         <span class="w-20 text-right text-xs text-fg-2 shrink-0">{tag.label}</span>
         <div class="flex-1 flex h-5 rounded overflow-hidden bg-surface-3">
-          {#if tag.good > 0}<div style="width:{w(tag.good)};background:#73d9ac" class="h-full"></div>{/if}
-          {#if tag.tooLong > 0}<div style="width:{w(tag.tooLong)};background:#e5b66e" class="h-full"></div>{/if}
+          {#if tag.good > 0}<div style="width:{w(tag.good)};background:var(--color-success)" class="h-full"></div>{/if}
+          {#if tag.tooLong > 0}<div style="width:{w(tag.tooLong)};background:var(--color-warning)" class="h-full"></div>{/if}
           {#if tag.duplicate > 0}<div style="width:{w(tag.duplicate)};background:#f97316" class="h-full"></div>{/if}
-          {#if tag.missing > 0}<div style="width:{w(tag.missing)};background:#f58f98" class="h-full"></div>{/if}
+          {#if tag.missing > 0}<div style="width:{w(tag.missing)};background:var(--color-danger)" class="h-full"></div>{/if}
         </div>
-        <span class="w-10 text-right text-xs shrink-0" style="color:{tag.good / (pageCount || 1) >= 0.8 ? '#73d9ac' : tag.good / (pageCount || 1) >= 0.6 ? '#e5b66e' : '#f58f98'}">{pct(tag.good)}</span>
+        <span class="w-10 text-right text-xs shrink-0" style="color:{tag.good / (pageCount || 1) >= 0.8 ? C.success : tag.good / (pageCount || 1) >= 0.6 ? C.warning : C.danger}">{pct(tag.good, pageCount, 0)}</span>
       </div>
     {/each}
   </div>
   <div class="flex gap-4 mt-2">
-    <span class="flex items-center gap-1 text-[10px] text-fg-2"><span class="w-2 h-2 rounded-full" style="background:#73d9ac"></span>Good</span>
-    <span class="flex items-center gap-1 text-[10px] text-fg-2"><span class="w-2 h-2 rounded-full" style="background:#e5b66e"></span>Length issue</span>
+    <span class="flex items-center gap-1 text-[10px] text-fg-2"><span class="w-2 h-2 rounded-full" style="background:var(--color-success)"></span>Good</span>
+    <span class="flex items-center gap-1 text-[10px] text-fg-2"><span class="w-2 h-2 rounded-full" style="background:var(--color-warning)"></span>Length issue</span>
     <span class="flex items-center gap-1 text-[10px] text-fg-2"><span class="w-2 h-2 rounded-full" style="background:#f97316"></span>Duplicate</span>
-    <span class="flex items-center gap-1 text-[10px] text-fg-2"><span class="w-2 h-2 rounded-full" style="background:#f58f98"></span>Missing</span>
+    <span class="flex items-center gap-1 text-[10px] text-fg-2"><span class="w-2 h-2 rounded-full" style="background:var(--color-danger)"></span>Missing</span>
   </div>
 </div>

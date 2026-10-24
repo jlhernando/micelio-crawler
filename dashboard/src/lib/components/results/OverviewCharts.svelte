@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { C } from '../../palette';
   import DonutChart from './DonutChart.svelte';
   let { stats, pageCount, onFilter }: {
     stats: Record<string, unknown>; pageCount: number;
@@ -7,19 +8,19 @@
   let indexability = $derived(stats.indexabilityStats as { indexable: number; nonIndexable: number } | undefined);
   let total = $derived(indexability ? indexability.indexable + indexability.nonIndexable : 0);
   let types = $derived(Object.entries((stats.templateTypeDistribution as Record<string, number>) || {}).filter(([, n]) => n > 0).sort((a,b) => b[1]-a[1]));
-  const colors = ['#75a6ff', '#b09aff', '#73d9ac', '#e5b66e', '#57c6c9', '#f58f98'];
+  const colors = [C.blue, C.purple, C.success, C.warning, '#57c6c9', C.danger];
 </script>
 
 <section class="chart-panel">
   <div class="chart-panel-heading"><div><h2>Indexability</h2><p>Which pages allow search indexing</p></div><span class="text-xs text-fg-2">{pageCount.toLocaleString()} pages</span></div>
   {#if indexability && total > 0}
     <div class="coverage-chart">
-      <DonutChart labels={['Indexable', 'Non-indexable']} data={[indexability.indexable, indexability.nonIndexable]} colors={['#73d9ac', '#e5b66e']} height={215} legend={false} />
+      <DonutChart labels={['Indexable', 'Non-indexable']} data={[indexability.indexable, indexability.nonIndexable]} colors={[C.success, C.warning]} height={215} legend={false} />
       <div class="coverage-number"><strong>{(indexability.indexable / total * 100).toFixed(1)}%</strong><span>indexable</span></div>
     </div>
     <div class="coverage-legend">
-      <button onclick={() => onFilter({ indexable: 'yes' })}><span><i style="background:#73d9ac"></i>Indexable</span><b>{indexability.indexable.toLocaleString()} ↗</b></button>
-      <button onclick={() => onFilter({ indexable: 'no' })}><span><i style="background:#e5b66e"></i>Non-indexable</span><b>{indexability.nonIndexable.toLocaleString()} ↗</b></button>
+      <button onclick={() => onFilter({ indexable: 'yes' })}><span><i style="background:var(--color-success)"></i>Indexable</span><b>{indexability.indexable.toLocaleString()} ↗</b></button>
+      <button onclick={() => onFilter({ indexable: 'no' })}><span><i style="background:var(--color-warning)"></i>Non-indexable</span><b>{indexability.nonIndexable.toLocaleString()} ↗</b></button>
     </div>
     <p class="chart-note mt-4">Indexable does not mean indexed by Google.</p>
   {:else}<div class="chart-empty">Indexability data is not available for this crawl.</div>{/if}

@@ -307,6 +307,19 @@ func (q *CrawlQueue) MarkVisited(rawURL string) {
 	}
 }
 
+// MarkSeen adds a URL to the dedup filter without counting it toward the
+// page limit. Used for redirect targets that were already fetched as part of
+// another entry, so they are not fetched again when linked directly.
+func (q *CrawlQueue) MarkSeen(rawURL string) {
+	normalized := NormalizeURL(rawURL)
+	if normalized == "" {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.visited.AddString(normalized)
+}
+
 // UpdateSeedDomain changes the seed domain (e.g., after www redirect).
 func (q *CrawlQueue) UpdateSeedDomain(newDomain string) {
 	q.mu.Lock()
@@ -521,11 +534,11 @@ func (q *CrawlQueue) isInternal(u string) bool {
 	if err != nil {
 		return false
 	}
-	if parsed.Hostname() == q.seedDomain {
+	if strings.EqualFold(parsed.Hostname(), q.seedDomain) {
 		return true
 	}
 	for _, d := range q.allowedDomains {
-		if parsed.Hostname() == d {
+		if strings.EqualFold(parsed.Hostname(), d) {
 			return true
 		}
 	}

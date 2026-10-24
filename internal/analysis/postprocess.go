@@ -154,9 +154,6 @@ func RunDeferredAnalysis(ctx context.Context, pages []*types.PageData, cfg PostP
 		// This adds the "A" (Anchors) sub-signal to the T* topicality score computed at extraction.
 		// Source: DOJ ABC framework (Nayak PXR0357), Patent US7260573.
 		EnrichTopicalityAnchors(pages, graph, cfg.AnchorAggregator)
-
-		// GC checkpoint: release link intel temporaries
-		debug.FreeOSMemory()
 	}
 
 	// Embeddings (optional)
@@ -313,32 +310,14 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 	}
 	stats.LinkIntelligenceStats = liStats
 
-	// Compute in-degree from graph edges (replaces nested map[string]map[string]struct{}).
-	inDegree := make([]int, graph.N)
-	for _, j := range graph.Edges {
-		if int(j) >= len(inDegree) {
-			continue
-		}
-		inDegree[j]++
-	}
+	// In-degree from the graph (distinct sources, self-links excluded).
+	inDegree := int32sToInts(graph.InDegree())
 
 	// Recompute orphan pages using graph-derived inDegree.
 	// The graph resolves redirects (FinalURL → request URL mapping) and normalizes
 	// trailing slashes, so pages that receive inlinks through redirect chains are
 	// correctly counted as linked. This replaces the reporter's raw-URL orphan list.
-	seedNorm := normalizeTrailingSlash(cfg.SeedURL)
-	var graphOrphans []string
-	for i := 0; i < graph.N; i++ {
-		if graph.StatusCodes[i] != 200 {
-			continue
-		}
-		url := graph.URLs[i]
-		isSeed := seedNorm != "" && normalizeTrailingSlash(url) == seedNorm
-		if inDegree[i] == 0 && !isSeed {
-			graphOrphans = append(graphOrphans, url)
-		}
-	}
-	stats.OrphanPages = graphOrphans
+	stats.SetOrphanPages(ComputeGraphOrphans(graph, cfg.SeedURL))
 	stats.OrphanMethodology = "graph"
 
 	// --- Phase: click_depth ---
@@ -375,10 +354,12 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 			liStats.ClickDepthDistribution[d]++
 			depthValues = append(depthValues, d)
 		} else if graph.StatusCodes[i] == 200 {
-			liStats.UnreachablePages = append(liStats.UnreachablePages, graph.URLs[i])
+			liStats.UnreachablePagesCount++
+			if len(liStats.UnreachablePages) < types.StatsListCap {
+				liStats.UnreachablePages = append(liStats.UnreachablePages, graph.URLs[i])
+			}
 		}
 	}
-	liStats.UnreachablePagesCount = len(liStats.UnreachablePages)
 	if len(depthValues) > 0 {
 		sum, maxD := 0, 0
 		for _, d := range depthValues {
@@ -393,21 +374,22 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 
 	// Near orphans
 	nearOrphans := DetectNearOrphans(clickDepths, graph, inDegree, 2, 4)
-	for _, no := range nearOrphans {
+	// Lists are sorted worst-first; keep the top StatsListCap, count all.
+	liStats.NearOrphansCount = len(nearOrphans)
+	for _, no := range nearOrphans[:min(len(nearOrphans), types.StatsListCap)] {
 		liStats.NearOrphans = append(liStats.NearOrphans, types.NearOrphanEntry{
 			URL: no.URL, InDegree: no.InDegree, WorstSourceDepth: no.WorstSourceDepth,
 		})
 	}
-	liStats.NearOrphansCount = len(liStats.NearOrphans)
 
 	// Dilution warnings
 	dilutionWarnings := ComputeLinkDilution(graph)
-	for _, dw := range dilutionWarnings {
+	liStats.DilutionWarningsCount = len(dilutionWarnings)
+	for _, dw := range dilutionWarnings[:min(len(dilutionWarnings), types.StatsListCap)] {
 		liStats.DilutionWarnings = append(liStats.DilutionWarnings, types.DilutionWarningEntry{
 			URL: dw.URL, OutDegree: dw.OutDegree, Warning: types.DilutionWarning(dw.Warning), EquityPerLink: dw.EquityPerLink,
 		})
 	}
-	liStats.DilutionWarningsCount = len(liStats.DilutionWarnings)
 
 	// Inlink buckets + wasted equity metrics
 	for i, deg := range inDegree {
@@ -510,7 +492,6 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 	} else {
 		betweenness = ComputeBetweennessCentrality(5000, graph)
 		closeness = ComputeClosenessCentrality(5000, graph)
-		debug.FreeOSMemory()
 	}
 
 	// Per-page: centrality scores
@@ -552,8 +533,15 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 	if maxSuggestions == 0 {
 		maxSuggestions = 20
 	}
-	suggestions := GenerateLinkSuggestions(
-		graph, nil, clickDepths, stats.PageRankScores, inDegree,
+	// Node i is pages[i]; the reporter stored PageRank on each page.
+	pageRankOf := func(i int) float64 {
+		if i < len(pages) {
+			return pages[i].PageRank
+		}
+		return 0
+	}
+	suggestions := generateLinkSuggestions(
+		graph, nil, clickDepths, pageRankOf, inDegree,
 		wordCounts, indexable,
 		LinkSuggestionsOptions{MaxSuggestions: maxSuggestions},
 	)
@@ -586,6 +574,14 @@ func PostProcessConfigFromCrawl(c types.CrawlConfig) PostProcessConfig {
 		SimilarityThreshold: c.SimilarityThreshold,
 		SegmentRules:        c.SegmentRules,
 	}
+}
+
+func int32sToInts(in []int32) []int {
+	out := make([]int, len(in))
+	for i, v := range in {
+		out[i] = int(v)
+	}
+	return out
 }
 
 func convertNgrams(entries []NgramEntry) []types.NgramEntry {

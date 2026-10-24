@@ -87,7 +87,6 @@ export async function mockApi(page: Page, mode: 'normal' | 'empty' | 'error' = '
     else if(path.endsWith('/overview')) data = logOverview;
     else if(path.endsWith('/bots')) data = {botDailyHits:{Googlebot:{'2026-10-12':7000,'2026-10-13':8000,'2026-10-14':9000,'2026-10-15':9500,'2026-10-16':10000,'2026-10-17':8000,'2026-10-18':8500}}};
     else if(path.match(/\/logs\/[^/]+\/status$/)) data=logJob;
-    else if(path.endsWith('/graph')) data={nodes:[],edges:[]};
     else if(path.endsWith('/page-inlinks')) data={sources:[],url:''};
     return route.fulfill({json:data});
   });

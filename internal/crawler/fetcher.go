@@ -3,6 +3,7 @@ package crawler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -40,7 +41,44 @@ const (
 	maxRetryAfterMs     = 60000
 	defaultFetchTimeout = 30 * time.Second
 	maxBodySize         = 10 * 1024 * 1024 // 10 MB body size cap
+	// maxDrainBytes caps how much of an unused body (redirects, non-HTML,
+	// errors) is read before closing. Past this, the connection is dropped
+	// instead of downloading e.g. a multi-GB PDF just to reuse the socket.
+	maxDrainBytes = 64 * 1024
+	// MaxServerRetryAfter caps how long a Retry-After header can pause a host.
+	MaxServerRetryAfter = 10 * time.Minute
 )
+
+// drainAndClose reads at most maxDrainBytes of body and closes it.
+func drainAndClose(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+	io.CopyN(io.Discard, body, maxDrainBytes)
+	body.Close()
+}
+
+// ssrfBlockedError is returned by the SSRF-safe dialer when a hostname
+// resolves to a private address. Such requests must never be retried.
+type ssrfBlockedError struct{ msg string }
+
+func (e *ssrfBlockedError) Error() string { return e.msg }
+
+// isRetryableFetchErr reports whether a transport error is worth retrying:
+// not caused by context cancellation and not an SSRF block.
+func isRetryableFetchErr(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var sb *ssrfBlockedError
+	if errors.As(err, &sb) || strings.Contains(err.Error(), "DNS rebinding blocked") {
+		return false
+	}
+	return true
+}
 
 // FetchOptions configures HTTP fetch behavior.
 type FetchOptions struct {
@@ -54,6 +92,10 @@ type FetchOptions struct {
 	Timeout         time.Duration
 	SkipSSRF        bool
 	Stealth         bool // Use Chrome TLS/header fingerprint
+	// NoRetry disables in-function retries for network errors and 429s.
+	// The crawler sets it so retries are re-queued through the shared per-host
+	// rate limiter (and so the limiter sees every 429/503).
+	NoRetry bool
 }
 
 // ssrfSafeDialer returns a net.Dialer wrapped with DNS rebinding protection.
@@ -76,7 +118,7 @@ func ssrfSafeDialer(base *net.Dialer, cache *dnsCache) func(ctx context.Context,
 		}
 		for _, ip := range ips {
 			if ip.IP.IsLoopback() || ip.IP.IsPrivate() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsLinkLocalMulticast() {
-				return nil, fmt.Errorf("DNS rebinding blocked: %s resolved to private IP %s", host, ip.IP)
+				return nil, &ssrfBlockedError{msg: fmt.Sprintf("DNS rebinding blocked: %s resolved to private IP %s", host, ip.IP)}
 			}
 		}
 		// Connect to the first resolved IP
@@ -196,7 +238,8 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 
 		resp, err := client.Do(req)
 		if err != nil {
-			if retries < maxRetries {
+			retryable := isRetryableFetchErr(ctx, err)
+			if retryable && !opts.NoRetry && retries < maxRetries {
 				delay := backoffDelay(retries)
 				retries++
 				sleepCtx(ctx, delay)
@@ -208,14 +251,14 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 				RedirectChain:  redirectChain,
 				ResponseTimeMs: time.Since(start).Milliseconds(),
 				Error:          FormatError(err),
+				Retryable:      retryable,
 			}
 		}
 
 		// Handle redirects manually
 		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 			location := resp.Header.Get("Location")
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			drainAndClose(resp.Body)
 
 			if location != "" {
 				if len(redirectChain) >= maxRedirects {
@@ -253,8 +296,7 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 
 		// Handle 304 Not Modified (conditional request)
 		if resp.StatusCode == 304 {
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			drainAndClose(resp.Body)
 			return types.FetchResult{
 				URL:            rawURL,
 				FinalURL:       currentURL,
@@ -266,9 +308,8 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 		}
 
 		// Handle 429 Too Many Requests
-		if resp.StatusCode == 429 && retries < maxRetries {
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+		if resp.StatusCode == 429 && !opts.NoRetry && retries < maxRetries {
+			drainAndClose(resp.Body)
 			delay := parseRetryAfter(resp.Header.Get("Retry-After"), backoffDelay(retries))
 			retries++
 			sleepCtx(ctx, delay)
@@ -313,8 +354,9 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 				transferSize = int64(bodyLen)
 			}
 		} else {
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			// Non-HTML (PDF, images, archives...): only the status and headers
+			// are needed. Read a small capped amount and close.
+			drainAndClose(resp.Body)
 			if cl := resp.Header.Get("Content-Length"); cl != "" {
 				if n, err := strconv.ParseInt(cl, 10, 64); err == nil {
 					transferSize = n
@@ -380,7 +422,7 @@ func FetchHead(ctx context.Context, rawURL string, opts FetchOptions) types.Head
 
 		resp, err := client.Do(req)
 		if err != nil {
-			if retries < maxRetries {
+			if isRetryableFetchErr(ctx, err) && !opts.NoRetry && retries < maxRetries {
 				retries++
 				sleepCtx(ctx, backoffDelay(retries-1))
 				continue
@@ -393,8 +435,7 @@ func FetchHead(ctx context.Context, rawURL string, opts FetchOptions) types.Head
 				Error:          FormatError(err),
 			}
 		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		drainAndClose(resp.Body)
 
 		// Manual redirect tracking
 		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
@@ -428,7 +469,7 @@ func FetchHead(ctx context.Context, rawURL string, opts FetchOptions) types.Head
 		}
 
 		// 429 retry
-		if resp.StatusCode == 429 && retries < maxRetries {
+		if resp.StatusCode == 429 && !opts.NoRetry && retries < maxRetries {
 			delay := parseRetryAfter(resp.Header.Get("Retry-After"), backoffDelay(retries))
 			retries++
 			sleepCtx(ctx, delay)
@@ -522,8 +563,7 @@ func CheckExternalURL(ctx context.Context, rawURL string, userAgent string, skip
 		if doErr != nil {
 			return 0, doErr
 		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		drainAndClose(resp.Body)
 
 		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 			location := resp.Header.Get("Location")
@@ -721,6 +761,37 @@ func parseRetryAfter(header string, fallback time.Duration) time.Duration {
 		return delay
 	}
 	return fallback
+}
+
+// RetryAfterDuration parses a Retry-After header (delta-seconds or HTTP-date).
+// Returns false when the header is missing or invalid. The result is capped at
+// maxWait and is never negative.
+func RetryAfterDuration(header string, maxWait time.Duration) (time.Duration, bool) {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return 0, false
+	}
+	var d time.Duration
+	if secs, err := strconv.ParseInt(header, 10, 64); err == nil {
+		if secs < 0 {
+			return 0, false
+		}
+		if secs > int64(maxWait/time.Second) {
+			return maxWait, true
+		}
+		d = time.Duration(secs) * time.Second
+	} else if t, err := http.ParseTime(header); err == nil {
+		d = time.Until(t)
+		if d < 0 {
+			d = 0
+		}
+	} else {
+		return 0, false
+	}
+	if d > maxWait {
+		d = maxWait
+	}
+	return d, true
 }
 
 func backoffDelay(retry int) time.Duration {

@@ -20,16 +20,7 @@ func buildReportGraph(pages []*types.PageData, iter func(fn func(source string, 
 
 // graphInDegree returns the number of distinct pages linking to each node.
 func graphInDegree(g *AdjacencyGraph) []int32 {
-	if g == nil {
-		return nil
-	}
-	inDegree := make([]int32, g.N)
-	for _, j := range g.Edges {
-		if int(j) < g.N {
-			inDegree[j]++
-		}
-	}
-	return inDegree
+	return g.InDegree()
 }
 
 // graphHasLinkData reports whether the graph reflects the crawl's links. A

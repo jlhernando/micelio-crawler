@@ -1,8 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Chart, DoughnutController, ArcElement, Tooltip, Legend } from 'chart.js';
-
-  Chart.register(DoughnutController, ArcElement, Tooltip, Legend);
+  import type { Chart } from 'chart.js';
 
   let { labels, data, colors, height = 200, legend = true }: {
     labels: string[];
@@ -13,10 +11,20 @@
   } = $props();
 
   let canvas: HTMLCanvasElement;
-  let chart: Chart<'doughnut'> | null = null;
+  // State so the update effect below re-runs once the async chart exists.
+  let chart = $state.raw<Chart<'doughnut'> | null>(null);
 
   onMount(() => {
-    chart = new Chart(canvas, {
+    let destroyed = false;
+    import('../../chartjs').then(({ Chart }) => {
+      if (destroyed || !canvas) return;
+      chart = create(Chart);
+    });
+    return () => { destroyed = true; chart?.destroy(); };
+  });
+
+  function create(Chart: typeof import('../../chartjs').Chart): Chart<'doughnut'> {
+    return new Chart(canvas, {
       type: 'doughnut',
       data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 0, hoverOffset: 6 }] },
       options: {
@@ -37,8 +45,7 @@
         }
       }
     });
-    return () => chart?.destroy();
-  });
+  }
 
   $effect(() => {
     if (!chart) return;

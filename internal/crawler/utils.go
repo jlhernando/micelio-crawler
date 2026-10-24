@@ -2,12 +2,12 @@
 package crawler
 
 import (
-	"fmt"
 	"net"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
+
+	"github.com/micelio/micelio/internal/urlutil"
 )
 
 // FormatError extracts a human-readable error message.
@@ -46,6 +46,9 @@ func NormalizeURL(rawURL string) string {
 		parsed.Host = host
 	}
 
+	// Host names are case-insensitive (RFC 3986 §3.2.2)
+	parsed.Host = strings.ToLower(parsed.Host)
+
 	// Normalize empty path to "/"
 	if parsed.Path == "" {
 		parsed.Path = "/"
@@ -58,77 +61,20 @@ func NormalizeURL(rawURL string) string {
 
 	// Sort query parameters
 	if parsed.RawQuery != "" {
-		params := parsed.Query()
-		keys := make([]string, 0, len(params))
-		for k := range params {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-
-		var sb strings.Builder
-		first := true
-		for _, k := range keys {
-			vals := params[k]
-			sort.Strings(vals)
-			for _, v := range vals {
-				if !first {
-					sb.WriteByte('&')
-				}
-				sb.WriteString(url.QueryEscape(k))
-				sb.WriteByte('=')
-				sb.WriteString(url.QueryEscape(v))
-				first = false
-			}
-		}
-		parsed.RawQuery = sb.String()
+		parsed.RawQuery = urlutil.SortedQuery(parsed.Query())
 	}
 
 	return parsed.String()
 }
 
+// normalizeURL strips one trailing slash for consistent lookup.
+func normalizeURL(u string) string { return urlutil.TrimTrailingSlash(u) }
+
 // NormalizeURLForComparison normalizes a URL for canonical comparison:
-// strips www prefix, trailing slash, protocol. Returns a protocol-agnostic key.
+// strips www prefix, trailing slash, protocol. Returns a protocol-agnostic key
+// with query parameters sorted.
 func NormalizeURLForComparison(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return strings.TrimRight(rawURL, "/")
-	}
-
-	host := strings.TrimPrefix(parsed.Hostname(), "www.")
-	path := parsed.Path
-	if path == "" {
-		path = "/"
-	} else if len(path) > 1 {
-		path = strings.TrimRight(path, "/")
-	}
-
-	if parsed.RawQuery != "" {
-		params := parsed.Query()
-		keys := make([]string, 0, len(params))
-		for k := range params {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-
-		var sb strings.Builder
-		first := true
-		for _, k := range keys {
-			vals := params[k]
-			sort.Strings(vals)
-			for _, v := range vals {
-				if !first {
-					sb.WriteByte('&')
-				}
-				sb.WriteString(url.QueryEscape(k))
-				sb.WriteByte('=')
-				sb.WriteString(url.QueryEscape(v))
-				first = false
-			}
-		}
-		return fmt.Sprintf("%s%s?%s", host, path, sb.String())
-	}
-
-	return host + path
+	return urlutil.ComparisonKey(rawURL, true)
 }
 
 // IsPrivateURL checks whether a URL points to a private/internal network address.

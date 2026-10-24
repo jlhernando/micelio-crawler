@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { C } from '../../palette';
   let { crawls }: { crawls: { id: string; seedUrl: string; status: string; pageCount: number; startedAt: string }[] } = $props();
   let domain = $state('');
   let chartWidth = $state(650);
@@ -24,13 +25,13 @@
   {#if series.length > 0}
     <div class="coverage-plot" bind:clientWidth={chartWidth}>
     <svg viewBox={`0 0 ${viewportWidth} 265`} role="img" aria-label={series.map(c => `${date(c.startedAt)}: ${c.pageCount} pages`).join(', ')}>
-      <defs><linearGradient id="history-coverage-fill" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#75a6ff" stop-opacity=".25"/><stop offset="1" stop-color="#75a6ff" stop-opacity=".01"/></linearGradient></defs>
-      {#each [0, .5, 1] as tick}<line x1="60" x2={plotEnd} y1={220-tick*185} y2={220-tick*185} stroke="#303235" stroke-dasharray="3 5"/><text x="50" y={224-tick*185} text-anchor="end">{Math.round(tick*max).toLocaleString()}</text>{/each}
-      {#if series.length > 1}<polygon points={`60,220 ${points} ${plotEnd},220`} fill="url(#history-coverage-fill)"/><polyline {points} fill="none" stroke="#75a6ff" stroke-width="2.5"/>{/if}
-      {#each series as crawl, i}<circle cx={x(i)} cy={220 - crawl.pageCount / max * 185} r="4" fill="#75a6ff"><title>{date(crawl.startedAt)} · {crawl.pageCount.toLocaleString()} pages</title></circle>{#if chartWidth >= 600 || [0, Math.round((series.length - 1) / 2), series.length - 1].includes(i)}<text x={x(i)} y="250" text-anchor={i === 0 ? 'start' : i === series.length - 1 ? 'end' : 'middle'}>{date(crawl.startedAt)}</text>{/if}{/each}
+      <defs><linearGradient id="history-coverage-fill" x1="0" y1="0" x2="0" y2="1"><stop stop-color={C.blue} stop-opacity=".25"/><stop offset="1" stop-color={C.blue} stop-opacity=".01"/></linearGradient></defs>
+      {#each [0, .5, 1] as tick}<line x1="60" x2={plotEnd} y1={220-tick*185} y2={220-tick*185} stroke={C.border} stroke-dasharray="3 5"/><text x="50" y={224-tick*185} text-anchor="end">{Math.round(tick*max).toLocaleString()}</text>{/each}
+      {#if series.length > 1}<polygon points={`60,220 ${points} ${plotEnd},220`} fill="url(#history-coverage-fill)"/><polyline {points} fill="none" stroke={C.blue} stroke-width="2.5"/>{/if}
+      {#each series as crawl, i}<circle cx={x(i)} cy={220 - crawl.pageCount / max * 185} r="4" fill={C.blue}><title>{date(crawl.startedAt)} · {crawl.pageCount.toLocaleString()} pages</title></circle>{#if chartWidth >= 600 || [0, Math.round((series.length - 1) / 2), series.length - 1].includes(i)}<text x={x(i)} y="250" text-anchor={i === 0 ? 'start' : i === series.length - 1 ? 'end' : 'middle'}>{date(crawl.startedAt)}</text>{/if}{/each}
     </svg>
     </div>
     <p class="chart-note">{series.length} completed {series.length === 1 ? 'crawl. Run another crawl to see a trend.' : 'crawls. Counts can change with crawl scope and settings.'}</p>
   {:else}<div class="chart-empty">No completed crawls for this site yet.</div>{/if}
 </section>
-<style>.coverage-plot { width: 100%; min-width: 0; } svg { width: 100%; height: 265px; display: block; } text { font: 11px -apple-system, BlinkMacSystemFont, sans-serif; fill: #a1a5ad; } .chart-panel-heading { flex-wrap: wrap; }</style>
+<style>.coverage-plot { width: 100%; min-width: 0; } svg { width: 100%; height: 265px; display: block; } text { font: 11px -apple-system, BlinkMacSystemFont, sans-serif; fill: var(--color-fg-2); } .chart-panel-heading { flex-wrap: wrap; }</style>

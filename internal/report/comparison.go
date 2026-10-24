@@ -297,7 +297,7 @@ func ComputeComparison(
 	report.Indexability = compareIndexability(oldStats, newStats, oldMap, newMap)
 	report.OnPageSEO = compareOnPageSEO(oldStats, newStats)
 	report.Content = compareContent(oldStats, newStats, oldMap, newMap, persisted)
-	report.Links = compareLinks(oldStats, newStats)
+	report.Links = compareLinks(oldStats, newStats, oldMap, newMap, persisted)
 	report.InternalLink = compareInternalLinks(oldStats, newStats)
 	report.Redirects = compareRedirects(oldStats, newStats)
 	report.Performance = comparePerformance(oldStats, newStats)
@@ -726,9 +726,9 @@ func compareContent(oldStats, newStats *types.CrawlStats, oldMap, newMap map[str
 	return section
 }
 
-func compareLinks(oldStats, newStats *types.CrawlStats) LinksSection {
+func compareLinks(oldStats, newStats *types.CrawlStats, oldMap, newMap map[string]*types.PageData, persisted []string) LinksSection {
 	section := LinksSection{
-		OrphanPages: intDelta(len(oldStats.OrphanPages), len(newStats.OrphanPages)),
+		OrphanPages: intDelta(oldStats.OrphanCount(), newStats.OrphanCount()),
 	}
 
 	if oldStats.LinkIntelligenceStats != nil && newStats.LinkIntelligenceStats != nil {
@@ -742,20 +742,24 @@ func compareLinks(oldStats, newStats *types.CrawlStats) LinksSection {
 		)
 	}
 
-	// PageRank movers — compare per-URL PageRank scores
-	if oldStats.PageRankScores != nil && newStats.PageRankScores != nil {
+	// PageRank movers — compare per-URL PageRank scores. Pages carry their
+	// score (PageData.PageRank); stats only keep the URL map for small or old
+	// crawls, so use it as a fallback.
+	oldPR, newPR := pageRankLookup(oldStats, oldMap), pageRankLookup(newStats, newMap)
+	if oldPR != nil && newPR != nil {
 		var changes []URLMetricChange
-		for url, newPR := range newStats.PageRankScores {
-			oldPR, ok := oldStats.PageRankScores[url]
-			if !ok {
+		for _, url := range persisted {
+			o, ok1 := oldPR(url)
+			n, ok2 := newPR(url)
+			if !ok1 || !ok2 {
 				continue
 			}
-			delta := newPR - oldPR
+			delta := n - o
 			if math.Abs(delta) > 0.1 { // significant change threshold
 				changes = append(changes, URLMetricChange{
 					URL:   url,
-					Old:   math.Round(oldPR*100) / 100,
-					New:   math.Round(newPR*100) / 100,
+					Old:   math.Round(o*100) / 100,
+					New:   math.Round(n*100) / 100,
 					Delta: math.Round(delta*100) / 100,
 				})
 			}
@@ -776,6 +780,29 @@ func compareLinks(oldStats, newStats *types.CrawlStats) LinksSection {
 	}
 
 	return section
+}
+
+// pageRankLookup returns a URL -> PageRank lookup from page scores, or from
+// the stats map when no page carries a score. Nil when neither is available.
+func pageRankLookup(stats *types.CrawlStats, pages map[string]*types.PageData) func(string) (float64, bool) {
+	for _, p := range pages {
+		if p.PageRank != 0 {
+			return func(u string) (float64, bool) {
+				p, ok := pages[u]
+				if !ok {
+					return 0, false
+				}
+				return p.PageRank, true
+			}
+		}
+	}
+	if stats != nil && stats.PageRankScores != nil {
+		return func(u string) (float64, bool) {
+			v, ok := stats.PageRankScores[u]
+			return v, ok
+		}
+	}
+	return nil
 }
 
 func compareInternalLinks(oldStats, newStats *types.CrawlStats) InternalLinkSection {

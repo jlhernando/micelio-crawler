@@ -6,8 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"runtime"
 	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/micelio/micelio/internal/types"
@@ -83,8 +88,9 @@ func ComputeEmbeddings(ctx context.Context, pages []*types.PageData, cfg Embeddi
 		return &types.EmbeddingStats{Provider: string(cfg.Provider), Model: cfg.Model}, nil
 	}
 
-	// Generate embeddings
-	vectors := make(map[string][]float64)
+	// Generate embeddings. Stored normalised as float32: half the memory of
+	// the API's float64 and cosine similarity becomes a plain dot product.
+	vectors := make(map[string][]float32)
 	dimensions := 0
 
 	switch cfg.Provider {
@@ -114,7 +120,7 @@ func ComputeEmbeddings(ctx context.Context, pages []*types.PageData, cfg Embeddi
 			}
 
 			for j, vec := range vecs {
-				vectors[batch[j].url] = vec
+				vectors[batch[j].url] = normalize32(vec)
 				if dimensions == 0 {
 					dimensions = len(vec)
 				}
@@ -137,7 +143,7 @@ func ComputeEmbeddings(ctx context.Context, pages []*types.PageData, cfg Embeddi
 			if err != nil {
 				return nil, fmt.Errorf("ollama embedding for %s: %w", pt.url, err)
 			}
-			vectors[pt.url] = vec
+			vectors[pt.url] = normalize32(vec)
 			if dimensions == 0 {
 				dimensions = len(vec)
 			}
@@ -145,56 +151,260 @@ func ComputeEmbeddings(ctx context.Context, pages []*types.PageData, cfg Embeddi
 		}
 	}
 
-	// Compute similar pairs (single O(n²) pass, reused for cannibalization)
+	// Compare pages (parallel dot products over normalised float32 vectors).
 	urls := make([]string, 0, len(vectors))
 	for u := range vectors {
 		urls = append(urls, u)
 	}
 	sort.Strings(urls)
+	sim := compareEmbeddings(urls, vectors, cfg.Threshold, embeddingCompareLimits{})
 
-	// Build similarity map: key is (i,j) where i < j → similarity
-	simMap := make(map[indexPair]float64)
-	var similarPairs []types.SimilarPair
-	for i := 0; i < len(urls); i++ {
-		for j := i + 1; j < len(urls); j++ {
-			sim := CosineSimilarity(vectors[urls[i]], vectors[urls[j]])
-			if sim >= cfg.Threshold {
-				simMap[indexPair{i, j}] = sim
-				similarPairs = append(similarPairs, types.SimilarPair{
-					URL1:       urls[i],
-					URL2:       urls[j],
-					Similarity: sim,
-				})
-			}
-		}
-	}
-	sort.Slice(similarPairs, func(i, j int) bool {
-		return similarPairs[i].Similarity > similarPairs[j].Similarity
-	})
-	if len(similarPairs) > maxSimilarPairs {
-		similarPairs = similarPairs[:maxSimilarPairs]
-	}
-
-	// Union-Find for cannibalization groups (reuses precomputed similarities)
-	groups := buildCannibalizationGroups(urls, simMap)
-	if len(groups) > maxCanniGroups {
-		groups = groups[:maxCanniGroups]
-	}
-
-	pagesEmbedded := len(vectors)
-
-	// Release vectors map — similarity/cannibalization already computed above.
-	// This frees ~12KB per page (1536-dim float64 vectors) before returning.
-	vectors = nil
-
+	pagesEmbedded := len(urls)
 	return &types.EmbeddingStats{
 		PagesEmbedded:         pagesEmbedded,
-		SimilarPairs:          similarPairs,
-		CannibalizationGroups: groups,
+		SimilarPairs:          sim.pairs,
+		SimilarPairsTotal:     sim.pairsTotal,
+		CannibalizationGroups: sim.groups,
+		ComparisonScope:       sim.scope,
+		PagesCompared:         sim.compared,
 		Provider:              string(cfg.Provider),
 		Model:                 cfg.Model,
 		Dimensions:            dimensions,
 	}, nil
+}
+
+// embeddingCompareLimits bounds the pairwise comparison. Zero values use the
+// defaults below.
+type embeddingCompareLimits struct {
+	allPairsMax int // compare every pair up to this many pages
+	groupMax    int // above it, compare within URL folders of at most this many pages
+	maxEdges    int // similar pairs kept for grouping
+}
+
+const (
+	defaultAllPairsMax = 10_000  // 50M dot products
+	defaultGroupMax    = 5_000   // per-folder cap above allPairsMax
+	defaultMaxSimEdges = 500_000 // pairs over threshold kept for union-find
+)
+
+type embeddingSimilarity struct {
+	pairs      []types.SimilarPair
+	pairsTotal int
+	groups     []types.CannibalizationGroup
+	scope      string
+	compared   int
+}
+
+// compareEmbeddings finds page pairs at or above threshold.
+//
+// Up to allPairsMax pages every pair is compared. Larger crawls compare
+// pages within the same first URL folder only (cannibalisation is mostly a
+// within-section problem), each folder capped at groupMax pages, and the
+// stats say so (ComparisonScope = "folder", PagesCompared). Vectors are
+// normalised once to float32 so each comparison is one dot product, and rows
+// are spread over all CPUs. At most maxEdges pairs are kept for grouping;
+// SimilarPairsTotal counts all of them.
+func compareEmbeddings(urls []string, vectors map[string][]float32, threshold float64, lim embeddingCompareLimits) embeddingSimilarity {
+	if lim.allPairsMax == 0 {
+		lim.allPairsMax = defaultAllPairsMax
+	}
+	if lim.groupMax == 0 {
+		lim.groupMax = defaultGroupMax
+	}
+	if lim.maxEdges == 0 {
+		lim.maxEdges = defaultMaxSimEdges
+	}
+	n := len(urls)
+	out := embeddingSimilarity{scope: "all"}
+	if n < 2 {
+		out.compared = n
+		return out
+	}
+	vecs := make([][]float32, n) // by url index
+	for i, u := range urls {
+		vecs[i] = vectors[u]
+	}
+
+	var groups [][]int32
+	if n <= lim.allPairsMax {
+		all := make([]int32, n)
+		for i := range all {
+			all[i] = int32(i)
+		}
+		groups = [][]int32{all}
+		out.compared = n
+	} else {
+		out.scope = "folder"
+		byFolder := map[string][]int32{}
+		var order []string
+		for i, u := range urls {
+			f := firstURLFolder(u)
+			if _, ok := byFolder[f]; !ok {
+				order = append(order, f)
+			}
+			if len(byFolder[f]) < lim.groupMax {
+				byFolder[f] = append(byFolder[f], int32(i))
+			}
+		}
+		for _, f := range order {
+			if g := byFolder[f]; len(g) >= 2 {
+				groups = append(groups, g)
+				out.compared += len(g)
+			}
+		}
+	}
+
+	// Work items: one row (group g, member k) compares member k with every
+	// later member of its group.
+	type row struct{ g, k int }
+	type rowResult struct {
+		edges []simEdge
+	}
+	var rows []row
+	for g, members := range groups {
+		for k := 0; k < len(members)-1; k++ {
+			rows = append(rows, row{g, k})
+		}
+	}
+	thr := float32(threshold)
+	results := make(chan rowResult, 256)
+	var next atomic.Int64
+	workers := runtime.GOMAXPROCS(0)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				r := int(next.Add(1) - 1)
+				if r >= len(rows) {
+					return
+				}
+				members := groups[rows[r].g]
+				i := members[rows[r].k]
+				a := vecs[i]
+				var edges []simEdge
+				for _, j := range members[rows[r].k+1:] {
+					if d := dot32(a, vecs[j]); d >= thr {
+						edges = append(edges, simEdge{i, j, float64(d)})
+					}
+				}
+				if len(edges) > 0 {
+					results <- rowResult{edges}
+				}
+			}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var kept []simEdge
+	top := make([]simEdge, 0, maxSimilarPairs+1)
+	for res := range results {
+		for _, e := range res.edges {
+			out.pairsTotal++
+			if len(kept) < lim.maxEdges {
+				kept = append(kept, e)
+			}
+			top = pushTopEdge(top, e)
+		}
+	}
+	sort.Slice(top, func(a, b int) bool { return top[a].sim > top[b].sim })
+	for _, e := range top {
+		out.pairs = append(out.pairs, types.SimilarPair{URL1: urls[e.i], URL2: urls[e.j], Similarity: e.sim})
+	}
+	out.groups = groupsFromEdges(urls, kept)
+	if len(out.groups) > maxCanniGroups {
+		out.groups = out.groups[:maxCanniGroups]
+	}
+	return out
+}
+
+// simEdge is a page pair (i < j, indices into urls) over the threshold.
+type simEdge struct {
+	i, j int32
+	sim  float64
+}
+
+// pushTopEdge keeps the maxSimilarPairs most similar edges (unordered).
+func pushTopEdge(top []simEdge, e simEdge) []simEdge {
+	if len(top) < maxSimilarPairs {
+		return append(top, e)
+	}
+	minIdx := 0
+	for k := 1; k < len(top); k++ {
+		if top[k].sim < top[minIdx].sim {
+			minIdx = k
+		}
+	}
+	if e.sim > top[minIdx].sim {
+		top[minIdx] = e
+	}
+	return top
+}
+
+// normalize32 returns v scaled to unit length as float32 (zero stays zero).
+func normalize32(v []float64) []float32 {
+	var norm float64
+	for _, x := range v {
+		norm += x * x
+	}
+	out := make([]float32, len(v))
+	if norm == 0 {
+		return out
+	}
+	inv := 1 / math.Sqrt(norm)
+	for k, x := range v {
+		out[k] = float32(x * inv)
+	}
+	return out
+}
+
+// dot32 is the dot product of two vectors; for unit vectors it is their
+// cosine similarity. Vectors of different length compare as 0.
+func dot32(a, b []float32) float32 {
+	if len(a) != len(b) {
+		return 0
+	}
+	var s0, s1, s2, s3 float32
+	k := 0
+	for ; k+4 <= len(a); k += 4 {
+		s0 += a[k] * b[k]
+		s1 += a[k+1] * b[k+1]
+		s2 += a[k+2] * b[k+2]
+		s3 += a[k+3] * b[k+3]
+	}
+	for ; k < len(a); k++ {
+		s0 += a[k] * b[k]
+	}
+	return s0 + s1 + s2 + s3
+}
+
+// firstURLFolder returns the first path segment of a URL ("" for the root).
+func firstURLFolder(u string) string {
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+	}
+	slash := strings.IndexByte(u, '/')
+	if slash < 0 {
+		return ""
+	}
+	rest := u[slash+1:]
+	if end := strings.IndexAny(rest, "/?#"); end >= 0 && rest[end] == '/' {
+		return rest[:end]
+	}
+	return "" // a page directly under the root
+}
+
+// groupsFromEdges clusters pages linked by similar pairs.
+func groupsFromEdges(urls []string, edges []simEdge) []types.CannibalizationGroup {
+	simMap := make(map[indexPair]float64, len(edges))
+	for _, e := range edges {
+		simMap[indexPair{int(e.i), int(e.j)}] = e.sim
+	}
+	return buildCannibalizationGroups(urls, simMap)
 }
 
 // buildCannibalizationGroups uses union-find to cluster similar pages.

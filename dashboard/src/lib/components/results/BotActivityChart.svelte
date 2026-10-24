@@ -1,17 +1,10 @@
 <script lang="ts">
+  import { C } from '../../palette';
   import { onMount } from 'svelte';
-  import {
-    Chart,
-    BarController,
-    BarElement,
-    CategoryScale,
-    LinearScale,
-    Tooltip,
-    Legend,
-    Filler,
-  } from 'chart.js';
+  import type { Chart } from 'chart.js';
 
-  Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Filler);
+  // chart.js is loaded on demand (see lib/chartjs.ts).
+  let ChartCtor = $state.raw<typeof import('../../chartjs').Chart | null>(null);
 
   let {
     botDailyHits,
@@ -26,7 +19,7 @@
   } = $props();
 
   const PALETTE = [
-    { fill: 'rgba(88,166,255,0.78)',  border: '#75a6ff' }, // search blue
+    { fill: 'rgba(88,166,255,0.78)',  border: C.blue }, // search blue
     { fill: 'rgba(192,132,252,0.78)', border: '#c084fc' }, // AI training purple
     { fill: 'rgba(244,114,182,0.78)', border: '#f472b6' }, // AI search pink
     { fill: 'rgba(52,211,153,0.78)',  border: '#34d399' }, // social green
@@ -111,9 +104,9 @@
   });
 
   function build() {
-    if (!canvas) return;
+    if (!canvas || !ChartCtor) return;
     chart?.destroy();
-    chart = new Chart(canvas, {
+    chart = new ChartCtor(canvas, {
       type: 'bar',
       data: {
         labels,
@@ -166,16 +159,17 @@
   }
 
   onMount(() => {
-    build();
-    return () => chart?.destroy();
+    let destroyed = false;
+    import('../../chartjs').then((m) => { if (!destroyed) ChartCtor = m.Chart; });
+    return () => { destroyed = true; chart?.destroy(); chart = null; };
   });
 
-  // Rebuild on data/granularity change.
+  // Build once chart.js is loaded, and rebuild on data/granularity change.
   $effect(() => {
     // Depend on relevant inputs so Svelte re-runs.
     void labels;
     void series;
-    if (chart) build();
+    if (ChartCtor) build();
   });
 </script>
 

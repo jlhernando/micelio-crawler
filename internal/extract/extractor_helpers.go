@@ -12,6 +12,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 
 	"github.com/micelio/micelio/internal/types"
+	"github.com/micelio/micelio/internal/urlutil"
 )
 
 // --- Body Text ---
@@ -93,34 +94,15 @@ func determineIndexability(statusCode int, metaRobots, xRobotsTag *string, canon
 
 	if canonical != nil && *canonical != "" {
 		// Normalize both URLs so trailing-slash and www differences don't cause false positives
-		normCanonical := normalizeForComparison(*canonical)
-		normFinal := normalizeForComparison(finalURL)
+		// (query kept as written: a reordered query still counts as a different canonical).
+		normCanonical := urlutil.ComparisonKey(*canonical, false)
+		normFinal := urlutil.ComparisonKey(finalURL, false)
 		if normCanonical != normFinal {
 			return types.IndexabilityData{Indexable: false, Reason: "canonicalized"}
 		}
 	}
 
 	return types.IndexabilityData{Indexable: true, Reason: ""}
-}
-
-// normalizeForComparison normalizes URLs for canonical comparison,
-// stripping www prefix, trailing slash, and protocol differences.
-func normalizeForComparison(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return strings.TrimRight(rawURL, "/")
-	}
-	host := strings.TrimPrefix(parsed.Hostname(), "www.")
-	path := parsed.Path
-	if path == "" {
-		path = "/"
-	} else if len(path) > 1 {
-		path = strings.TrimRight(path, "/")
-	}
-	if parsed.RawQuery != "" {
-		return host + path + "?" + parsed.RawQuery
-	}
-	return host + path
 }
 
 // --- URL Issues ---
@@ -296,12 +278,8 @@ func runCustomSearches(html string, rules []types.CustomSearchRule) map[string]b
 	results := make(map[string]bool)
 	for _, rule := range rules {
 		if rule.IsRegex {
-			re, err := regexp.Compile(rule.Pattern)
-			if err == nil {
-				results[rule.Name] = re.MatchString(html)
-			} else {
-				results[rule.Name] = false
-			}
+			re := compileCached(rule.Pattern)
+			results[rule.Name] = re != nil && re.MatchString(html)
 		} else {
 			results[rule.Name] = strings.Contains(html, rule.Pattern)
 		}

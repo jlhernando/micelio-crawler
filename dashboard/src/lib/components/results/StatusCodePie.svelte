@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { C, STATUS_GROUP_HEX } from '../../palette';
   import DonutChart from './DonutChart.svelte';
 
   let { stats, onFilter }: {
@@ -7,13 +8,13 @@
   } = $props();
 
   const CODE_COLORS: Record<string, string> = {
-    '200': '#73d9ac', '201': '#73d9ac', '204': '#73d9ac',
-    '301': '#e5b66e', '302': '#eab308', '303': '#eab308', '307': '#eab308', '308': '#e5b66e',
-    '400': '#f97316', '401': '#f97316', '403': '#f97316', '404': '#f97316', '410': '#9ca3af', '429': '#f97316', '451': '#f97316',
-    '500': '#f58f98', '502': '#f58f98', '503': '#f58f98', '504': '#f58f98',
+    '200': C.success, '201': C.success, '204': C.success,
+    '301': C.warning, '302': '#eab308', '303': '#eab308', '307': '#eab308', '308': C.warning,
+    '400': C.orange, '401': C.orange, '403': C.orange, '404': C.orange, '410': '#9ca3af', '429': C.orange, '451': C.orange,
+    '500': C.danger, '502': C.danger, '503': C.danger, '504': C.danger,
   };
 
-  const GROUP_COLORS: Record<string, string> = { '2xx': '#73d9ac', '3xx': '#e5b66e', '4xx': '#f97316', '5xx': '#f58f98' };
+  const GROUP_COLORS = STATUS_GROUP_HEX;
 
   let statusCodes = $derived((stats.statusCodes as Record<string, number>) || {});
   let entries = $derived.by(() => {

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { formatBytes } from '../../format';
+  import { statusTextClass } from '../../status';
   import { api } from '../../api';
   import { onMount } from 'svelte';
   import { segmentDimensionLabel, segmentValueLabel, type SegmentDimension } from '../../segments';
@@ -223,20 +225,6 @@
   function sortIndicator(key: string): string {
     if (sortKey !== key) return '';
     return sortDir === 'asc' ? ' ↑' : ' ↓';
-  }
-
-  function formatBytes(bytes: number): string {
-    if (bytes < 1024) return `${bytes}B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-  }
-
-  function statusColor(code: number): string {
-    if (code >= 200 && code < 300) return 'text-success';
-    if (code >= 300 && code < 400) return 'text-warning';
-    if (code >= 400 && code < 500) return 'text-orange-500';
-    if (code >= 500) return 'text-danger';
-    return 'text-fg-2';
   }
 
   let hasActiveFilters = $derived(
@@ -507,7 +495,7 @@
                   <span class="text-[10px] text-fg-2 block truncate max-w-xs lg:max-w-lg pl-5">&#8594; {page.finalUrl}</span>
                 {/if}
               </td>
-              <td class="px-3 py-2 font-mono {statusColor(page.statusCode as number)}">
+              <td class="px-3 py-2 font-mono {statusTextClass(page.statusCode as number)}">
                 {page.statusCode}
               </td>
               <td class="px-3 py-2 text-fg-2">{page.responseTimeMs}ms</td>

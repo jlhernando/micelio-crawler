@@ -31,6 +31,9 @@ type FetchResult struct {
 	TransferSize   int64             `json:"transferSize"`
 	BodySize       int64             `json:"bodySize"` // uncompressed HTML body length in bytes
 	NotModified    bool              `json:"notModified,omitempty"`
+	// Retryable marks a network-level failure (Error set, no status) that is
+	// worth retrying: not an SSRF block and not a cancelled context.
+	Retryable bool `json:"-"`
 }
 
 // --- Main Page Data ---

@@ -161,10 +161,68 @@ metrics and suggestions.
   reads neighborhoods from SQLite, which keeps exploration responsive on very
   large crawls. Search, breadcrumbs, collapse/expand, coverage, and Depth,
   Authority, Hub, and PageRank color modes are available.
+- **Universe** draws the whole site as a 3D map of its internal links. See
+  [Universe](#universe) below.
 - **Full Graph** provides a WebGL whole-site overview for smaller graph slices.
 - Other views include the directory tree, site treemap, anchor cloud, PageRank
   distribution, dead ends, nofollow usage, links to non-indexable pages, orphan
   pages, and semantic link suggestions.
+
+- The **directory tree** and **treemap** load one folder at a time. Open a
+  folder to fetch its subfolders and pages, 100 at a time with **Load more**
+  (300 per block in the treemap). Pages come first by PageRank.
+
+#### Universe
+
+Open **Links > Universe**. Every dot is a crawled page and every line is a real
+internal link.
+
+<img src="screenshot-universe.png" alt="Universe on a 10,000-page crawl" width="720">
+
+How the map is built:
+
+- Micelio walks the links from the start page, one click level at a time. Each
+  page is placed next to the page that links to it on its shortest click path.
+  When several pages qualify, one from the same section wins, then the one with
+  the highest PageRank. So two pages side by side are linked, and each branch
+  is a chain of real links.
+- Branches with more pages below them get more room.
+- Pages the start page cannot reach by links sit on an outer shell, labelled
+  **Not reachable from the start page**.
+- Bigger, brighter dots have more PageRank. Red dots are 4xx/5xx pages.
+
+Controls:
+
+| Control | What it does |
+|---|---|
+| **Layout: Link structure / Grouped** | Link structure places pages by links (default). Grouped places each cluster around its own centre, with lines between clusters showing real link counts. |
+| **Colour: Section / Folder / Subfolder / Template** | Colours pages by group. Section finds the folder most of the site shares (for example `/en-US/docs/Web/`) and groups by the folder below it. |
+| **Cross links** | Adds the links that are not part of the click-path tree. Off by default, since on large sites they hide the structure. |
+| **Menu, footer & section nav links** | Adds links to navigation pages: pages linked from 40%+ of the site or from half of their own section. Off by default. |
+| **Cluster table** | Click a row to fly to that cluster. The table switches to its pages, sortable by PR, inlinks and outlinks. |
+
+Click a dot or a table row to select a page. The panel shows its status,
+PageRank, inlinks, outlinks and depth, how many clicks it takes to reach and
+through which page, and a thumbnail. Its inlinks are drawn in green and its
+outlinks in amber.
+
+<img src="screenshot-universe-page.png" alt="Selected page with inlinks, outlinks and thumbnail" width="720">
+
+Thumbnails are captured with headless Chrome the first time you open a page
+and cached in `~/.micelio/ui/thumbs/`. Without Chrome the panel shows no
+thumbnail. Deleting a crawl removes its thumbnails.
+
+Large crawls: Universe loads the first 10,000 pages by PageRank, then keeps
+loading until it reaches a limit set by the device (memory, CPU cores, GPU) or
+a frame takes longer than 14 ms. The panel says how many pages and links are
+drawn and what limited them. A 1M-page crawl draws in a few seconds on a recent
+laptop.
+
+<img src="screenshot-universe-books.png" alt="Link tree of a shop: home, paginated listings and products" width="720">
+
+The example above is a small shop: the home page (pink) leads to paginated
+listings (amber), and each listing to its products (blue). The long amber chain
+is pagination: some products sit 20 clicks from the home page.
 
 Centrality is relatively expensive. Use **Skip Centrality** for very large crawls
 when discovery and basic link counts matter more than PageRank/authority metrics.

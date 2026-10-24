@@ -1,6 +1,10 @@
 package server
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/micelio/micelio/internal/types"
@@ -201,5 +205,182 @@ func TestPageMatchesIssue_DefaultFalse(t *testing.T) {
 	p := &types.PageData{URL: "https://example.com/"}
 	if pageMatchesIssue(p, "unknown-issue-type", nil) {
 		t.Error("expected unknown issue type to return false")
+	}
+}
+
+func TestBuildDirectoryTreeIsCapped(t *testing.T) {
+	var pages []*types.PageData
+	for d := 0; d < 80; d++ {
+		for i := 0; i < 200; i++ {
+			pages = append(pages, &types.PageData{URL: fmt.Sprintf("https://ex.com/d%d/p%d", d, i), StatusCode: 200, Inlinks: 1})
+		}
+	}
+	root := buildDirectoryTree(pages)["tree"].(*dirNode)
+	count := 0
+	var walk func(n *dirNode)
+	walk = func(n *dirNode) {
+		count++
+		if len(n.Children) > maxTreeChildren {
+			t.Errorf("%s has %d children", n.Path, len(n.Children))
+		}
+		sum := 0
+		for _, c := range n.Children {
+			sum += c.Pages
+			walk(c)
+		}
+		if len(n.Children) > 0 && sum != n.Pages {
+			t.Errorf("%s children pages %d != %d", n.Path, sum, n.Pages)
+		}
+	}
+	walk(root)
+	if count > maxTreeNodes {
+		t.Errorf("tree has %d nodes, cap %d", count, maxTreeNodes)
+	}
+	if root.Pages != len(pages) || root.TotalInlinks != len(pages) {
+		t.Errorf("root pages=%d inlinks=%d", root.Pages, root.TotalInlinks)
+	}
+}
+
+func TestLazyDirectoryTree(t *testing.T) {
+	api, _, m := newTestAPI(t)
+	pages := []*types.PageData{{URL: "https://ex.com/", StatusCode: 200}, {URL: "https://ex.com/blog", StatusCode: 200, PageRank: 1}}
+	for i := 0; i < 150; i++ {
+		pages = append(pages, &types.PageData{URL: fmt.Sprintf("https://ex.com/blog/p%d", i), StatusCode: 200, PageRank: float64(i)})
+	}
+	pages = append(pages, &types.PageData{URL: "https://ex.com/a/b/c", StatusCode: 404})
+	m.mu.Lock()
+	m.results["dt"] = &CrawlResults{Pages: pages, PagesReady: true}
+	m.mu.Unlock()
+
+	type node struct {
+		Name        string `json:"name"`
+		Pages       int    `json:"pages"`
+		IsPage      bool   `json:"isPage"`
+		HasChildren bool   `json:"hasChildren"`
+		ChildCount  int    `json:"childCount"`
+		Children    []node `json:"children"`
+	}
+	get := func(q string) node {
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, httptest.NewRequest("GET", "/api/crawl/dt/directory-tree?lazy=1&"+q, nil))
+		var body struct {
+			Lazy bool `json:"lazy"`
+			Tree node `json:"tree"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil || !body.Lazy {
+			t.Fatalf("%s: lazy=%v err=%v", q, body.Lazy, err)
+		}
+		return body.Tree
+	}
+	root := get("depth=2")
+	if root.Pages != len(pages) || root.ChildCount != 2 || !root.IsPage {
+		t.Fatalf("root = %+v", root)
+	}
+	blog := root.Children[0]
+	if blog.Name != "blog" || !blog.IsPage || blog.Pages != 151 || blog.ChildCount != 150 || len(blog.Children) != dirTreeL2Size {
+		t.Errorf("blog = %s pages=%d count=%d loaded=%d", blog.Name, blog.Pages, blog.ChildCount, len(blog.Children))
+	}
+	if blog.Children[0].Name != "p149" { // highest PageRank first
+		t.Errorf("first blog page = %s", blog.Children[0].Name)
+	}
+	more := get("path=/blog&offset=100&limit=100")
+	if len(more.Children) != 50 {
+		t.Errorf("page 2 of /blog has %d children, want 50", len(more.Children))
+	}
+	ab := get("path=/a/b")
+	if ab.Pages != 1 || len(ab.Children) != 1 || ab.Children[0].Name != "c" || ab.Children[0].HasChildren {
+		t.Errorf("/a/b = %+v", ab)
+	}
+}
+
+// Cached pages lose GSC data when stripped; the lazy tree takes it from the
+// full tree built before stripping and flags what that tree does not cover.
+func TestLazyDirectoryTreeKeepsTraffic(t *testing.T) {
+	api, _, m := newTestAPI(t)
+	pages := []*types.PageData{
+		{URL: "https://ex.com/a/x", StatusCode: 200, GscData: &types.GscData{Clicks: 7}},
+		{URL: "https://ex.com/a/y", StatusCode: 200, GscData: &types.GscData{Clicks: 3}},
+		{URL: "https://ex.com/a/y?v=2", StatusCode: 200},
+	}
+	tree := buildDirectoryTree(pages)
+	for _, p := range pages {
+		p.GscData = nil // what stripPagesForCache does
+	}
+	m.mu.Lock()
+	m.results["tr"] = &CrawlResults{Pages: pages, PagesReady: true, DirTree: tree}
+	m.mu.Unlock()
+
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest("GET", "/api/crawl/tr/directory-tree?lazy=1&path=/a", nil))
+	var body struct {
+		Tree struct {
+			GscClicks int `json:"gscClicks"`
+			Children  []struct {
+				Name           string `json:"name"`
+				GscClicks      int    `json:"gscClicks"`
+				TrafficMissing bool   `json:"trafficMissing"`
+			} `json:"children"`
+		} `json:"tree"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Tree.GscClicks != 10 {
+		t.Errorf("/a clicks = %d, want 10", body.Tree.GscClicks)
+	}
+	got := map[string]int{}
+	for _, c := range body.Tree.Children {
+		if c.TrafficMissing {
+			got[c.Name] = -1
+		} else {
+			got[c.Name] = c.GscClicks
+		}
+	}
+	if got["x"] != 7 || got["y"] != -1 || got["y?v=2"] != -1 {
+		t.Errorf("children traffic = %v", got)
+	}
+}
+
+// The index is rebuilt when pages are stripped in place after it was built,
+// and encoded paths match the full tree so traffic lookups still work.
+func TestLazyDirectoryTreeRebuildsAfterStrip(t *testing.T) {
+	api, _, m := newTestAPI(t)
+	pages := []*types.PageData{
+		{URL: "https://ex.com/caf%C3%A9/x", StatusCode: 200, GscData: &types.GscData{Clicks: 4}},
+		{URL: "https://ex.com/caf%C3%A9/y", StatusCode: 200, GscData: &types.GscData{Clicks: 1}},
+	}
+	res := &CrawlResults{Pages: pages, PagesReady: true, DirTree: buildDirectoryTree(pages)}
+	m.mu.Lock()
+	m.results["st"] = res
+	m.mu.Unlock()
+	clicks := func() map[string]string {
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, httptest.NewRequest("GET", "/api/crawl/st/directory-tree?lazy=1&path="+url.QueryEscape("/café"), nil))
+		var body struct {
+			Tree struct {
+				Children []struct {
+					Name           string `json:"name"`
+					GscClicks      int    `json:"gscClicks"`
+					TrafficMissing bool   `json:"trafficMissing"`
+				} `json:"children"`
+			} `json:"tree"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]string{}
+		for _, c := range body.Tree.Children {
+			out[c.Name] = fmt.Sprint(c.GscClicks, c.TrafficMissing)
+		}
+		return out
+	}
+	if got := clicks(); got["x"] != "4 false" {
+		t.Fatalf("before strip: %v", got)
+	}
+	for _, p := range pages {
+		p.GscData = nil
+	}
+	if got := clicks(); got["x"] != "4 false" || got["y"] != "1 false" {
+		t.Errorf("after strip: %v", got)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
@@ -311,6 +312,53 @@ func (r *Renderer) RunSnippet(ctx context.Context, pageURL, userAgent, jsCode st
 		return nil, fmt.Errorf("run snippet: %w", err)
 	}
 	return result, nil
+}
+
+// hideOverlaysJS removes cookie and consent banners before a screenshot.
+// Only overlays go (fixed/sticky elements and known consent dialogs), never
+// the page itself: <body class="cookie-consent-active"> must stay.
+const hideOverlaysJS = `(() => {
+  const main = document.querySelector('main');
+  for (const e of document.querySelectorAll('[id*=cookie i],[class*=cookie i],[id*=consent i],[class*=consent i],#onetrust-banner-sdk,#CybotCookiebotDialog')) {
+    if (e === document.body || e === document.documentElement || (main && e.contains(main))) continue;
+    const pos = getComputedStyle(e).position;
+    if (pos === 'fixed' || pos === 'sticky' || e.id === 'onetrust-banner-sdk' || e.id === 'CybotCookiebotDialog') e.remove();
+  }
+})()`
+
+// Screenshot loads pageURL in a width x height viewport and returns a JPEG
+// scaled by scale (0.25 turns 1280x800 into a 320x200 thumbnail) without any
+// image processing in Go. Use a renderer with BlockResources off so images load.
+func (r *Renderer) Screenshot(ctx context.Context, pageURL string, width, height int64, scale float64, quality int64) ([]byte, error) {
+	taskCtx, cancel := chromedp.NewContext(r.allocCtx)
+	defer cancel()
+	timeoutCtx, timeoutCancel := context.WithTimeout(taskCtx, r.config.Timeout)
+	defer timeoutCancel()
+	stop := context.AfterFunc(ctx, timeoutCancel)
+	defer stop()
+
+	var shot []byte
+	err := chromedp.Do(timeoutCtx,
+		chromedp.EmulateViewport(width, height, chromedp.EmulateScale(scale)),
+		chromedp.Navigate(pageURL),
+		chromedp.WaitReady("body"),
+		chromedp.Sleep(700*time.Millisecond),
+		chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+			_, _ = chromedp.Evaluate[any](hideOverlaysJS)(ctx, t) // best-effort
+			res, err := cdp.Call(ctx, t, page.CaptureScreenshot, page.CaptureScreenshotParams{
+				Format: page.CaptureScreenshotFormatJpeg, Quality: &quality,
+			})
+			if err != nil {
+				return err
+			}
+			shot = res.Data
+			return nil
+		}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("screenshot: %w", err)
+	}
+	return shot, nil
 }
 
 // Close shuts down the Chrome instance.

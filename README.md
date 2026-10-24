@@ -68,6 +68,8 @@ micelio ui --port 3100
 
 The Svelte 5 dashboard is embedded in the Go binary via `go:embed`. No separate server needed.
 
+<p align="center"><img src="docs/universe-demo.gif" alt="Universe: the internal link map of a 10,000-page crawl" width="800"><br><em>Universe on a 10,000-page crawl: click a section, then a page, to see its links and a thumbnail.</em></p>
+
 | | |
 |---|---|
 | <img src="docs/screenshot-dashboard.png" alt="New crawl setup with presets"><br>**New crawl**: presets, scope, and 10+ config sections | <img src="docs/screenshot-monitor.png" alt="Live crawl monitor"><br>**Monitor**: live status codes, response times, and recent pages |

@@ -305,7 +305,7 @@ func TestDetectProductNotListing(t *testing.T) {
 }
 
 func TestDetectAdDetailMarketplace(t *testing.T) {
-	// Marketplace ad page (otomoto-style: /oferta/ URL + ad detail signals)
+	// Marketplace ad page (/oferta/ URL + ad detail signals)
 	page := &types.PageData{
 		URL:             "https://example.com/osobowe/oferta/bmw-seria-1-ID6HFD3B.html",
 		FinalURL:        "https://example.com/osobowe/oferta/bmw-seria-1-ID6HFD3B.html",

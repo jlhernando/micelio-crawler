@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { UniverseEngine, UniverseMeta, UniverseCard, NodeLinks, Progress } from './universe/engine.js';
+  import type { UniverseEngine, UniverseMeta, UniverseCard, NodeLinks, Progress, ColorMode } from './universe/engine.js';
 
-  let { crawlId }: { crawlId: string } = $props();
+  let { crawlId, onOpenExplorer }: { crawlId: string; onOpenExplorer?: (url: string) => void } = $props();
 
   const PALETTE = ['#75a6ff', '#e5b66e', '#73d9ac', '#f2a3c7', '#b09aff', '#7fd3e6', '#c9b48a', '#aabddd'];
   const OUT_COLOR = '#f2c46d';
@@ -23,6 +23,36 @@
   let layout = $state<'links' | 'folders'>('links');
   let crossLinks = $state(false);
   let loadingPages = $state(false);
+  let colorMode = $state<ColorMode>('cluster');
+  const METRICS: [ColorMode, string][] = [['depth', 'Depth'], ['pagerank', 'PageRank'], ['authority', 'Authority'], ['hub', 'Hub']];
+  const DEPTH_COLORS = ['#4361ee', '#2ec4b6', '#f5a623', '#e63946', '#9b59b6', '#7d828a'];
+  // Page search
+  let query = $state('');
+  let hits = $state<UniverseCard[]>([]);
+  let searchSeq = 0;
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  function onSearch() {
+    clearTimeout(searchTimer);
+    const q = query.trim();
+    if (!q) { hits = []; return; }
+    searchTimer = setTimeout(async () => {
+      const seq = ++searchSeq;
+      try {
+        const res = await fetch(`${base}/search?dim=${dim}&layout=${layout}&q=${encodeURIComponent(q)}&limit=12`);
+        const data = await res.json();
+        if (seq === searchSeq) hits = data.rows ?? [];
+      } catch { /* keep previous hits */ }
+    }, 200);
+  }
+  function pickHit(h: UniverseCard) {
+    query = '';
+    hits = [];
+    engine?.select(h.i, true);
+  }
+  function setColour(mode: ColorMode) {
+    colorMode = mode;
+    engine?.setColorMode(mode);
+  }
 
   // Overview table (client-side sort)
   let cSort = $state<'label' | 'count' | 'prSum' | 'inAvg' | 'outAvg'>('prSum');
@@ -71,7 +101,7 @@
     const seq = ++startSeq;
     engine?.dispose();
     engine = null;
-    meta = null; focused = null; detail = null; error = ''; sitewide = false; crossLinks = false;
+    meta = null; focused = null; detail = null; error = ''; sitewide = false; crossLinks = false; colorMode = 'cluster'; query = ''; hits = [];
     progress = { loaded: 0, target: 0, edges: 0, edgeTarget: 0, phase: 'pages', reason: '' };
     try {
       // Right after a restart the server loads the crawl's pages in the
@@ -94,6 +124,7 @@
       const q = `dim=${m.dim}&layout=${m.layout}`;
       engine = new UniverseEngine(host, m, {
         nodes: (o, l) => `${base}/nodes?${q}&offset=${o}&limit=${l}`,
+        metric: (name, n) => `${base}/metric?${q}&name=${name}&n=${n}`,
         edges: (e) => `${base}/edges?${q}&n=${e.n}&offset=${e.offset}&limit=${e.limit}&per=${e.per}${e.c !== undefined ? `&c=${e.c}` : ''}${e.sitewide ? '&sitewide=1' : ''}${e.tree ? '&tree=1' : ''}`,
         nodeLinks: (i) => `${base}/node-links?${q}&i=${i}`,
       }, {
@@ -213,6 +244,18 @@
           {#if progress.loaded < meta.total} Top {compact(progress.loaded)} pages by PageRank shown. Limited by {progress.reason}.{/if}
         {/if}
       </div>
+      {#if colorMode !== 'cluster'}
+        <div class="mt-2.5 flex items-center gap-2 text-[11px] text-fg-2 {focused !== null ? 'uv-fade' : ''}">
+          {#if colorMode === 'depth'}
+            {#each DEPTH_COLORS as c, k}
+              <span class="flex items-center gap-1"><span class="uv-dot" style="background:{c}"></span>{k === 5 ? '5+' : k}</span>
+            {/each}
+            <span class="ml-1">clicks deep</span>
+          {:else}
+            <span>Low</span><span class="uv-ramp"></span><span>High {METRICS.find(([m]) => m === colorMode)?.[1]}{colorMode !== 'pagerank' ? ' (percentile)' : ''}</span>
+          {/if}
+        </div>
+      {/if}
       {#if meta.hasGraph && meta.layout === 'links'}
         <button class="pointer-events-auto mt-2.5 flex items-center gap-2 rounded-md border border-border bg-[#171819cc] px-2.5 py-1.5 text-[11px] text-fg-2 hover:text-fg {focused !== null ? 'uv-fade' : ''}"
           title="Links that are not part of the link tree: a page's links beyond the one that first reaches each target"
@@ -265,8 +308,31 @@
         <div class="mt-1.5 flex items-center gap-1">
           <span class="mr-1 text-[10px] uppercase tracking-[1.2px] text-[#7d828a]">{meta.layout === 'links' ? 'Colour' : 'Group'}</span>
           {#each meta.dims as d}
-            <button class="rounded-md px-[11px] py-1.5 text-xs {meta.dim === d ? 'bg-[#292b2e] text-fg' : 'text-fg-2 hover:text-fg'}" onclick={() => meta?.dim !== d && start(d)}>{DIM_LABELS[d] ?? d}</button>
+            {@const on = meta.dim === d && (colorMode === 'cluster' || meta.layout !== 'links')}
+            <button class="rounded-md px-[11px] py-1.5 text-xs {on ? 'bg-[#292b2e] text-fg' : 'text-fg-2 hover:text-fg'}" onclick={() => (meta?.dim !== d ? start(d) : setColour('cluster'))}>{DIM_LABELS[d] ?? d}</button>
           {/each}
+        </div>
+        <div class="mt-1.5 flex items-center gap-1">
+          <span class="mr-1 text-[10px] uppercase tracking-[1.2px] text-[#7d828a]">Metric</span>
+          {#each METRICS as [m, label]}
+            <button class="rounded-md px-[11px] py-1.5 text-xs {colorMode === m ? 'bg-[#292b2e] text-fg' : 'text-fg-2 hover:text-fg'}"
+              onclick={() => setColour(colorMode === m ? 'cluster' : m)}>{label}</button>
+          {/each}
+        </div>
+        <div class="relative mt-3">
+          <input class="w-full rounded-md border border-border bg-[#101112] px-3 py-1.5 text-xs text-fg placeholder:text-[#6e737a] focus:border-[#5a5f66] focus:outline-none"
+            placeholder="Search pages by title or URL" bind:value={query} oninput={onSearch}
+            onkeydown={(e) => { if (e.key === 'Enter' && hits[0]) pickHit(hits[0]); if (e.key === 'Escape') { query = ''; hits = []; e.stopPropagation(); } }} />
+          {#if hits.length}
+            <div class="absolute left-0 right-0 top-full z-20 mt-1 max-h-72 overflow-auto rounded-md border border-border bg-[#171819] shadow-xl">
+              {#each hits as h (h.i)}
+                <button class="block w-full px-3 py-2 text-left hover:bg-[#232527]" onclick={() => pickHit(h)}>
+                  <div class="truncate text-xs text-fg">{h.title}</div>
+                  <div class="truncate text-[10.5px] text-fg-2">{h.url} · PR {h.pr.toFixed(2)}</div>
+                </button>
+              {/each}
+            </div>
+          {/if}
         </div>
       </div>
 
@@ -361,6 +427,9 @@
         </div>
       {/if}
       <div class="mt-3 flex items-center gap-4 text-[11px] text-fg-2">
+        {#if onOpenExplorer}
+          <button class="order-last ml-auto rounded-md border border-border px-2.5 py-1 text-[11px] text-fg-1 hover:border-[#5a5f66] hover:text-fg" onclick={() => onOpenExplorer?.(d.url)}>Open in Explorer →</button>
+        {/if}
         <span class="flex items-center gap-1.5"><span class="uv-line" style="background:{IN_COLOR}"></span>Inlinks {detail.in.length < detail.inTotal ? `(${detail.in.length.toLocaleString()} drawn)` : ''}</span>
         <span class="flex items-center gap-1.5"><span class="uv-line" style="background:{OUT_COLOR}"></span>Outlinks {detail.out.length < detail.outTotal ? `(${detail.out.length.toLocaleString()} drawn)` : ''}</span>
       </div>
@@ -408,5 +477,7 @@
   .uv-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: #d2d4d7; transition: transform 0.15s; }
   .uv-switch.on { background: #75a6ff; }
   .uv-switch.on::after { transform: translateX(10px); }
+  .uv-ramp { width: 72px; height: 6px; border-radius: 3px; background: linear-gradient(90deg, #4a5468, #75a6ff, #f2c46d); }
+  :global(.uv-chip.uv-mono .uv-dot) { visibility: hidden; }
   .uv-line { display: inline-block; width: 14px; height: 2px; border-radius: 1px; }
 </style>

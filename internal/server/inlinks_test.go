@@ -251,3 +251,26 @@ func TestOrphanAlertStale(t *testing.T) {
 		}
 	}
 }
+
+func TestRestoreHitsOnReload(t *testing.T) {
+	pages := linkedPages()
+	iter := diskIter(pages)
+	stripLinks(pages)
+	g := analysis.BuildAdjacencyListFromDisk(pages, iter)
+	if !restoreHits(pages, g) {
+		t.Fatal("restoreHits did nothing")
+	}
+	// /cat/p2 is linked from 3 pages: highest authority.
+	best := 0
+	for i, p := range pages {
+		if p.LinkIntelligence.AuthorityScore > pages[best].LinkIntelligence.AuthorityScore {
+			best = i
+		}
+	}
+	if pages[best].URL != "https://ex.com/cat/p2" {
+		t.Errorf("top authority = %s", pages[best].URL)
+	}
+	if restoreHits(pages, g) {
+		t.Error("restoreHits should skip pages that already have scores")
+	}
+}

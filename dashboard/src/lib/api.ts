@@ -121,30 +121,6 @@ export const api = {
   getLoadingProgress: (id: string) =>
     request<{ pagesReady: boolean; loadingProgress: number; pageCount: number }>('GET', `/api/crawl/${id}/loading-progress`),
 
-  getCrawlGraph: (id: string) =>
-    request<{
-      nodes: Array<{
-        id: string;
-        depth: number | null;
-        authority: number;
-        hub: number;
-        centrality: number;
-        closeness: number;
-        inDegree: number;
-        outDegree: number;
-        title: string;
-      }>;
-      edges: Array<{ source: string; target: string }>;
-      meta: {
-        maxDepth: number;
-        maxAuthority: number;
-        maxHub: number;
-        maxInDegree: number;
-        totalEdgesBeforeSampling: number;
-        samplingApplied: boolean;
-      };
-    }>('GET', `/api/crawl/${id}/graph`),
-
   getCrawlSubgraph: (id: string, root?: string, depth: number = 1, max: number = 500) => {
     const params = new URLSearchParams();
     if (root) params.set('root', root);

@@ -25,7 +25,6 @@
     "vite": "^8.3.5"
   },
   "dependencies": {
-    "@cosmos.gl/graph": "^2.6.4",
     "bits-ui": "^1.0.0",
     "chart.js": "^4.5.1",
     "graphology": "^0.26.0",

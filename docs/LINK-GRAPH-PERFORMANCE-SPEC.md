@@ -1,3 +1,5 @@
+> **Historical spec.** The Sigma/Cosmos Full Graph described here was replaced by Universe in v1.3.1. See the User Guide.
+
 # Link Graph Performance Spec: Enterprise-Scale Graph Rendering (1M+ URLs)
 
 ## Problem Statement

@@ -38,6 +38,9 @@ export interface Progress {
 
 // Neighbouring entries contrast, since the biggest clusters take the first colours.
 export const PALETTE = ['#75a6ff', '#e5b66e', '#73d9ac', '#f2a3c7', '#b09aff', '#7fd3e6', '#c9b48a', '#aabddd'];
+export const DEPTH_COLORS = ['#4361ee', '#2ec4b6', '#f5a623', '#e63946', '#9b59b6', '#7d828a']; // 0..4, 5+
+export const RAMP = ['#4a5468', '#75a6ff', '#f2c46d']; // low, mid, high
+export type ColorMode = 'cluster' | 'depth' | 'pagerank' | 'authority' | 'hub';
 export const OUT_COLOR = '#f2c46d';
 export const IN_COLOR = '#73d9ac';
 const ERROR_COLOR = '#f58f98';
@@ -58,11 +61,30 @@ export function deviceBudget(total: number, edgesTotal: number, gpu: string) {
   return { cap: Math.min(total, cap), edges: Math.min(edgesTotal, edges), reason };
 }
 
+
+// Colour of a page: by cluster (mode 0), crawl depth (1), PageRank (2) or a
+// metric streamed on demand such as authority or hub (3), on a dark-to-bright scale.
+const colorGLSL = /* glsl */ `
+  uniform vec3 pal[8];
+  uniform vec3 depthPal[6];
+  uniform vec3 ramp[3];
+  uniform float colorMode;
+  vec3 rampColor(float v) {
+    return v < 0.5 ? mix(ramp[0], ramp[1], v * 2.0) : mix(ramp[1], ramp[2], v * 2.0 - 1.0);
+  }
+  vec3 pageColor(float cluster, float rank, float metric) {
+    if (colorMode > 2.5) return metric > 0.0 ? rampColor(metric) : vec3(0.22, 0.23, 0.25); // no score
+    if (colorMode > 1.5) return rampColor(rank);
+    if (colorMode > 0.5) return depthPal[int(min(metric * 255.0 + 0.5, 5.0))];
+    return pal[int(mod(cluster, 8.0))];
+  }`;
+
 const pointVertex = /* glsl */ `
   attribute float cluster;
   attribute float rank;
   attribute float flags;
-  uniform vec3 pal[8];
+  attribute float metric;
+  ${colorGLSL}
   uniform vec3 errColor;
   uniform float focus;
   uniform float projScale;
@@ -75,7 +97,7 @@ const pointVertex = /* glsl */ `
     bool dimmed = focus >= 0.0 && abs(cluster - focus) > 0.5;
     float world = mix(24.0, 80.0, rank) * sizeScale;
     gl_PointSize = clamp(world * projScale / -mv.z, 1.0, dimmed ? 6.0 : 20.0);
-    vColor = mod(flags, 4.0) > 1.5 ? errColor : pal[int(mod(cluster, 8.0))];
+    vColor = mod(flags, 4.0) > 1.5 && colorMode < 0.5 ? errColor : pageColor(cluster, rank, metric);
     vAlpha = dimmed ? 0.12 : 0.55 + rank * 0.45;
   }`;
 
@@ -94,7 +116,9 @@ const pointFragment = /* glsl */ `
 // a link between two clusters fades from one colour to the other.
 const linkVertex = /* glsl */ `
   attribute float cluster;
-  uniform vec3 pal[8];
+  attribute float rank;
+  attribute float metric;
+  ${colorGLSL}
   uniform vec3 tint;
   uniform float useTint;
   uniform float focus;
@@ -102,7 +126,7 @@ const linkVertex = /* glsl */ `
   varying float vDim;
   void main() {
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    vColor = useTint > 0.5 ? tint : pal[int(mod(cluster, 8.0))];
+    vColor = useTint > 0.5 ? tint : pageColor(cluster, rank, metric);
     vDim = focus >= 0.0 && abs(cluster - focus) > 0.5 ? 0.25 : 1.0;
   }`;
 
@@ -114,6 +138,7 @@ const linkFragment = /* glsl */ `
 
 export interface EngineUrls {
   nodes: (offset: number, limit: number) => string;
+  metric: (name: string, n: number) => string;
   edges: (q: { n: number; offset: number; limit: number; per: number; c?: number; sitewide: boolean; tree?: boolean }) => string;
   nodeLinks: (i: number) => string;
 }
@@ -132,7 +157,9 @@ export class UniverseEngine {
   private geometry = new THREE.BufferGeometry();
   private pointMat!: THREE.ShaderMaterial;
   private points!: THREE.Points;
-  private arrays!: { pos: Int16Array; cl: Uint16Array; rank: Uint8Array; flags: Uint8Array };
+  private arrays!: { pos: Int16Array; cl: Uint16Array; rank: Uint8Array; flags: Uint8Array; metric: Uint8Array };
+  private colorMode: ColorMode = 'cluster';
+  private metricLoaded = '';
   private edgeIndex!: Uint32Array;
   private edgeGeo = new THREE.BufferGeometry();
   private edgeMat!: THREE.ShaderMaterial;
@@ -204,8 +231,16 @@ export class UniverseEngine {
 
   private onVisibility = () => { if (!document.hidden) this.request(); };
 
+  // Colour uniforms are shared objects, so every material follows setColorMode.
+  private colorUniforms = {
+    pal: { value: PALETTE.map((c) => new THREE.Color(c)) },
+    depthPal: { value: DEPTH_COLORS.map((c) => new THREE.Color(c)) },
+    ramp: { value: RAMP.map((c) => new THREE.Color(c)) },
+    colorMode: { value: 0 },
+  };
+
   private uniformsBase() {
-    return { pal: { value: PALETTE.map((c) => new THREE.Color(c)) }, focus: { value: -1 }, alpha: { value: 1 } };
+    return { ...this.colorUniforms, focus: { value: -1 }, alpha: { value: 1 } };
   }
 
   private buildPoints() {
@@ -213,12 +248,13 @@ export class UniverseEngine {
     this.progress.target = b.cap;
     this.edgeBudget = b.edges;
     this.progress.reason = b.reason;
-    this.arrays = { pos: new Int16Array(b.cap * 3), cl: new Uint16Array(b.cap), rank: new Uint8Array(b.cap), flags: new Uint8Array(b.cap) };
+    this.arrays = { pos: new Int16Array(b.cap * 3), cl: new Uint16Array(b.cap), rank: new Uint8Array(b.cap), flags: new Uint8Array(b.cap), metric: new Uint8Array(b.cap) };
     const g = this.geometry;
     g.setAttribute('position', new THREE.BufferAttribute(this.arrays.pos, 3, true));
     g.setAttribute('cluster', new THREE.BufferAttribute(this.arrays.cl, 1, false));
     g.setAttribute('rank', new THREE.BufferAttribute(this.arrays.rank, 1, true));
     g.setAttribute('flags', new THREE.BufferAttribute(this.arrays.flags, 1, false));
+    g.setAttribute('metric', new THREE.BufferAttribute(this.arrays.metric, 1, true));
     g.setDrawRange(0, 0);
     this.pointMat = new THREE.ShaderMaterial({
       vertexShader: pointVertex, fragmentShader: pointFragment, transparent: true, depthWrite: false,
@@ -230,7 +266,7 @@ export class UniverseEngine {
 
     // Sampled page-to-page links: an index buffer over the same vertices.
     this.edgeIndex = new Uint32Array(Math.max(2, b.edges * 2));
-    for (const name of ['position', 'cluster']) this.edgeGeo.setAttribute(name, g.getAttribute(name));
+    for (const name of ['position', 'cluster', 'rank', 'metric']) this.edgeGeo.setAttribute(name, g.getAttribute(name));
     this.edgeGeo.setIndex(new THREE.BufferAttribute(this.edgeIndex, 1));
     this.edgeGeo.setDrawRange(0, 0);
     this.edgeMat = this.linkMaterial(0.08);
@@ -238,7 +274,7 @@ export class UniverseEngine {
     this.scene.add(lines);
 
     this.treeIndex = new Uint32Array(Math.max(2, b.cap * 2));
-    for (const name of ['position', 'cluster']) this.treeGeo.setAttribute(name, g.getAttribute(name));
+    for (const name of ['position', 'cluster', 'rank', 'metric']) this.treeGeo.setAttribute(name, g.getAttribute(name));
     this.treeGeo.setIndex(new THREE.BufferAttribute(this.treeIndex, 1));
     this.treeGeo.setDrawRange(0, 0);
     this.treeMat = this.linkMaterial(0.3);
@@ -323,6 +359,7 @@ export class UniverseEngine {
     }
     if (sig.aborted) return;
     if (p.loaded >= this.meta.total) p.reason = '';
+    if (this.colorMode !== 'cluster') void this.setColorMode(this.colorMode); // cover pages loaded since
 
     if (this.meta.layout === 'links') await this.loadTree(sig);
     if (sig.aborted) return;
@@ -433,6 +470,30 @@ export class UniverseEngine {
       if ((e as Error).name === 'AbortError' || sig.aborted) return;
       p.linkError = (e as Error).message || 'request failed';
     }
+  }
+
+  /** Colours pages by cluster, crawl depth, PageRank, authority or hub. Metrics load on first use. */
+  async setColorMode(mode: ColorMode) {
+    this.colorMode = mode;
+    const id = { cluster: 0, depth: 1, pagerank: 2, authority: 3, hub: 3 }[mode];
+    const name = mode === 'depth' || mode === 'authority' || mode === 'hub' ? mode : '';
+    if (name && this.metricLoaded !== `${name}:${this.progress.loaded}`) {
+      const n = this.progress.loaded;
+      const res = await fetch(this.urls.metric(name, n), { signal: this.abort.signal });
+      if (!res.ok || this.colorMode !== mode) return;
+      const buf = await res.arrayBuffer();
+      const count = new DataView(buf).getUint32(4, true);
+      this.arrays.metric.set(new Uint8Array(buf, 16, Math.min(count, this.arrays.metric.length)));
+      const a = this.geometry.getAttribute('metric') as THREE.BufferAttribute;
+      a.clearUpdateRanges();
+      a.addUpdateRange(0, count);
+      a.needsUpdate = true;
+      this.metricLoaded = `${name}:${n}`;
+    }
+    if (this.colorMode !== mode) return;
+    this.colorUniforms.colorMode.value = id;
+    this.chips.forEach((ch) => ch.el.classList.toggle('uv-mono', mode !== 'cluster'));
+    this.request();
   }
 
   /** Include or leave out links to sitewide pages (menus, footers) and reload links. */
@@ -609,7 +670,7 @@ export class UniverseEngine {
   /** Index-buffer line set over the shared vertices. */
   private overlay(pairs: Uint32Array, mat: THREE.ShaderMaterial) {
     const g = new THREE.BufferGeometry();
-    for (const name of ['position', 'cluster']) g.setAttribute(name, this.geometry.getAttribute(name));
+    for (const name of ['position', 'cluster', 'rank', 'metric']) g.setAttribute(name, this.geometry.getAttribute(name));
     g.setIndex(new THREE.BufferAttribute(pairs, 1));
     const lines = this.scaled(new THREE.LineSegments(g, mat));
     lines.renderOrder = 1;

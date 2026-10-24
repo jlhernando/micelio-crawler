@@ -86,7 +86,7 @@ For a walkthrough of every screen, see the [User Guide](docs/USER-GUIDE.md). Eve
 |------|-------------|
 | **New Crawl** | Configure and start crawls with 5 presets and 10+ config sections. User-agent dropdown with Chrome DevTools-inspired presets (Desktop, Mobile, Bots). Recent sites quick-start. |
 | **Monitor** | Real-time progress via WebSocket — status codes, response times, error log, pause/resume/cancel, stop & analyze, per-pattern excluded URL counters |
-| **Results** | Overview with crawl coverage (exclusion reasons with example URLs) and priority issues, plus tabs for Issues, Performance, Content, Links, Signals, AI Visibility, All Pages. Link Explorer (progressive drill-down graph), Universe (3D link-structure map with page thumbnails), Full Graph (WebGL), directory tree and treemap that load one folder at a time, anchor cloud. Template-based filtering with filtered stats and CSV export. |
+| **Results** | Overview with crawl coverage (exclusion reasons with example URLs) and priority issues, plus tabs for Issues, Performance, Content, Links, Signals, AI Visibility, All Pages. Link Explorer (progressive drill-down graph), Universe (3D link-structure map with page search, metric colours and thumbnails), directory tree and treemap that load one folder at a time, anchor cloud. Template-based filtering with filtered stats and CSV export. |
 | **History** | Crawl history with side-by-side diff comparison, active crawls sidebar, status filters |
 | **Diff** | Side-by-side comparison with visibility, segments, lifecycle tracking, topic evolution, and cannibalization detection |
 | **Logs** | Server log analysis — parallel multi-file processing with per-file aggregation, 6 formats (Apache, Nginx, CloudFront, Cloudflare, ALB/ELB, W3C/IIS), zero-alloc bot detection (100+ signatures), crawl budget/waste analysis, AI bot trends, heatmaps, log-to-crawl merge with 7-segment classification, per-phase timing |
@@ -435,7 +435,7 @@ document.querySelector('h1')?.textContent
 
 ### Link Intelligence
 - **Graph Explorer**: Progressive drill-down visualization — start from the homepage and expand one level at a time by clicking nodes. Instant load even on 700K+ page crawls (reads directly from SQLite, no full graph needed in memory). Breadcrumb navigation, server-side search, 4 color modes (Depth, Authority, Hub, PageRank), expand/collapse with ForceAtlas2 incremental layout. Coverage progress bar shows percentage explored vs total.
-- **Full Graph**: WebGL link graph (Sigma.js + Cosmos.gl, up to 50K pages) for whole-site overview
+- **Universe**: 3D map of the whole site placed by its internal links (three.js). Page search, colour by section/folder/template or by Depth, PageRank, Authority and Hub, page thumbnails, and progressive loading up to 1M+ pages. "Open in Explorer" jumps from a page to its neighbourhood in Graph Explorer.
 - Centrality scores (PageRank, authority, hub, betweenness, closeness)
 - Orphan page detection
 - Link suggestions based on semantic similarity
@@ -497,7 +497,7 @@ document.querySelector('h1')?.textContent
 
 - **Language**: Go 1.26 (single binary, no CGO)
 - **Frontend**: Svelte 5 (runes), Tailwind CSS 4, Vite 6 — embedded via `go:embed`
-- **Graph**: Sigma.js 3 (WebGL) + Cosmos.gl + graphology + ForceAtlas2 Web Worker
+- **Graph**: Sigma.js 3 + graphology + ForceAtlas2 (Graph Explorer); three.js (Universe)
 - **Server**: net/http + gorilla/websocket
 - **Storage**: Pure Go SQLite (zombiezen.com/go/sqlite) for UI state, gzip/zstd compression
 - **JS Rendering**: chromedp (headless Chrome via DevTools Protocol)
@@ -524,7 +524,7 @@ internal/
   webhook/            HTTP webhook dispatch with retry
 dashboard/            Svelte 5 web dashboard source
   src/routes/         Page components (Setup, Monitor, Results, History, Diff, Logs, LogResults, Schedules, Settings)
-  src/lib/components/ UI components (LinkGraph, SigmaGraph, PagesTable, etc.)
+  src/lib/components/ UI components (GraphExplorer, UniverseGraph, PagesTable, etc.)
   src/workers/        Web Workers (graph-data, search, neighbor)
 src/                  TypeScript crawler engine (original implementation)
 docs/                 Specs and research docs

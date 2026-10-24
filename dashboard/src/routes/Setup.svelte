@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ScheduleForm from '../lib/components/schedule/ScheduleForm.svelte';
   import { Zap, ScanSearch, FileText, Wrench, Network } from 'lucide-svelte';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
@@ -420,6 +421,13 @@
     config.saveRendered = saveRendered;
 
     return config;
+  }
+
+  let showSchedule = $state(false);
+  function scheduleConfig() {
+    const target = mode === 'spider' ? url : mode === 'list' ? urlList : sitemapUrls;
+    if (!target.trim()) throw new Error('Please enter a URL or file path');
+    return buildConfig();
   }
 
   async function startCrawl() {
@@ -1006,9 +1014,16 @@
         Resuming crawl — {resumePageCount.toLocaleString()} pages already crawled will be skipped. Edit settings below if needed.
       </div>
     {/if}
+    {#if showSchedule}
+      <div class="mb-3 p-4 rounded-lg border border-border bg-surface-2">
+        <h3 class="text-sm font-medium text-fg mb-3">Schedule this crawl</h3>
+        <ScheduleForm config={scheduleConfig} onCreated={() => navigate('/schedules')} onCancel={() => (showSchedule = false)} />
+      </div>
+    {/if}
+    <div class="flex gap-2">
     <button
       type="button"
-      class="w-full py-3 rounded-lg {resumeId ? 'bg-green-600 hover:bg-green-600/90' : 'bg-accent hover:bg-accent/90'} text-white font-semibold text-base transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+      class="flex-1 py-3 rounded-lg {resumeId ? 'bg-green-600 hover:bg-green-600/90' : 'bg-accent hover:bg-accent/90'} text-white font-semibold text-base transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
       onclick={startCrawl}
       disabled={starting}
     >
@@ -1018,5 +1033,11 @@
         {resumeId ? 'Resume Crawl' : 'Start Crawl'}
       {/if}
     </button>
+    {#if !resumeId}
+      <button type="button" class="px-5 rounded-lg border border-border text-sm text-fg-1 hover:text-fg cursor-pointer" onclick={() => (showSchedule = !showSchedule)}>
+        {showSchedule ? 'Hide schedule' : 'Schedule…'}
+      </button>
+    {/if}
+    </div>
   </div>
 </div>

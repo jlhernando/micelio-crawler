@@ -12,8 +12,28 @@ import (
 func newTestAPI(t *testing.T) (http.Handler, *UiStore, *CrawlManager) {
 	t.Helper()
 	s := newTestStore(t)
-	m := NewCrawlManager(s)
+	m := newTestManager(t, s)
 	return CreateAPIHandler(s, m, nil), s, m
+}
+
+// newTestManager returns a manager whose crawls and background work are
+// stopped and awaited before the test's temp dirs are removed.
+func newTestManager(t *testing.T, s *UiStore) *CrawlManager {
+	t.Helper()
+	m := NewCrawlManager(s)
+	t.Cleanup(func() {
+		if a := m.GetStatus(); a != nil {
+			m.CancelCrawl(a.ID)
+		}
+		done := make(chan struct{})
+		go func() { m.WaitBackground(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			t.Log("background crawl work still running at cleanup")
+		}
+	})
+	return m
 }
 
 func TestGetPresets(t *testing.T) {

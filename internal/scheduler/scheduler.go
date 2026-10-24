@@ -21,9 +21,13 @@ import (
 	"github.com/micelio/micelio/internal/webhook"
 )
 
-// State tracks a schedule's run history.
+// State tracks a schedule's run history. Schedules created from the
+// dashboard (Source "ui") also store their crawl config, check and webhook
+// here, so the server can resume them after a restart.
 type State struct {
 	ID             string `json:"id"`
+	Name           string `json:"name,omitempty"`
+	Source         string `json:"source,omitempty"` // "ui" or "cli"
 	URL            string `json:"url"`
 	Cron           string `json:"cron"`
 	CreatedAt      string `json:"createdAt"`
@@ -34,6 +38,15 @@ type State struct {
 	LastPages      int    `json:"lastPages"`
 	LastDurationMs int64  `json:"lastDurationMs"`
 	TotalRuns      int    `json:"totalRuns"`
+	LastReason     string `json:"lastReason,omitempty"`  // why a run was skipped, paused or stopped
+	LastCrawlID    string `json:"lastCrawlId,omitempty"` // dashboard crawl job of the last run
+	Running        bool   `json:"running,omitempty"`
+	Paused         bool   `json:"paused,omitempty"` // waiting for the check to pass again
+
+	CrawlConfig map[string]interface{} `json:"crawlConfig,omitempty"`
+	Precheck    *Precheck              `json:"precheck,omitempty"`
+	LastCheck   *PrecheckResult        `json:"lastCheck,omitempty"`
+	Webhook     string                 `json:"webhook,omitempty"`
 }
 
 // Config defines a scheduled crawl.
@@ -44,6 +57,65 @@ type Config struct {
 	OutputDir   string
 	CrawlConfig types.CrawlConfig
 	MaxRuns     int
+
+	Name     string
+	Source   string                 // "ui" (dashboard) or "cli"; default "cli"
+	CrawlMap map[string]interface{} // dashboard-format config, persisted for "ui" schedules
+	Precheck *Precheck
+	// Runner executes one crawl. Nil runs crawler.Crawl directly and writes
+	// the output file (CLI behaviour).
+	Runner Runner
+}
+
+// RunResult is the outcome of one scheduled run.
+type RunResult struct {
+	Status  string // "success", "failed", "stopped", "skipped"
+	Reason  string
+	Pages   int
+	Output  string
+	CrawlID string
+}
+
+// Runner executes one scheduled crawl. It should honour ctl: pause the crawl
+// while ctl.Paused() is true (or stop it when pausing is not supported) and
+// return when ctx is cancelled.
+type Runner interface {
+	Run(ctx context.Context, cfg Config, ctl *RunControl) RunResult
+}
+
+// RunControl tells a running crawl to pause or resume when the check
+// changes.
+type RunControl struct {
+	mu      sync.Mutex
+	paused  bool
+	reason  string
+	changed chan struct{}
+}
+
+func newRunControl() *RunControl { return &RunControl{changed: make(chan struct{}, 1)} }
+
+// Paused reports whether the crawl should be paused, and why.
+func (c *RunControl) Paused() (bool, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.paused, c.reason
+}
+
+// Changed is signalled whenever Paused changes.
+func (c *RunControl) Changed() <-chan struct{} { return c.changed }
+
+func (c *RunControl) set(paused bool, reason string) bool {
+	c.mu.Lock()
+	changed := c.paused != paused
+	c.paused, c.reason = paused, reason
+	c.mu.Unlock()
+	if changed {
+		select {
+		case c.changed <- struct{}{}:
+		default:
+		}
+	}
+	return changed
 }
 
 var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
@@ -83,7 +155,13 @@ func New(cfg Config) (*Scheduler, error) {
 		return nil, fmt.Errorf("create state dir: %w", err)
 	}
 
-	id := scheduleID(cfg.URL, cfg.CronExpr)
+	if cfg.Source == "" {
+		cfg.Source = "cli"
+	}
+	if err := cfg.Precheck.Validate(); err != nil {
+		return nil, err
+	}
+	id := scheduleID(cfg.URL, cfg.CronExpr+cfg.Name)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &Scheduler{
@@ -105,6 +183,12 @@ func New(cfg Config) (*Scheduler, error) {
 			CreatedAt: time.Now().UTC().Format(time.RFC3339),
 			OutputDir: cfg.OutputDir,
 		}
+	}
+	s.state.Name, s.state.Source = cfg.Name, cfg.Source
+	s.state.CrawlConfig, s.state.Precheck = cfg.CrawlMap, cfg.Precheck
+	s.state.Running, s.state.Paused = false, false
+	if cfg.Webhook != nil {
+		s.state.Webhook = cfg.Webhook.URL
 	}
 
 	// Calculate next run
@@ -175,6 +259,18 @@ func (s *Scheduler) GetState() State {
 	return s.state
 }
 
+// RunNow starts a run immediately (in the background) unless one is running.
+func (s *Scheduler) RunNow() bool {
+	s.mu.Lock()
+	busy := s.crawling
+	s.mu.Unlock()
+	if busy {
+		return false
+	}
+	go s.runOnce()
+	return true
+}
+
 func (s *Scheduler) runOnce() {
 	s.mu.Lock()
 	if s.crawling {
@@ -189,42 +285,42 @@ func (s *Scheduler) runOnce() {
 		return
 	}
 	s.crawling = true
+	s.state.Running = true
 	runNumber := s.state.TotalRuns + 1
 	s.mu.Unlock()
+	s.saveState()
 
 	startTime := time.Now()
 	fmt.Fprintf(os.Stderr, "\n%s\n", strings.Repeat("=", 60))
 	fmt.Fprintf(os.Stderr, "Scheduled run #%d starting at %s\n", runNumber, startTime.Format(time.RFC3339))
 	fmt.Fprintf(os.Stderr, "%s\n\n", strings.Repeat("=", 60))
 
-	// Build output filename
-	outputFile := buildOutputFilename(s.config.URL, s.config.OutputDir, s.config.CrawlConfig.OutputFormat)
-
-	// Configure crawl
-	cfg := s.config.CrawlConfig
-	cfg.OutputPath = outputFile
-	if cfg.SeedURL == "" {
-		cfg.SeedURL = s.config.URL
+	var res RunResult
+	if pc := s.config.Precheck; pc.Enabled() {
+		check := pc.Run(s.ctx)
+		s.recordCheck(check)
+		if !check.OK {
+			res = RunResult{Status: "skipped", Reason: check.Reason}
+			fmt.Fprintf(os.Stderr, "Skipped: %s\n", check.Reason)
+		}
 	}
-
-	// Run crawl
-	result, err := crawler.Crawl(s.ctx, cfg, func(p crawler.CrawlProgress) {
-		fmt.Fprintf(os.Stderr, "\r  [%d/%d] %.1f p/s — %s",
-			p.Crawled, p.TotalSeen, p.Rate, p.CurrentURL)
-	})
+	if res.Status == "" {
+		ctl := newRunControl()
+		runCtx, stopMonitor := context.WithCancel(s.ctx)
+		go s.monitorPrecheck(runCtx, ctl)
+		runner := s.config.Runner
+		if runner == nil {
+			runner = directRunner{}
+		}
+		res = runner.Run(s.ctx, s.config, ctl)
+		stopMonitor()
+	}
 
 	durationMs := time.Since(startTime).Milliseconds()
-	status := "success"
-	pages := 0
-	if err != nil {
-		status = "failed"
-		log.Printf("scheduled crawl error: %v", err)
-	} else {
-		pages = len(result.Pages)
+	fmt.Fprintf(os.Stderr, "\nRun #%d %s (%d pages, %.1fs)\n", runNumber, res.Status, res.Pages, float64(durationMs)/1000)
+	if res.Output != "" {
+		fmt.Fprintf(os.Stderr, "Output: %s\n", res.Output)
 	}
-
-	fmt.Fprintf(os.Stderr, "\nRun #%d %s (%d pages, %.1fs)\n", runNumber, status, pages, float64(durationMs)/1000)
-	fmt.Fprintf(os.Stderr, "Output: %s\n", outputFile)
 
 	// Update state
 	schedule, _ := cronParser.Parse(s.config.CronExpr)
@@ -232,11 +328,18 @@ func (s *Scheduler) runOnce() {
 
 	s.mu.Lock()
 	s.state.LastRun = startTime.UTC().Format(time.RFC3339)
-	s.state.LastStatus = status
-	s.state.LastPages = pages
+	s.state.LastStatus = res.Status
+	s.state.LastReason = res.Reason
+	s.state.LastPages = res.Pages
 	s.state.LastDurationMs = durationMs
+	if res.CrawlID != "" {
+		s.state.LastCrawlID = res.CrawlID
+	}
 	s.state.NextRun = nextRun.UTC().Format(time.RFC3339)
-	s.state.TotalRuns++
+	if res.Status != "skipped" {
+		s.state.TotalRuns++
+	}
+	s.state.Running, s.state.Paused = false, false
 	s.crawling = false
 	totalRuns := s.state.TotalRuns
 	s.mu.Unlock()
@@ -246,17 +349,18 @@ func (s *Scheduler) runOnce() {
 	// Send webhook
 	if s.config.Webhook != nil {
 		fmt.Fprintf(os.Stderr, "Sending webhook notification...\n")
-		event := "crawl_complete"
-		if status == "failed" {
-			event = "crawl_failed"
+		event := map[string]string{"failed": "crawl_failed", "skipped": "crawl_skipped", "stopped": "crawl_stopped"}[res.Status]
+		if event == "" {
+			event = "crawl_complete"
 		}
 		webhook.Send(*s.config.Webhook, webhook.Payload{
 			Event:      event,
 			URL:        s.config.URL,
 			Timestamp:  startTime.UTC().Format(time.RFC3339),
 			Duration:   fmt.Sprintf("%.1fs", float64(durationMs)/1000),
-			Pages:      pages,
-			OutputFile: outputFile,
+			Pages:      res.Pages,
+			OutputFile: res.Output,
+			Reason:     res.Reason,
 			Schedule: &webhook.Schedule{
 				Cron:      s.config.CronExpr,
 				RunNumber: totalRuns,
@@ -273,6 +377,107 @@ func (s *Scheduler) runOnce() {
 	}
 
 	fmt.Fprintf(os.Stderr, "\nNext run: %s\nWaiting... (Ctrl+C to stop)\n", nextRun.Format(time.RFC3339))
+}
+
+// monitorPrecheck re-runs the check during a crawl and pauses or resumes it.
+func (s *Scheduler) monitorPrecheck(ctx context.Context, ctl *RunControl) {
+	pc := s.config.Precheck
+	if !pc.Enabled() {
+		return
+	}
+	t := time.NewTicker(pc.Interval())
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		check := pc.Run(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		s.recordCheck(check)
+		if ctl.set(!check.OK, check.Reason) {
+			s.mu.Lock()
+			s.state.Paused = !check.OK
+			if !check.OK {
+				s.state.LastReason = "paused: " + check.Reason
+			}
+			s.mu.Unlock()
+			s.saveState()
+			if check.OK {
+				fmt.Fprintf(os.Stderr, "\nCheck passes again, resuming crawl\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "\nCheck failed (%s), pausing crawl\n", check.Reason)
+			}
+		}
+	}
+}
+
+func (s *Scheduler) recordCheck(r PrecheckResult) {
+	s.mu.Lock()
+	s.state.LastCheck = &r
+	s.mu.Unlock()
+}
+
+// CheckNow runs the configured check once and records the result.
+func (s *Scheduler) CheckNow(ctx context.Context) PrecheckResult {
+	r := s.config.Precheck.Run(ctx)
+	s.recordCheck(r)
+	s.saveState()
+	return r
+}
+
+// directRunner runs crawler.Crawl in-process and writes the output file. It
+// cannot pause a crawl, so a failing check stops the run (partial output is
+// kept).
+type directRunner struct{}
+
+func (directRunner) Run(ctx context.Context, sc Config, ctl *RunControl) RunResult {
+	outputFile := buildOutputFilename(sc.URL, sc.OutputDir, sc.CrawlConfig.OutputFormat)
+	cfg := sc.CrawlConfig
+	cfg.OutputPath = outputFile
+	if cfg.SeedURL == "" {
+		cfg.SeedURL = sc.URL
+	}
+	crawlCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var mu sync.Mutex
+	stopReason := ""
+	go func() {
+		for {
+			select {
+			case <-crawlCtx.Done():
+				return
+			case <-ctl.Changed():
+				if paused, reason := ctl.Paused(); paused {
+					mu.Lock()
+					stopReason = reason
+					mu.Unlock()
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	result, err := crawler.Crawl(crawlCtx, cfg, func(p crawler.CrawlProgress) {
+		fmt.Fprintf(os.Stderr, "\r  [%d/%d] %.1f p/s — %s", p.Crawled, p.TotalSeen, p.Rate, p.CurrentURL)
+	})
+	res := RunResult{Status: "success", Output: outputFile}
+	mu.Lock()
+	defer mu.Unlock()
+	if result != nil {
+		res.Pages = len(result.Pages)
+	}
+	switch {
+	case stopReason != "":
+		res.Status, res.Reason = "stopped", "check failed during crawl: "+stopReason
+	case err != nil:
+		res.Status, res.Reason = "failed", err.Error()
+		log.Printf("scheduled crawl error: %v", err)
+	}
+	return res
 }
 
 // ── State persistence ──
@@ -407,6 +612,12 @@ func DescribeCron(expr string) string {
 		return "Cron: " + expr
 	}
 	min, hour, dom, mon, dow := fields[0], fields[1], fields[2], fields[3], fields[4]
+	if min == "*" && hour == "*" && dom == "*" && mon == "*" && dow == "*" {
+		return "Every minute"
+	}
+	if strings.HasPrefix(min, "*/") && hour == "*" && dom == "*" && mon == "*" && dow == "*" {
+		return "Every " + strings.TrimPrefix(min, "*/") + " minutes"
+	}
 
 	timeStr := describeCronTime(min, hour)
 

@@ -251,11 +251,28 @@ and integrations consistent between the baseline and follow-up runs.
 
 ### Schedules
 
-**Schedules** stores cron-based jobs and run history. A schedule can also send a
-webhook after each run. Use page/error/time limits so an unexpected site change
-cannot create an unbounded recurring crawl.
+**Schedules** runs crawls on a cron schedule. To schedule a full setup, configure
+it on **New Crawl** and click **Schedule…**: the schedule keeps every option
+(mode, filters, rate, extractions…). The Schedules page also has a quick form.
 
-The CLI equivalents are `micelio schedule` and `micelio schedules`.
+- Each run is a normal crawl in **History**, tagged with its schedule, so you can
+  open it, compare it with Diff and get alerts. **Open crawl →** jumps to the
+  latest run.
+- Schedules are saved and resume when Micelio restarts.
+- **Only run when…**: list allowed public IP ranges (CIDR or IP). The check runs
+  before each run (a failing check skips the run and shows why) and every minute
+  while crawling: the crawl pauses until it passes again and stops, with
+  analysis, after 6 hours paused. **Test check** runs it on demand.
+- A webhook (Slack or any URL) is called after each run, including skipped and
+  stopped runs, with the reason.
+
+Use page/error/time limits so an unexpected site change cannot create an
+unbounded recurring crawl.
+
+From the CLI, `micelio schedule --config site.json` uses a crawl config in the
+same JSON format the dashboard sends. Add `--precheck-egress <CIDR>` or
+`--precheck-cmd "<command>"` for checks, and `--check-only` to test them once.
+`micelio schedules` lists schedules.
 
 ## 5. Analyze server logs
 

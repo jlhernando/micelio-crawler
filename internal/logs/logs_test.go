@@ -489,7 +489,7 @@ func TestMergeLogWithCrawl(t *testing.T) {
 }
 
 // findCrawlPage must match log URLs with query strings against canonical
-// crawl pages (without query strings). This is the otomoto-style faceted-nav
+// crawl pages (without query strings). This is the faceted-nav
 // pattern that was inflating ghost counts.
 func TestMergeMatchesQueryStringedURLs(t *testing.T) {
 	logURLs := []URLStat{

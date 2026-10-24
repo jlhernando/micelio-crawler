@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { C } from '../../palette';
   let { job, stats, pageCount, unavailable = false }: {
     job: Record<string, unknown> | null; stats: Record<string, unknown>; pageCount: number; unavailable?: boolean;
   } = $props();
@@ -17,9 +18,9 @@
   let errors = $derived(codes ? Object.entries(codes).reduce((n, [code, count]) => n + (Number(code) >= 400 && Number(code) < 600 ? count : 0), 0) : null);
   let sitemap = $derived(stats.sitemapStats as { totalSitemapUrls?: number; uncrawledSitemapUrls?: string[] } | null);
   let rows = $derived([
-    { label: 'Pages recorded', count: pageCount, note: 'Stored in this crawl', color: '#75a6ff' },
-    { label: 'HTTP errors', count: errors, note: 'Recorded 4xx and 5xx responses', color: '#f58f98' },
-    { label: 'Robots blocked', count: coverage?.final ? reasons.filter(r => r.reason === 'robots').reduce((n,r) => n+r.count,0) : number(stats.robotsBlockedCount), note: 'Recorded blocks only; not all excluded URLs', color: '#e5b66e' },
+    { label: 'Pages recorded', count: pageCount, note: 'Stored in this crawl', color: C.blue },
+    { label: 'HTTP errors', count: errors, note: 'Recorded 4xx and 5xx responses', color: C.danger },
+    { label: 'Robots blocked', count: coverage?.final ? reasons.filter(r => r.reason === 'robots').reduce((n,r) => n+r.count,0) : number(stats.robotsBlockedCount), note: 'Recorded blocks only; not all excluded URLs', color: C.warning },
   ]);
   let max = $derived(Math.max(pageCount, ...rows.map(r => r.count ?? 0), 1));
 </script>
@@ -64,11 +65,11 @@
   summary {display:grid;grid-template-columns:minmax(0,1fr) 30% 45px;align-items:center;gap:16px;cursor:pointer;}
   summary strong {text-align:right;}
   .reason-bar {height:8px;background:var(--color-surface-3);border-radius:4px;overflow:hidden;}
-  .reason-bar i {display:block;height:100%;background:#e5b66e;border-radius:4px;}
+  .reason-bar i {display:block;height:100%;background:var(--color-warning);border-radius:4px;}
   summary small {display:block;color:var(--color-fg-2);overflow-wrap:anywhere;margin-top:4px;}
   .examples p {overflow-wrap:anywhere;color:var(--color-fg-2);margin:8px 0;}
   .coverage-grid { display:grid; grid-template-columns:1fr 1fr; gap:32px; }
-  .scope-badge { border:1px solid var(--color-border); border-radius:6px; padding:5px 9px; font-size:11px; color:#e5b66e; }
+  .scope-badge { border:1px solid var(--color-border); border-radius:6px; padding:5px 9px; font-size:11px; color:var(--color-warning); }
   .chart-panel-heading {flex-wrap:wrap;}
   .track { height:10px; background:var(--color-surface-3); border-radius:4px; overflow:hidden; margin:8px 0; }
   .track i {display:block;height:100%;border-radius:4px;}

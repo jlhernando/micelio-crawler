@@ -181,15 +181,6 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		jsonOK(w, map[string]string{"status": "cancelled"})
 	})
 
-	mux.HandleFunc("GET /api/crawl/{id}/results", func(w http.ResponseWriter, r *http.Request) {
-		results := manager.GetOrLoadResults(r.PathValue("id"))
-		if results == nil {
-			jsonError(w, "results not available", http.StatusNotFound)
-			return
-		}
-		jsonGzip(w, r, results)
-	})
-
 	mux.HandleFunc("GET /api/crawl/{id}/pages", func(w http.ResponseWriter, r *http.Request) {
 		results := manager.GetOrLoadResults(r.PathValue("id"))
 		if results == nil {
@@ -240,34 +231,17 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		results.mu.RLock()
 		defer results.mu.RUnlock()
 
-		sortField := q.Get("sort")
-		if sortField != "" && !validSortFields[sortField] {
-			sortField = "" // ignore unknown sort fields
-		}
-		sortOrder := q.Get("order")
-		if sortOrder != "asc" && sortOrder != "desc" {
-			sortOrder = "asc"
-		}
-		filtered := filterAndSortPages(results.Pages,
-			strings.ToLower(q.Get("search")),
-			q.Get("status"), q.Get("indexable"), q.Get("template"),
-			q.Get("classification"), q.Get("issue"), q.Get("robotsBlocked"),
-			sortField, sortOrder,
-		)
-		if seg := q.Get("segment"); seg != "" {
-			filtered = filterBySegment(filtered, seg)
-		}
-
-		total := len(filtered)
-		end := offset + limit
-		if end > total {
-			end = total
-		}
-		var pageSlice interface{}
-		if offset >= total {
-			pageSlice = []interface{}{}
-		} else {
-			pageSlice = filtered[offset:end]
+		// Cached per (filters, sort) as page indices; only the requested
+		// rows are materialised.
+		view := results.pageView(pageQueryFromValues(q))
+		total := len(view)
+		end := min(offset+limit, total)
+		pageSlice := []*types.PageData{}
+		if offset < total {
+			pageSlice = make([]*types.PageData, 0, end-offset)
+			for _, i := range view[offset:end] {
+				pageSlice = append(pageSlice, results.Pages[i])
+			}
 		}
 		tmpl := results.TemplateTypes
 		if tmpl == nil {
@@ -380,11 +354,29 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 
 	mux.HandleFunc("GET /api/crawl/{id}/directory-tree", func(w http.ResponseWriter, r *http.Request) {
 		crawlID := r.PathValue("id")
-		// Lazy mode: one directory per request, like map tiles.
-		if r.URL.Query().Get("lazy") == "1" && serveLazyDirTree(w, r, crawlID, manager.GetCachedResults(crawlID)) {
+		// Lazy mode: one directory per request, like map tiles. Always
+		// answered in the lazy shape: from memory when pages are loaded,
+		// else from the crawl DB's page_index, else after a blocking load.
+		if r.URL.Query().Get("lazy") == "1" {
+			if serveLazyDirTree(w, r, crawlID, manager.GetCachedResults(crawlID)) {
+				return
+			}
+			if job, err := store.GetCrawlJob(crawlID); err == nil && job != nil && job.DBPath != "" {
+				if serveLazyDirTreeFromDB(w, r, crawlID, job.DBPath) {
+					return
+				}
+			}
+			results := manager.GetOrLoadResults(crawlID)
+			if results == nil {
+				jsonError(w, "results not available", http.StatusNotFound)
+				return
+			}
+			if !serveLazyDirTree(w, r, crawlID, results) {
+				writeEmptyLazyDirTree(w, r)
+			}
 			return
 		}
-		// Fast path: check cached results (non-blocking)
+		// Full (capped) tree. Fast path: cached results (non-blocking).
 		if results := manager.GetCachedResults(crawlID); results != nil {
 			if results.DirTree != nil {
 				jsonOK(w, results.DirTree)
@@ -395,18 +387,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 				return
 			}
 		}
-		// Fallback: build from page_index in DB (instant even for 742K pages)
-		dbPath := ""
-		if job, err := store.GetCrawlJob(crawlID); err == nil && job != nil {
-			dbPath = job.DBPath
-		}
-		if dbPath != "" {
-			if tree := buildDirectoryTreeFromDB(dbPath); tree != nil {
-				jsonOK(w, tree)
-				return
-			}
-		}
-		// Last resort: block and load
+		// Block and load
 		results := manager.GetOrLoadResults(crawlID)
 		if results == nil {
 			jsonError(w, "results not available", http.StatusNotFound)
@@ -426,7 +407,9 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			return
 		}
 		results.mu.RLock()
+		// capStatsForAPI returns a copy and never mutates results.Stats.
 		stats := capStatsForAPI(results.Stats)
+		backfillWordCountBuckets(stats, results)
 		resp := map[string]interface{}{
 			"stats":           stats,
 			"pageCount":       results.PageCount,
@@ -483,24 +466,6 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			"loadingProgress": progress,
 			"pageCount":       count,
 		})
-	})
-
-	mux.HandleFunc("GET /api/crawl/{id}/graph", func(w http.ResponseWriter, r *http.Request) {
-		results := manager.GetOrLoadResults(r.PathValue("id"))
-		if results == nil {
-			jsonError(w, "results not available", http.StatusNotFound)
-			return
-		}
-		if results.AnalysisPending {
-			jsonOK(w, map[string]interface{}{
-				"nodes": []interface{}{},
-				"edges": []interface{}{},
-				"meta":  map[string]interface{}{"pending": true},
-			})
-			return
-		}
-		graph := buildGraphPayload(results)
-		jsonGzip(w, r, graph)
 	})
 
 	mux.HandleFunc("GET /api/crawl/{id}/graph/subgraph", func(w http.ResponseWriter, r *http.Request) {
@@ -636,22 +601,10 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		results.mu.RLock()
 		defer results.mu.RUnlock()
 		q := r.URL.Query()
-		sortField := q.Get("sort")
-		if sortField != "" && !validSortFields[sortField] {
-			sortField = ""
-		}
-		sortOrder := q.Get("order")
-		if sortOrder != "asc" && sortOrder != "desc" {
-			sortOrder = "asc"
-		}
-		filtered := filterAndSortPages(results.Pages,
-			strings.ToLower(q.Get("search")),
-			q.Get("status"), q.Get("indexable"), q.Get("template"),
-			q.Get("classification"), q.Get("issue"), q.Get("robotsBlocked"),
-			sortField, sortOrder,
-		)
-		if seg := q.Get("segment"); seg != "" {
-			filtered = filterBySegment(filtered, seg)
+		view := results.pageView(pageQueryFromValues(q))
+		filtered := make([]*types.PageData, len(view))
+		for k, i := range view {
+			filtered[k] = results.Pages[i]
 		}
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=crawl-%s-filtered-%d.csv", r.PathValue("id"), len(filtered)))
@@ -1538,6 +1491,9 @@ func readJSON(r *http.Request) (map[string]interface{}, error) {
 
 // capStatsForAPI caps large arrays in crawl stats to prevent multi-hundred-MB JSON responses
 // that crash browser tabs. Arrays are truncated and a "totalX" count is preserved.
+// It never mutates the input: the top-level map and any nested map it changes
+// are copied, so cached stats keep their full lists and concurrent readers
+// under RLock stay safe.
 func capStatsForAPI(stats map[string]interface{}) map[string]interface{} {
 	if stats == nil {
 		return nil
@@ -1555,7 +1511,9 @@ func capStatsForAPI(stats map[string]interface{}) map[string]interface{} {
 		if !ok || len(arr) <= maxItems {
 			return
 		}
-		if countKey != "" {
+		// Lists capped at analysis time already carry their real total
+		// (e.g. totalOrphanPages); never replace it with the shorter length.
+		if countKey != "" && statNumber(out[countKey]) < float64(len(arr)) {
 			out[countKey] = len(arr)
 		}
 		out[key] = arr[:maxItems]
@@ -1578,7 +1536,16 @@ func capStatsForAPI(stats map[string]interface{}) map[string]interface{} {
 		out["totalPageRankEntries"] = len(scores)
 	}
 
-	// Cap nested arrays inside complex stats objects
+	// copyMap returns a shallow copy of a nested stats object.
+	copyMap := func(m map[string]interface{}) map[string]interface{} {
+		c := make(map[string]interface{}, len(m)+1)
+		for k, v := range m {
+			c[k] = v
+		}
+		return c
+	}
+
+	// Cap nested arrays inside complex stats objects (copy-on-write)
 	capNestedArray := func(parentKey, childKey, countKey string) {
 		parent, ok := out[parentKey].(map[string]interface{})
 		if !ok {
@@ -1588,8 +1555,10 @@ func capStatsForAPI(stats map[string]interface{}) map[string]interface{} {
 		if !ok || len(arr) <= maxItems {
 			return
 		}
+		parent = copyMap(parent)
 		parent[countKey] = len(arr)
 		parent[childKey] = arr[:maxItems]
+		out[parentKey] = parent
 	}
 
 	capNestedArray("redirectStats", "chains", "totalChains")
@@ -1607,11 +1576,18 @@ func capStatsForAPI(stats map[string]interface{}) map[string]interface{} {
 
 	// Cap all arrays inside urlIssueStats (keyed by issue type)
 	if issueStats, ok := out["urlIssueStats"].(map[string]interface{}); ok {
+		var capped map[string]interface{}
 		for k, v := range issueStats {
 			if arr, ok := v.([]interface{}); ok && len(arr) > maxItems {
-				issueStats["total_"+k] = len(arr)
-				issueStats[k] = arr[:maxItems]
+				if capped == nil {
+					capped = copyMap(issueStats)
+				}
+				capped["total_"+k] = len(arr)
+				capped[k] = arr[:maxItems]
 			}
+		}
+		if capped != nil {
+			out["urlIssueStats"] = capped
 		}
 	}
 
@@ -1741,35 +1717,13 @@ func applyEnvFallbacks(settings map[string]interface{}) {
 
 // filterAndSortPages applies filters and sorting to a page slice, returning a new slice.
 func filterAndSortPages(pages []*types.PageData, search, status, indexable, template, classification, issue, robotsBlocked, sortField, sortOrder string) []*types.PageData {
-	noFilter := search == "" &&
-		(status == "" || status == "all") &&
-		(indexable == "" || indexable == "all") &&
-		(template == "" || template == "all") &&
-		(classification == "" || classification == "all") &&
-		(robotsBlocked == "" || robotsBlocked == "all") &&
-		issue == ""
-
-	var dupSet map[string]bool
-	if issue == "duplicate-titles" || issue == "duplicate-descriptions" {
-		dupSet = computeDuplicateSet(pages, issue)
+	idx := pageIndices(pages, pageQuery{search: search, status: status, indexable: indexable, template: template,
+		classification: classification, issue: issue, robotsBlocked: robotsBlocked, sortField: sortField, sortOrder: sortOrder})
+	out := make([]*types.PageData, len(idx))
+	for k, i := range idx {
+		out[k] = pages[i]
 	}
-
-	var result []*types.PageData
-	if noFilter {
-		result = make([]*types.PageData, len(pages))
-		copy(result, pages)
-	} else {
-		result = make([]*types.PageData, 0, len(pages)/4)
-		for _, p := range pages {
-			if !pageMatchesFilters(p, search, status, indexable, template, classification, issue, robotsBlocked, dupSet) {
-				continue
-			}
-			result = append(result, p)
-		}
-	}
-
-	sortPageSlice(result, sortField, sortOrder)
-	return result
+	return out
 }
 
 func pageMatchesFilters(p *types.PageData, search, status, indexable, template, classification, issue, robotsBlocked string, dupSet map[string]bool) bool {
@@ -1903,90 +1857,6 @@ func computeDuplicateSet(pages []*types.PageData, issue string) map[string]bool 
 	return set
 }
 
-func sortPageSlice(pages []*types.PageData, field, order string) {
-	if field == "" {
-		return
-	}
-	desc := order == "desc"
-	sort.Slice(pages, func(i, j int) bool {
-		var cmp int
-		switch field {
-		case "url":
-			cmp = strings.Compare(pages[i].URL, pages[j].URL)
-		case "statusCode":
-			cmp = pages[i].StatusCode - pages[j].StatusCode
-		case "responseTimeMs":
-			d := pages[i].ResponseTimeMs - pages[j].ResponseTimeMs
-			if d < 0 {
-				cmp = -1
-			} else if d > 0 {
-				cmp = 1
-			}
-		case "title":
-			a, b := "", ""
-			if pages[i].Title != nil {
-				a = strings.ToLower(pages[i].Title.Text)
-			}
-			if pages[j].Title != nil {
-				b = strings.ToLower(pages[j].Title.Text)
-			}
-			cmp = strings.Compare(a, b)
-		case "wordCount":
-			cmp = pages[i].WordCount - pages[j].WordCount
-		case "depth":
-			cmp = pages[i].Depth - pages[j].Depth
-		case "inlinks":
-			cmp = pages[i].Inlinks - pages[j].Inlinks
-		case "pageRank":
-			a, b := pages[i].PageRank, pages[j].PageRank
-			if a < b {
-				cmp = -1
-			} else if a > b {
-				cmp = 1
-			}
-		case "htmlBytes":
-			var a, b int64
-			if pages[i].PageWeight != nil {
-				a = pages[i].PageWeight.HTMLBytes
-			}
-			if pages[j].PageWeight != nil {
-				b = pages[j].PageWeight.HTMLBytes
-			}
-			if a < b {
-				cmp = -1
-			} else if a > b {
-				cmp = 1
-			}
-		case "totalBytes":
-			var a, b int64
-			if pages[i].PageWeight != nil {
-				a = pages[i].PageWeight.TotalBytes
-			}
-			if pages[j].PageWeight != nil {
-				b = pages[j].PageWeight.TotalBytes
-			}
-			if a < b {
-				cmp = -1
-			} else if a > b {
-				cmp = 1
-			}
-		case "bodySize":
-			a, b := pages[i].BodySize, pages[j].BodySize
-			if a < b {
-				cmp = -1
-			} else if a > b {
-				cmp = 1
-			}
-		default:
-			return false
-		}
-		if desc {
-			return cmp > 0
-		}
-		return cmp < 0
-	})
-}
-
 func collectTemplateTypes(pages []*types.PageData) []string {
 	set := make(map[string]struct{})
 	for _, p := range pages {
@@ -2002,171 +1872,6 @@ func collectTemplateTypes(pages []*types.PageData) []string {
 	return result
 }
 
-// buildGraphPayload constructs the lightweight graph response from crawl results.
-func buildGraphPayload(results *CrawlResults) map[string]interface{} {
-	if results == nil || results.Pages == nil {
-		return map[string]interface{}{"nodes": []interface{}{}, "edges": []interface{}{}, "meta": map[string]interface{}{}}
-	}
-
-	type graphNode struct {
-		ID         string  `json:"id"`
-		Title      string  `json:"title"`
-		Depth      int     `json:"depth"`
-		Authority  float64 `json:"authority"`
-		Hub        float64 `json:"hub"`
-		Centrality float64 `json:"centrality"`
-		Closeness  float64 `json:"closeness"`
-		InDegree   int     `json:"inDegree"`
-		OutDegree  int     `json:"outDegree"`
-		PageRank   float64 `json:"pageRank"`
-	}
-	type graphEdge struct {
-		Source string `json:"source"`
-		Target string `json:"target"`
-	}
-
-	nodeMap := make(map[string]*graphNode, len(results.Pages))
-	// Build edges grouped by source in a single pass (avoids 3-pass algorithm)
-	edgesBySource := make(map[string][]graphEdge, len(results.Pages))
-	maxDepth, maxAuth, maxHub, maxInDeg := 0, 0.0, 0.0, 0
-	totalEdges := 0
-
-	for _, p := range results.Pages {
-		title := ""
-		if p.Title != nil {
-			title = p.Title.Text
-		}
-		depth := p.Depth
-		if depth > maxDepth {
-			maxDepth = depth
-		}
-		// Use count field when available (InternalLinks may have been freed)
-		outDeg := len(p.InternalLinks)
-		if outDeg == 0 && p.InternalLinkCount > 0 {
-			outDeg = p.InternalLinkCount
-		}
-		n := &graphNode{
-			ID: p.URL, Depth: depth, Title: title,
-			OutDegree: outDeg,
-			PageRank:  p.PageRank,
-		}
-		if p.LinkIntelligence != nil {
-			n.Authority = p.LinkIntelligence.AuthorityScore
-			n.Hub = p.LinkIntelligence.HubScore
-			n.Centrality = p.LinkIntelligence.BetweennessCentrality
-			n.Closeness = p.LinkIntelligence.ClosenessCentrality
-		}
-		nodeMap[p.URL] = n
-
-		// Build edges from AdjacencyGraph (preferred) or InternalLinks (fallback for lazy-loaded results)
-		if results.Graph != nil {
-			if idx, ok := results.Graph.URLIndex[p.URL]; ok {
-				neighbors := results.Graph.Neighbors(idx)
-				if len(neighbors) > 0 {
-					sourceEdges := make([]graphEdge, len(neighbors))
-					for j, ni := range neighbors {
-						sourceEdges[j] = graphEdge{Source: p.URL, Target: results.Pages[ni].URL}
-					}
-					edgesBySource[p.URL] = sourceEdges
-					totalEdges += len(sourceEdges)
-				}
-			}
-		} else if len(p.InternalLinks) > 0 {
-			sourceEdges := make([]graphEdge, len(p.InternalLinks))
-			for j, link := range p.InternalLinks {
-				sourceEdges[j] = graphEdge{Source: p.URL, Target: link}
-			}
-			edgesBySource[p.URL] = sourceEdges
-			totalEdges += len(sourceEdges)
-		}
-	}
-
-	// Compute in-degree from grouped edges
-	for _, sourceEdges := range edgesBySource {
-		for _, e := range sourceEdges {
-			if n, ok := nodeMap[e.Target]; ok {
-				n.InDegree++
-				if n.InDegree > maxInDeg {
-					maxInDeg = n.InDegree
-				}
-			}
-		}
-	}
-
-	// Build final edge slice with optional sampling
-	samplingApplied := totalEdges > edgeSamplingThreshold
-	edges := make([]graphEdge, 0, min(totalEdges, edgeSamplingThreshold*2))
-	for _, sourceEdges := range edgesBySource {
-		if samplingApplied && len(sourceEdges) > edgesPerNodeSample {
-			edges = append(edges, sourceEdges[:edgesPerNodeSample]...)
-		} else {
-			edges = append(edges, sourceEdges...)
-		}
-	}
-
-	// Convert to slices
-	nodes := make([]graphNode, 0, len(nodeMap))
-	for _, n := range nodeMap {
-		if n.Authority > maxAuth {
-			maxAuth = n.Authority
-		}
-		if n.Hub > maxHub {
-			maxHub = n.Hub
-		}
-		nodes = append(nodes, *n)
-	}
-
-	// Cap nodes at maxGraphNodes to prevent browser freeze on very large crawls.
-	// Keep top nodes by PageRank (+ in-degree as tiebreaker) to preserve the
-	// most structurally important parts of the graph.
-	nodeCapped := false
-	totalNodes := len(nodes)
-	if len(nodes) > maxGraphNodes {
-		sort.Slice(nodes, func(i, j int) bool {
-			if nodes[i].PageRank != nodes[j].PageRank {
-				return nodes[i].PageRank > nodes[j].PageRank
-			}
-			return nodes[i].InDegree > nodes[j].InDegree
-		})
-		nodes = nodes[:maxGraphNodes]
-		nodeCapped = true
-
-		// Rebuild the surviving node set and filter edges
-		surviving := make(map[string]struct{}, maxGraphNodes)
-		for i := range nodes {
-			surviving[nodes[i].ID] = struct{}{}
-		}
-		filtered := make([]graphEdge, 0, len(edges)/2)
-		for _, e := range edges {
-			if _, ok := surviving[e.Source]; !ok {
-				continue
-			}
-			if _, ok := surviving[e.Target]; !ok {
-				continue
-			}
-			filtered = append(filtered, e)
-		}
-		edges = filtered
-	}
-
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
-
-	return map[string]interface{}{
-		"nodes": nodes,
-		"edges": edges,
-		"meta": map[string]interface{}{
-			"maxDepth":                 maxDepth,
-			"maxAuthority":             maxAuth,
-			"maxHub":                   maxHub,
-			"maxInDegree":              maxInDeg,
-			"totalEdgesBeforeSampling": totalEdges,
-			"samplingApplied":          samplingApplied,
-			"nodeCapped":               nodeCapped,
-			"totalNodes":               totalNodes,
-		},
-	}
-}
-
 // buildSubgraphPayload constructs a subgraph response for progressive graph exploration.
 func buildSubgraphPayload(results *CrawlResults, rootURL string, depth, maxNodes int) map[string]interface{} {
 	graph := results.Graph
@@ -2174,18 +1879,14 @@ func buildSubgraphPayload(results *CrawlResults, rootURL string, depth, maxNodes
 		return map[string]interface{}{"nodes": []interface{}{}, "edges": []interface{}{}, "meta": map[string]interface{}{}}
 	}
 
-	// Build URL → page index for metadata lookup
-	pageIndex := make(map[string]*types.PageData, len(results.Pages))
-	for _, p := range results.Pages {
-		pageIndex[p.URL] = p
-	}
+	pageOf := graphPageLookup(results.Pages, graph)
 
 	// Resolve root node
 	rootIdx := -1
 	if rootURL == "" {
 		// Find seed URL (depth 0)
-		for i, u := range graph.URLs {
-			if p, ok := pageIndex[u]; ok && p.Depth == 0 {
+		for i := 0; i < graph.N; i++ {
+			if p := pageOf(i); p != nil && p.Depth == 0 {
 				rootIdx = i
 				break
 			}
@@ -2235,7 +1936,7 @@ func buildSubgraphPayload(results *CrawlResults, rootURL string, depth, maxNodes
 			InDegree:      inDegMap[sn.Index],
 			OutDegree:     sn.TotalOutlinks,
 		}
-		if p, ok := pageIndex[u]; ok {
+		if p := pageOf(sn.Index); p != nil {
 			if p.Title != nil {
 				n.Title = p.Title.Text
 			}
@@ -2272,6 +1973,30 @@ func buildSubgraphPayload(results *CrawlResults, rootURL string, depth, maxNodes
 	}
 }
 
+// graphPageLookup maps graph node index -> page. Graphs are built from
+// results.Pages, so node i is pages[i] and no URL map is needed; a map is
+// only built (once per call) for a graph that does not line up.
+func graphPageLookup(pages []*types.PageData, g *analysis.AdjacencyGraph) func(i int) *types.PageData {
+	if g.N == len(pages) {
+		return func(i int) *types.PageData {
+			if i < 0 || i >= len(pages) {
+				return nil
+			}
+			return pages[i]
+		}
+	}
+	byURL := make(map[string]*types.PageData, len(pages))
+	for _, p := range pages {
+		byURL[p.URL] = p
+	}
+	return func(i int) *types.PageData {
+		if i < 0 || i >= g.N {
+			return nil
+		}
+		return byURL[g.URLs[i]]
+	}
+}
+
 // buildGraphSearchPayload searches graph URLs for a substring match.
 func buildGraphSearchPayload(results *CrawlResults, query string, limit int) map[string]interface{} {
 	graph := results.Graph
@@ -2279,10 +2004,7 @@ func buildGraphSearchPayload(results *CrawlResults, query string, limit int) map
 		return map[string]interface{}{"results": []interface{}{}}
 	}
 
-	pageIndex := make(map[string]*types.PageData, len(results.Pages))
-	for _, p := range results.Pages {
-		pageIndex[p.URL] = p
-	}
+	pageOf := graphPageLookup(results.Pages, graph)
 
 	type searchResult struct {
 		ID       string  `json:"id"`
@@ -2292,18 +2014,14 @@ func buildGraphSearchPayload(results *CrawlResults, query string, limit int) map
 	}
 
 	var matches []searchResult
-	for _, u := range graph.URLs {
+	for i, u := range graph.URLs {
 		if len(matches) >= limit {
 			break
 		}
-		uLower := strings.ToLower(u)
-		titleLower := ""
-		if p, ok := pageIndex[u]; ok && p.Title != nil {
-			titleLower = strings.ToLower(p.Title.Text)
-		}
-		if strings.Contains(uLower, query) || strings.Contains(titleLower, query) {
+		p := pageOf(i)
+		if containsFold(u, query) || (p != nil && p.Title != nil && containsFold(p.Title.Text, query)) {
 			sr := searchResult{ID: u}
-			if p, ok := pageIndex[u]; ok {
+			if p != nil {
 				if p.Title != nil {
 					sr.Title = p.Title.Text
 				}
@@ -2499,119 +2217,6 @@ func buildGraphSearchFromDB(dbPath string, query string, limit int) map[string]i
 	}
 
 	return map[string]interface{}{"results": matches}
-}
-
-// buildDirectoryTreeFromDB constructs a directory tree from the page_index table.
-// Used as a fallback when pages haven't been fully loaded into memory.
-func buildDirectoryTreeFromDB(dbPath string) map[string]interface{} {
-	cs, err := storage.NewCrawlStore(dbPath)
-	if err != nil {
-		return nil
-	}
-	defer cs.Close()
-
-	entries, err := cs.GetPageIndex()
-	if err != nil || len(entries) == 0 {
-		return nil
-	}
-
-	type dirNode struct {
-		Name             string             `json:"name"`
-		Path             string             `json:"path"`
-		Pages            int                `json:"pages"`
-		Children         []*dirNode         `json:"children,omitempty"`
-		StatusCodes      map[int]int        `json:"statusCodes"`
-		Depth            int                `json:"depth"`
-		IsPage           bool               `json:"isPage"`
-		Indexable        int                `json:"indexable"`
-		NonIndexable     int                `json:"nonIndexable"`
-		TotalInlinks     int                `json:"totalInlinks"`
-		TotalPageRank    float64            `json:"totalPageRank"`
-		AvgPageRank      float64            `json:"avgPageRank"`
-		AvgInternalLinks float64            `json:"avgInternalLinks"`
-		AvgResponseTime  int                `json:"avgResponseTime"`
-		childMap         map[string]*dirNode
-	}
-
-	root := &dirNode{Name: "/", Path: "/", StatusCodes: map[int]int{}, childMap: map[string]*dirNode{}}
-
-	for _, e := range entries {
-		u, parseErr := url.Parse(e.URL)
-		if parseErr != nil {
-			continue
-		}
-		segments := strings.Split(strings.Trim(u.Path, "/"), "/")
-		if len(segments) == 1 && segments[0] == "" {
-			segments = nil
-		}
-
-		current := root
-		pathSoFar := ""
-		for i, seg := range segments {
-			if i >= 3 {
-				break
-			}
-			pathSoFar += "/" + seg
-			child, ok := current.childMap[seg]
-			if !ok {
-				child = &dirNode{Name: seg, Path: pathSoFar, StatusCodes: map[int]int{}, Depth: i + 1, childMap: map[string]*dirNode{}}
-				current.childMap[seg] = child
-			}
-			current = child
-		}
-
-		current.Pages++
-		current.IsPage = true
-		current.StatusCodes[e.StatusCode]++
-		current.TotalInlinks += e.Inlinks
-		if e.Indexable {
-			current.Indexable++
-		} else {
-			current.NonIndexable++
-		}
-	}
-
-	var finalize func(n *dirNode)
-	finalize = func(n *dirNode) {
-		n.Children = make([]*dirNode, 0, len(n.childMap))
-		for _, child := range n.childMap {
-			finalize(child)
-			n.Children = append(n.Children, child)
-			n.Pages += child.Pages
-			n.Indexable += child.Indexable
-			n.NonIndexable += child.NonIndexable
-			n.TotalInlinks += child.TotalInlinks
-			for code, count := range child.StatusCodes {
-				n.StatusCodes[code] += count
-			}
-		}
-		if n.Pages > 0 {
-			n.AvgPageRank = n.TotalPageRank / float64(n.Pages)
-		}
-		sort.Slice(n.Children, func(i, j int) bool {
-			return n.Children[i].Pages > n.Children[j].Pages
-		})
-		if len(n.Children) > 20 {
-			other := &dirNode{Name: "other", Path: n.Path + "/other", StatusCodes: map[int]int{}, Depth: n.Depth + 1}
-			for _, child := range n.Children[20:] {
-				other.Pages += child.Pages
-				other.Indexable += child.Indexable
-				other.NonIndexable += child.NonIndexable
-				other.TotalInlinks += child.TotalInlinks
-				for code, count := range child.StatusCodes {
-					other.StatusCodes[code] += count
-				}
-			}
-			n.Children = append(n.Children[:20], other)
-		}
-		n.childMap = nil
-	}
-	finalize(root)
-
-	return map[string]interface{}{
-		"tree":       root,
-		"totalPages": root.Pages,
-	}
 }
 
 // ── Anchor Stats ──

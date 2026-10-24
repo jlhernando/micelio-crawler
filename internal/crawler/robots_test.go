@@ -27,7 +27,9 @@ Disallow: /no-google/
 		{"https://example.com/private", "*", false},
 		{"https://example.com/public", "*", true},
 		{"https://example.com/no-google/page", "Googlebot", false},
-		{"https://example.com/admin/", "Googlebot", false}, // falls back to *
+		// Google spec: only the most specific group applies. Googlebot has its
+		// own group, so the * rules are ignored for it.
+		{"https://example.com/admin/", "Googlebot", true},
 		{"https://example.com/", "Googlebot", true},
 	}
 

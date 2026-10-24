@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { C } from '../lib/palette';
+  import { formatDateTime } from '../lib/format';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
@@ -92,10 +94,21 @@
 
   let loading = $state(true);
   let error = $state<string | null>(null);
-  let comparison = $state<ComparisonReport | null>(null);
+  // Assigned once and never mutated: raw avoids proxying every URL row.
+  let comparison = $state.raw<ComparisonReport | null>(null);
   let activeTab = $state<TabKey>('overview');
   let urlsTab = $state<'changed' | 'added' | 'removed'>('changed');
   let removedFilter = $state<'all' | 'with-traffic'>('all');
+
+  // URL lists can hold tens of thousands of rows; render them in pages.
+  const URL_PAGE_SIZE = 200;
+  let urlRowLimit = $state(URL_PAGE_SIZE);
+  $effect(() => {
+    // Reset paging whenever the visible list changes.
+    void urlsTab;
+    void removedFilter;
+    urlRowLimit = URL_PAGE_SIZE;
+  });
 
   let oldCrawl = $state<Record<string, unknown> | null>(null);
   let newCrawl = $state<Record<string, unknown> | null>(null);
@@ -107,7 +120,11 @@
         api.getCrawlStatus(oldId),
         api.getCrawlStatus(newId),
       ]);
-      comparison = rawData.comparison;
+      // Go encodes empty slices as null; the template reads .length on these.
+      const c = rawData.comparison;
+      c.urls = { ...c.urls, addedUrls: c.urls?.addedUrls ?? [], removedUrls: c.urls?.removedUrls ?? [], changedUrls: c.urls?.changedUrls ?? [] };
+      if (c.httpStatus) c.httpStatus.migrations ??= [];
+      comparison = c;
       oldCrawl = oldData;
       newCrawl = newData;
       loading = false;
@@ -190,12 +207,6 @@
     try { return new URL(url).hostname; } catch { return url; }
   }
 
-  function formatDate(iso: string): string {
-    const d = new Date(iso);
-    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) +
-      ' ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  }
-
   // When invert=true, lower is better (e.g. response time, error counts),
   // so a negative delta is "good" and a positive delta is "bad".
   function deltaBadge(delta: number, invert = false): string {
@@ -236,6 +247,16 @@
   function reasonColor(r: string): string { return REASON_LABELS[r]?.color || 'text-fg-2 bg-surface-3'; }
 </script>
 
+{#snippet showMore(total: number)}
+  {#if total > urlRowLimit}
+    <div class="flex items-center justify-between gap-3 px-4 py-3 text-xs text-fg-2">
+      <span>Showing {urlRowLimit.toLocaleString()} of {total.toLocaleString()}</span>
+      <button type="button" class="px-3 py-1.5 rounded-lg font-medium cursor-pointer text-fg-1 bg-surface-3 border border-border hover:bg-surface-2"
+        onclick={() => urlRowLimit += URL_PAGE_SIZE * 5}>Show {Math.min(URL_PAGE_SIZE * 5, total - urlRowLimit).toLocaleString()} more</button>
+    </div>
+  {/if}
+{/snippet}
+
 <div class="max-w-7xl mx-auto space-y-4">
   <PageHeading title="Crawl comparison" description="See what changed between two audits and which issues need attention." section="Crawl results" />
   {#if loading}
@@ -256,9 +277,9 @@
         <div>
           <div class="text-lg font-semibold">{oldCrawl?.seedUrl ? extractDomain(oldCrawl.seedUrl as string) : 'Crawl Comparison'}</div>
           <div class="text-xs text-fg-2">
-            {#if oldCrawl?.startedAt}{formatDate(oldCrawl.startedAt as string)}{/if}
+            {#if oldCrawl?.startedAt}{formatDateTime(oldCrawl.startedAt as string)}{/if}
             ({diff.oldCount.toLocaleString()} pages) →
-            {#if newCrawl?.startedAt}{formatDate(newCrawl.startedAt as string)}{/if}
+            {#if newCrawl?.startedAt}{formatDateTime(newCrawl.startedAt as string)}{/if}
             ({diff.newCount.toLocaleString()} pages)
           </div>
         </div>
@@ -294,14 +315,14 @@
       <div class="chart-panel-heading"><div><h2>Coverage comparison</h2><p>Earlier and later crawls on a common page-count scale</p></div><span class="text-xs text-fg-2">Pages</span></div>
       <svg viewBox="0 0 850 185" class="w-full max-h-60" role="img" aria-label={`Total pages: ${comparison.coverage.totalPages.old} to ${comparison.coverage.totalPages.new}. Indexable: ${comparison.indexability.indexable.old} to ${comparison.indexability.indexable.new}.`}>
         {#each [{ label: 'Total pages', value: comparison.coverage.totalPages }, { label: 'Indexable', value: comparison.indexability.indexable }] as metric, i}
-          <text x="0" y={34 + i * 82} fill="#a1a5ad" font-size="12">{metric.label}</text>
+          <text x="0" y={34 + i * 82} fill={C.fg2} font-size="12">{metric.label}</text>
           <rect x="110" y={12 + i * 82} width={metric.value.old / coverageMax * 650} height="18" rx="3" fill="#56657b" />
-          <text x={120 + metric.value.old / coverageMax * 650} y={25 + i * 82} fill="#a1a5ad" font-size="11">{metric.value.old.toLocaleString()}</text>
-          <rect x="110" y={37 + i * 82} width={metric.value.new / coverageMax * 650} height="18" rx="3" fill="#75a6ff" />
-          <text x={120 + metric.value.new / coverageMax * 650} y={50 + i * 82} fill="#f2f2f2" font-size="11">{metric.value.new.toLocaleString()}</text>
+          <text x={120 + metric.value.old / coverageMax * 650} y={25 + i * 82} fill={C.fg2} font-size="11">{metric.value.old.toLocaleString()}</text>
+          <rect x="110" y={37 + i * 82} width={metric.value.new / coverageMax * 650} height="18" rx="3" fill={C.blue} />
+          <text x={120 + metric.value.new / coverageMax * 650} y={50 + i * 82} fill={C.fg} font-size="11">{metric.value.new.toLocaleString()}</text>
         {/each}
       </svg>
-      <p class="chart-note"><span style="color:#8192ad">● Earlier crawl</span><span class="ml-5" style="color:#75a6ff">● Later crawl</span></p>
+      <p class="chart-note"><span style="color:#8192ad">● Earlier crawl</span><span class="ml-5" style="color:var(--blue)">● Later crawl</span></p>
     </section>
 
     <!-- Tab bar -->
@@ -488,7 +509,7 @@
         {#if urlsTab === 'changed'}
           <div class="rounded-xl border border-border bg-surface-2 overflow-hidden">
             <div class="max-h-[600px] overflow-y-auto">
-              {#each diff.changedUrls as change}
+              {#each diff.changedUrls.slice(0, urlRowLimit) as change}
                 <div class="border-b border-border/50 p-4 hover:bg-surface-3 transition-colors">
                   <div class="font-mono text-xs text-fg-2 mb-2 truncate">{change.url}</div>
                   <div class="space-y-1">
@@ -503,6 +524,7 @@
                   </div>
                 </div>
               {/each}
+              {@render showMore(diff.changedUrls.length)}
               {#if diff.changedUrls.length === 0}
                 <div class="p-8 text-center text-fg-2 text-sm">No field changes detected.</div>
               {/if}
@@ -511,7 +533,7 @@
         {:else if urlsTab === 'added'}
           <div class="rounded-xl border border-border bg-surface-2 overflow-hidden">
             <div class="max-h-[600px] overflow-y-auto">
-              {#each diff.addedUrls as url}
+              {#each diff.addedUrls.slice(0, urlRowLimit) as url}
                 {@const t = newTrafficByUrl.get(url)}
                 <div class="flex items-center gap-2 px-4 py-2 border-b border-border/50 hover:bg-surface-3">
                   <span class="w-5 text-center text-green-400 font-bold">+</span>
@@ -519,6 +541,7 @@
                   {#if t}<span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-500/10 text-green-400">{t.clicks} clicks</span>{/if}
                 </div>
               {/each}
+              {@render showMore(diff.addedUrls.length)}
               {#if diff.addedUrls.length === 0}
                 <div class="p-8 text-center text-fg-2 text-sm">No new URLs.</div>
               {/if}
@@ -533,7 +556,7 @@
           {/if}
           <div class="rounded-xl border border-border bg-surface-2 overflow-hidden">
             <div class="max-h-[600px] overflow-y-auto">
-              {#each filteredRemovedUrls as url}
+              {#each filteredRemovedUrls.slice(0, urlRowLimit) as url}
                 {@const traffic = trafficByUrl.get(url)}
                 <div class="flex items-center gap-2 px-4 py-2 border-b border-border/50 hover:bg-surface-3">
                   <span class="w-5 text-center text-red-400 font-bold">-</span>
@@ -545,6 +568,7 @@
                   {/if}
                 </div>
               {/each}
+              {@render showMore(filteredRemovedUrls.length)}
               {#if diff.removedUrls.length === 0}
                 <div class="p-8 text-center text-fg-2 text-sm">No disappeared URLs.</div>
               {/if}

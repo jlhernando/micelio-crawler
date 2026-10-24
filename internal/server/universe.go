@@ -317,17 +317,15 @@ func pageTitle(p *types.PageData) string {
 	return p.URL
 }
 
+// universeInDegrees returns each page's inlink count. With a graph it is the
+// graph's cached in-degree (shared, read-only; self-links do not count, same
+// as the inlinks API and the pages table).
 func universeInDegrees(results *CrawlResults) []int32 {
 	pages := results.Pages
-	in := make([]int32, len(pages))
 	if g := results.Graph; g != nil && g.N == len(pages) {
-		for _, t := range g.Edges {
-			if int(t) < len(in) {
-				in[t]++
-			}
-		}
-		return in
+		return g.InDegree()
 	}
+	in := make([]int32, len(pages))
 	for i, p := range pages {
 		switch {
 		case p.Inlinks > 0:
@@ -678,7 +676,7 @@ func registerUniverseRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlMa
 			if q != "" {
 				for pos := 0; pos < len(l.order) && len(rows) < limit; pos++ {
 					p := results.Pages[l.order[pos]]
-					if strings.Contains(strings.ToLower(p.URL), q) || (p.Title != nil && strings.Contains(strings.ToLower(p.Title.Text), q)) {
+					if containsFold(p.URL, q) || (p.Title != nil && containsFold(p.Title.Text, q)) {
 						rows = append(rows, universeCardFor(l, results.Pages, pos))
 					}
 				}
@@ -786,7 +784,7 @@ func registerUniverseRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlMa
 			members := c.members
 			if sortBy != "" && sortBy != "pr" || !desc {
 				members = append([]int32(nil), c.members...)
-				less := universeLess(l, results.Pages, sortBy)
+				less := universeLess(l, results.Pages, sortBy, members)
 				sort.SliceStable(members, func(a, b int) bool {
 					if desc {
 						return less(members[b], members[a])
@@ -806,7 +804,10 @@ func registerUniverseRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlMa
 	registerUniverseThumbRoute(mux, store, manager)
 }
 
-func universeLess(l *universeLayout, pages []*types.PageData, by string) func(a, b int32) bool {
+// universeLess returns a comparator over order positions. For "title" the
+// lower-cased titles of members are computed once up front instead of twice
+// per comparison.
+func universeLess(l *universeLayout, pages []*types.PageData, by string, members []int32) func(a, b int32) bool {
 	page := func(pos int32) *types.PageData { return pages[l.order[pos]] }
 	switch by {
 	case "in":
@@ -814,9 +815,11 @@ func universeLess(l *universeLayout, pages []*types.PageData, by string) func(a,
 	case "out":
 		return func(a, b int32) bool { return pageOutDegree(page(a)) < pageOutDegree(page(b)) }
 	case "title":
-		return func(a, b int32) bool {
-			return strings.ToLower(pageTitle(page(a))) < strings.ToLower(pageTitle(page(b)))
+		keys := make(map[int32]string, len(members))
+		for _, pos := range members {
+			keys[pos] = strings.ToLower(pageTitle(page(pos)))
 		}
+		return func(a, b int32) bool { return keys[a] < keys[b] }
 	default: // pr: order position is already PageRank desc
 		return func(a, b int32) bool { return a > b }
 	}
@@ -984,8 +987,9 @@ func writeUniverseEdges(w http.ResponseWriter, results *CrawlResults, l *univers
 }
 
 // universeNodeLinks lists the real outlinks and inlinks of one page as order
-// positions, capped at max each. Inlinks need a scan of the edge list, which
-// is fast enough for a single click.
+// positions, capped at max each. Inlinks come from the graph's cached reverse
+// index (built once, then O(in-degree) per click instead of a scan of every
+// edge).
 func universeNodeLinks(results *CrawlResults, l *universeLayout, pos, max int) map[string]interface{} {
 	res := map[string]interface{}{"out": []int32{}, "in": []int32{}, "outTotal": 0, "inTotal": 0}
 	g := universeGraph(results)
@@ -1001,20 +1005,12 @@ func universeNodeLinks(results *CrawlResults, l *universeLayout, pos, max int) m
 		}
 		outs = append(outs, l.posOf[t])
 	}
-	ins := make([]int32, 0, 64)
-	inTotal := 0
-	for src := 0; src < g.N; src++ {
-		for _, t := range g.Edges[g.Offsets[src]:g.Offsets[src+1]] {
-			if t == pi {
-				inTotal++
-				if len(ins) < max {
-					ins = append(ins, l.posOf[src])
-				}
-				break
-			}
-		}
+	srcs := g.InNeighbors(int(pi))
+	ins := make([]int32, 0, min(len(srcs), max))
+	for _, src := range srcs[:min(len(srcs), max)] {
+		ins = append(ins, l.posOf[src])
 	}
-	res["out"], res["in"], res["outTotal"], res["inTotal"] = outs, ins, len(nb), inTotal
+	res["out"], res["in"], res["outTotal"], res["inTotal"] = outs, ins, len(nb), len(srcs)
 	return res
 }
 

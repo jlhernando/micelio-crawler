@@ -78,11 +78,21 @@ func computeTemplateFilteredStats(full map[string]interface{}, pages []*types.Pa
 		thinPages                                        []types.URLWordCount
 		redirectChains, longRedirectChains               []types.RedirectChainInfo
 		pageRankFromPages                                = make(map[string]float64)
+		pageRankHist                                     = &types.PageRankHistogram{Buckets: make([]int, len(types.PageRankBucketBounds))}
+		subsetOrphans                                    []string
 	)
 
 	for _, p := range subset {
 		if p.PageRank > 0 {
-			pageRankFromPages[p.URL] = p.PageRank
+			// Pages carry their score; the URL map is only kept for small
+			// subsets (same rule as the stored stats).
+			if len(pageRankFromPages) <= types.PageRankScoresInlineMax {
+				pageRankFromPages[p.URL] = p.PageRank
+			}
+			pageRankHist.Add(p.PageRank)
+		}
+		if !p.RobotsBlocked && p.StatusCode == 200 && p.Inlinks == 0 && p.Depth > 0 {
+			subsetOrphans = append(subsetOrphans, p.URL)
 		}
 		if p.RobotsBlocked {
 			robotsBlocked++
@@ -248,12 +258,24 @@ func computeTemplateFilteredStats(full map[string]interface{}, pages []*types.Pa
 	// Lists derived from the full stats, filtered to the subset's URLs.
 	// Values in full may be typed (set by backfills) or JSON-decoded, so
 	// normalize each one to its JSON-decoded form first.
+	orphanTotal := orphanCountFromMap(full)
 	full = normalizeStatsKeys(full, "orphanPages", "soft404Pages", "nonHttpsPages",
-		"mixedContentPages", "brokenLinks", "urlIssueStats", "pageRankScores")
+		"mixedContentPages", "brokenLinks", "urlIssueStats")
 	for _, key := range []string{"orphanPages", "soft404Pages", "nonHttpsPages", "mixedContentPages"} {
 		if list, ok := full[key].([]interface{}); ok {
 			out[key] = filterURLList(list, inSubset)
 		}
+	}
+	// The stored orphan list is capped (types.StatsListCap). When it was cut,
+	// filtering it would undercount: derive the subset's orphans from the
+	// pages' graph inlink counts instead.
+	if list, ok := full["orphanPages"].([]interface{}); ok && orphanTotal > len(list) {
+		kept := make([]interface{}, 0, min(len(subsetOrphans), types.StatsListCap))
+		for _, u := range subsetOrphans[:min(len(subsetOrphans), types.StatsListCap)] {
+			kept = append(kept, u)
+		}
+		out["orphanPages"] = kept
+		out["totalOrphanPages"] = len(subsetOrphans)
 	}
 	if list, ok := full["brokenLinks"].([]interface{}); ok {
 		kept := make([]interface{}, 0)
@@ -277,16 +299,13 @@ func computeTemplateFilteredStats(full map[string]interface{}, pages []*types.Pa
 		}
 		out["urlIssueStats"] = filtered
 	}
-	if scores, ok := full["pageRankScores"].(map[string]interface{}); ok && len(scores) > 0 {
-		filtered := make(map[string]interface{})
-		for u, v := range scores {
-			if inSubset[u] {
-				filtered[u] = v
-			}
+	// PageRank comes from the pages (reloads assign it from the stored
+	// scores), so the full stats map is never copied or re-encoded here.
+	if pageRankHist.Total > 0 {
+		out["pageRankHistogram"] = toJSONValue(pageRankHist)
+		if pageRankHist.Total <= types.PageRankScoresInlineMax {
+			out["pageRankScores"] = scoresToJSONMap(pageRankFromPages)
 		}
-		out["pageRankScores"] = filtered
-	} else if len(pageRankFromPages) > 0 {
-		out["pageRankScores"] = scoresToJSONMap(pageRankFromPages)
 	}
 
 	// capStatsForAPI adds total* counts only when a list is truncated. Set
@@ -294,7 +313,6 @@ func computeTemplateFilteredStats(full map[string]interface{}, pages []*types.Pa
 	for key, countKey := range map[string]string{
 		"redirectChains":     "totalRedirectChains",
 		"longRedirectChains": "totalLongRedirectChains",
-		"orphanPages":        "totalOrphanPages",
 		"brokenLinks":        "totalBrokenLinks",
 		"nonHttpsPages":      "totalNonHttpsPages",
 	} {
@@ -302,8 +320,13 @@ func computeTemplateFilteredStats(full map[string]interface{}, pages []*types.Pa
 			out[countKey] = len(list)
 		}
 	}
-	if scores, ok := out["pageRankScores"].(map[string]interface{}); ok {
-		out["totalPageRankEntries"] = len(scores)
+	if list, ok := out["orphanPages"].([]interface{}); ok {
+		if _, set := out["totalOrphanPages"]; !set {
+			out["totalOrphanPages"] = len(list)
+		}
+	}
+	if pageRankHist.Total > 0 {
+		out["totalPageRankEntries"] = pageRankHist.Total
 	}
 
 	keys := make([]string, 0, len(out))

@@ -34,6 +34,7 @@ type crawlSession struct {
 
 	// Storage
 	writer *storage.ResultWriter
+	sink   *pageSink // single writer for writer + crawlDB while workers run
 
 	// Browser
 	renderer   *browser.Renderer
@@ -46,10 +47,11 @@ type crawlSession struct {
 	aiLimiter  *time.Ticker
 
 	// Robots & delay
-	robotsChecker *RobotsChecker
+	robotsChecker *RobotsChecker  // seed origin (sitemap discovery, logging)
+	robots        *robotsRegistry // per-origin robots.txt, fetched lazily
 	delay         time.Duration
 	adaptiveRL    *AdaptiveRateLimiter
-	rateBucket    *tokenBucket
+	hostRL        *hostRateLimiter // per-host token buckets (delay, Crawl-delay, Retry-After)
 	torManager    *TorManager
 
 	// N-grams
@@ -205,6 +207,18 @@ func (s *crawlSession) setupHTTPClient() error {
 	} else {
 		client = newClient(timeout, proxyURL, true, s.dnsCache)
 	}
+	// Make sure the connection pool is not the bottleneck at high concurrency.
+	if t, ok := client.Transport.(*http.Transport); ok {
+		if t.MaxIdleConnsPerHost < s.config.Concurrency {
+			t.MaxIdleConnsPerHost = s.config.Concurrency
+		}
+		if t.MaxConnsPerHost > 0 && t.MaxConnsPerHost < s.config.Concurrency {
+			t.MaxConnsPerHost = s.config.Concurrency
+		}
+		if t.MaxIdleConns < s.config.Concurrency {
+			t.MaxIdleConns = s.config.Concurrency
+		}
+	}
 
 	s.fetchOpts = FetchOptions{
 		UserAgent:     s.config.UserAgent,
@@ -214,6 +228,9 @@ func (s *crawlSession) setupHTTPClient() error {
 		Timeout:       timeout,
 		SkipSSRF:      s.config.SkipSSRF,
 		Stealth:       s.config.Stealth,
+		// Retries are handled by processEntry: re-queued through the per-host
+		// rate limiter so all workers back off together.
+		NoRetry: true,
 	}
 	return nil
 }
@@ -499,48 +516,71 @@ func (s *crawlSession) setupNgrams() {
 	s.ngramAnalyzer = analysis.NewNgramAnalyzer(lang)
 }
 
-func (s *crawlSession) setupRobotsAndDelay(ctx context.Context) {
-	isSpiderMode := s.config.Mode == types.ModeSpider || s.config.Mode == ""
-	if isSpiderMode && s.config.RespectRobots {
-		s.robotsChecker = &RobotsChecker{SkipSSRF: s.config.SkipSSRF}
-		if err := s.robotsChecker.Init(ctx, s.seedURL, s.config.UserAgent); err != nil {
-			fmt.Fprintf(os.Stderr, "  [warn] robots.txt fetch error: %v\n", err)
-		} else if s.robotsChecker.IsUnavailable() {
-			fmt.Fprintf(os.Stderr, "  [warn] robots.txt returned %d — treating as fully restricted\n", s.robotsChecker.StatusCode())
-		}
-	}
+// maxCrawlDelay caps robots.txt Crawl-delay so a hostile value cannot stall a crawl.
+const maxCrawlDelay = 30 * time.Second
 
-	const maxCrawlDelay = 30 * time.Second
+func (s *crawlSession) setupRobotsAndDelay(ctx context.Context) {
 	s.delay = time.Duration(s.config.DelayMs) * time.Millisecond
-	if s.robotsChecker != nil && !s.config.DelayExplicit {
-		if robotsDelay := s.robotsChecker.CrawlDelay(s.config.UserAgent); robotsDelay > 0 {
-			robotsDelayDur := time.Duration(robotsDelay) * time.Second
-			if robotsDelayDur > maxCrawlDelay {
-				fmt.Fprintf(os.Stderr, "  [robots] Crawl-delay %ds exceeds maximum, capping at %ds\n", robotsDelay, int(maxCrawlDelay.Seconds()))
-				robotsDelayDur = maxCrawlDelay
-			}
-			if robotsDelayDur > s.delay {
-				s.delay = robotsDelayDur
-				fmt.Fprintf(os.Stderr, "  [robots] Using Crawl-delay: %ds\n", int(s.delay.Seconds()))
-			}
-		}
-	}
 	if s.delay > 0 {
 		fmt.Fprintf(os.Stderr, "  [config] Request delay: %v\n", s.delay)
-	}
-
-	// Token bucket: guarantees even request spacing across all workers
-	if s.delay > 0 || s.config.AdaptiveRate {
-		s.rateBucket = newTokenBucket(s.delay)
 	}
 
 	if s.config.AdaptiveRate {
 		s.adaptiveRL = NewAdaptiveRateLimiter(s.delay, s.config.DelayFactor)
 		if s.config.DelayFactor > 0 {
-			fmt.Fprintf(os.Stderr, "  [config] Adaptive rate limiting enabled (base delay: %v, Heritrix factor: %.1f)\n", s.delay, s.config.DelayFactor)
+			fmt.Fprintf(os.Stderr, "  [config] Adaptive rate limiting enabled (floor: %v, Heritrix factor: %.1f)\n", s.adaptiveRL.baseRate, s.config.DelayFactor)
 		} else {
-			fmt.Fprintf(os.Stderr, "  [config] Adaptive rate limiting enabled (base delay: %v)\n", s.delay)
+			fmt.Fprintf(os.Stderr, "  [config] Adaptive rate limiting enabled (floor: %v)\n", s.adaptiveRL.baseRate)
 		}
+	}
+	// Per-host token buckets: even spacing across all workers, never below the
+	// configured delay or the host's robots.txt Crawl-delay. Always created so
+	// Retry-After pauses work even without --delay / --adaptive-rate.
+	floor := s.delay
+	if s.adaptiveRL != nil && s.adaptiveRL.baseRate > floor {
+		floor = s.adaptiveRL.baseRate
+	}
+	s.hostRL = newHostRateLimiter(floor, s.adaptiveRL)
+
+	isSpiderMode := s.config.Mode == types.ModeSpider || s.config.Mode == ""
+	if !isSpiderMode || !s.config.RespectRobots {
+		return
+	}
+
+	newRC := func() *RobotsChecker {
+		return &RobotsChecker{SkipSSRF: s.config.SkipSSRF, Client: s.fetchOpts.Client}
+	}
+	s.robots = newRobotsRegistry(s.config.UserAgent, newRC, s.applyRobotsCrawlDelay)
+
+	// Fetch the seed origin eagerly (sitemap discovery + early warnings).
+	s.robotsChecker = newRC()
+	if err := s.robotsChecker.Init(ctx, s.seedURL, s.config.UserAgent); err != nil {
+		fmt.Fprintf(os.Stderr, "  [warn] robots.txt fetch error: %v\n", err)
+	}
+	s.robots.add(robotsOrigin(s.seedURL), s.robotsChecker)
+}
+
+// applyRobotsCrawlDelay is called once per origin after its robots.txt is
+// loaded. It raises that host's rate-limit floor to the Crawl-delay.
+func (s *crawlSession) applyRobotsCrawlDelay(origin string, rc *RobotsChecker) {
+	if rc.IsUnavailable() {
+		fmt.Fprintf(os.Stderr, "  [warn] robots.txt for %s returned %d (or was unreachable): treating host as fully disallowed\n", origin, rc.StatusCode())
+		return
+	}
+	d := rc.CrawlDelayDuration(s.config.UserAgent)
+	if d <= 0 {
+		return
+	}
+	if d > maxCrawlDelay {
+		fmt.Fprintf(os.Stderr, "  [robots] %s Crawl-delay %v exceeds maximum, capping at %v\n", origin, d, maxCrawlDelay)
+		d = maxCrawlDelay
+	}
+	host := extractDomain(origin)
+	if s.hostRL != nil {
+		s.hostRL.SetHostFloor(host, d)
+	}
+	if d > s.delay {
+		fmt.Fprintf(os.Stderr, "  [robots] %s: using Crawl-delay %v\n", host, d)
 	}
 }
 
@@ -722,6 +762,7 @@ func (s *crawlSession) cleanup() {
 	if s.queue != nil {
 		s.queue.Close()
 	}
+	s.sink.Close()
 	if s.writer != nil {
 		s.writer.Close()
 	}

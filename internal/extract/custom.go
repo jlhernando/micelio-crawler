@@ -58,8 +58,8 @@ func regexSearch(html, pattern string) bool {
 		sample = sample[:regexSampleLimit]
 	}
 
-	re, err := regexp.Compile(pattern)
-	if err != nil {
+	re := compileCached(pattern)
+	if re == nil {
 		return false
 	}
 

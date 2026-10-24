@@ -1,32 +1,35 @@
 <script lang="ts">
-  let { pages }: { pages: { wordCount?: number }[] } = $props();
+  import { C } from '../../palette';
+  // Server-computed histogram (stats.wordCountBuckets). Edges are inclusive
+  // lower bounds; the last bucket is open-ended.
+  interface WordCountBuckets {
+    edges: number[];
+    counts: number[];
+    avgWords: number;
+    pages: number;
+  }
 
-  const BUCKETS: [string, number, number, string][] = [
-    ['0-100', 0, 100, '#f58f98'],
-    ['100-300', 100, 300, '#f97316'],
-    ['300-500', 300, 500, '#e5b66e'],
-    ['500-1K', 500, 1000, '#73d9ac'],
-    ['1K-2K', 1000, 2000, '#75a6ff'],
-    ['2K+', 2000, Infinity, '#bc8cff'],
-  ];
+  let { buckets }: { buckets: WordCountBuckets | null } = $props();
 
-  let bucketCounts = $derived.by(() => {
-    const counts = BUCKETS.map(() => 0);
-    for (const p of pages) {
-      const wc = p.wordCount || 0;
-      for (let i = 0; i < BUCKETS.length; i++) {
-        if (wc >= BUCKETS[i][1] && wc < BUCKETS[i][2]) { counts[i]++; break; }
-      }
-    }
-    return counts;
+  const COLORS = [C.danger, C.orange, C.warning, C.success, C.blue, '#bc8cff'];
+
+  function edgeLabel(n: number): string {
+    return n >= 1000 ? `${n / 1000}K` : String(n);
+  }
+
+  let bars = $derived.by(() => {
+    if (!buckets) return [];
+    const { edges, counts } = buckets;
+    return edges.map((lo, i) => ({
+      label: i < edges.length - 1 ? `${lo}-${edgeLabel(edges[i + 1])}` : `${edgeLabel(lo)}+`,
+      count: counts[i] || 0,
+      color: COLORS[i % COLORS.length],
+    }));
   });
 
-  let maxCount = $derived(Math.max(...bucketCounts, 1));
-  let avgWords = $derived.by(() => {
-    const total = pages.reduce((s, p) => s + (p.wordCount || 0), 0);
-    return pages.length > 0 ? Math.round(total / pages.length) : 0;
-  });
-  let hasData = $derived(pages.length > 0);
+  let maxCount = $derived(Math.max(...bars.map((b) => b.count), 1));
+  let avgWords = $derived(Math.round(buckets?.avgWords || 0));
+  let hasData = $derived((buckets?.pages || 0) > 0);
 </script>
 
 {#if hasData}
@@ -36,12 +39,12 @@
       <span class="text-xs text-fg-2">avg: {avgWords.toLocaleString()} words</span>
     </div>
     <div class="flex items-end gap-1 h-28">
-      {#each BUCKETS as [label,,,color], i}
-        {@const pct = (bucketCounts[i] / maxCount) * 100}
+      {#each bars as bar}
+        {@const pct = (bar.count / maxCount) * 100}
         <div class="flex-1 flex flex-col items-center gap-1">
-          <span class="text-[10px] text-fg-2 font-mono">{bucketCounts[i].toLocaleString()}</span>
-          <div class="w-full rounded-t transition-all" style="height: {Math.max(pct, 3)}%; background: {color}"></div>
-          <span class="text-[10px] text-fg-2">{label}</span>
+          <span class="text-[10px] text-fg-2 font-mono">{bar.count.toLocaleString()}</span>
+          <div class="w-full rounded-t transition-all" style="height: {Math.max(pct, 3)}%; background: {bar.color}"></div>
+          <span class="text-[10px] text-fg-2">{bar.label}</span>
         </div>
       {/each}
     </div>

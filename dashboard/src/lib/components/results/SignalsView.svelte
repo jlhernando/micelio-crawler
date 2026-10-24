@@ -4,6 +4,7 @@
   // Stat accessors
   let idx = $derived(stats.indexabilityStats as { indexable: number; nonIndexable: number } | null);
   let orphans = $derived((stats.orphanPages as string[]) || []);
+  let orphanTotal = $derived(Number(stats.totalOrphanPages) || orphans.length); // list is capped at 1,000
   let redirects = $derived(stats.redirectStats as { navBoostAtRisk?: number } | null);
   let topo = $derived(stats.topicalityStats as { avgTitleBodyOverlap: number; avgTitleH1Alignment: number; avgTopicalConsistency: number; lowAlignmentPages: number } | null);
   let read = $derived(stats.readabilityStats as { avgScore: number; qualityTier1: number; qualityTier2: number; qualityTier3: number } | null);
@@ -45,7 +46,7 @@
       {/if}
       <div class="rounded bg-surface-3 p-3">
         <div class="text-[10px] text-fg-2 uppercase tracking-wide">Orphan Pages</div>
-        <div class="text-xl font-bold {orphans.length > 0 ? 'text-warning' : 'text-success'} mt-1">{orphans.length.toLocaleString()}</div>
+        <div class="text-xl font-bold {orphanTotal > 0 ? 'text-warning' : 'text-success'} mt-1">{orphanTotal.toLocaleString()}</div>
         <div class="text-[10px] text-fg-2">Pages with no internal link path from seed. Googlebot relies on links for discovery; orphans depend entirely on sitemaps or external links</div>
       </div>
       {#if redirects}

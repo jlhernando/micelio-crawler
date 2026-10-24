@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -30,7 +31,10 @@ const maxEntries = 10000
 var nonWordRe = regexp.MustCompile(`[^\p{L}\p{N}\s'-]`)
 
 // NgramAnalyzer incrementally computes n-gram statistics across pages.
+// Safe for concurrent use: PreparePage tokenises without the lock, AddPrepared
+// merges counts under it.
 type NgramAnalyzer struct {
+	mu          sync.Mutex
 	unigrams    map[string]*ngramData
 	bigrams     map[string]*ngramData
 	trigrams    map[string]*ngramData
@@ -61,6 +65,8 @@ func NewNgramAnalyzer(language string) *NgramAnalyzer {
 
 // SetLanguage updates the language for stopword filtering.
 func (a *NgramAnalyzer) SetLanguage(lang string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if lang != a.language {
 		if _, ok := stopwordLists[lang]; ok {
 			a.language = lang
@@ -69,35 +75,39 @@ func (a *NgramAnalyzer) SetLanguage(lang string) {
 	}
 }
 
-// AddPage processes a page's body text and updates n-gram counts.
-func (a *NgramAnalyzer) AddPage(bodyText string) {
+// PageNgrams holds one page's n-gram counts, ready to merge with
+// AddPrepared. Building it (tokenising, joining terms) is the expensive
+// part and touches no shared state.
+type PageNgrams struct {
+	unigrams map[string]int
+	bigrams  map[string]int
+	trigrams map[string]int
+	tokens   int
+}
+
+// PreparePage tokenises bodyText and counts its n-grams. Returns nil when
+// the page is too short to count. Safe to call concurrently.
+func (a *NgramAnalyzer) PreparePage(bodyText string) *PageNgrams {
 	if len(bodyText) < 50 {
-		return
+		return nil
 	}
+	a.mu.Lock()
+	stopwords := a.stopwords
+	a.mu.Unlock()
 
-	tokens := tokenize(bodyText, a.stopwords)
+	tokens := tokenize(bodyText, stopwords)
 	if len(tokens) < 3 {
-		return
+		return nil
 	}
-
-	a.totalPages++
-	a.totalTokens += len(tokens)
-
-	pageUnigrams := make(map[string]struct{})
-	pageBigrams := make(map[string]struct{})
-	pageTrigrams := make(map[string]struct{})
-
-	// Unigrams
+	pn := &PageNgrams{
+		unigrams: make(map[string]int, len(tokens)),
+		bigrams:  make(map[string]int, len(tokens)),
+		trigrams: make(map[string]int, len(tokens)),
+		tokens:   len(tokens),
+	}
 	for _, tok := range tokens {
-		if d, ok := a.unigrams[tok]; ok {
-			d.count++
-		} else {
-			a.unigrams[tok] = &ngramData{count: 1}
-		}
-		pageUnigrams[tok] = struct{}{}
+		pn.unigrams[tok]++
 	}
-
-	// Bigrams
 	var sb strings.Builder
 	for i := 0; i < len(tokens)-1; i++ {
 		sb.Reset()
@@ -105,16 +115,8 @@ func (a *NgramAnalyzer) AddPage(bodyText string) {
 		sb.WriteString(tokens[i])
 		sb.WriteByte(' ')
 		sb.WriteString(tokens[i+1])
-		bg := sb.String()
-		if d, ok := a.bigrams[bg]; ok {
-			d.count++
-		} else {
-			a.bigrams[bg] = &ngramData{count: 1}
-		}
-		pageBigrams[bg] = struct{}{}
+		pn.bigrams[sb.String()]++
 	}
-
-	// Trigrams
 	for i := 0; i < len(tokens)-2; i++ {
 		sb.Reset()
 		sb.Grow(len(tokens[i]) + 1 + len(tokens[i+1]) + 1 + len(tokens[i+2]))
@@ -123,34 +125,48 @@ func (a *NgramAnalyzer) AddPage(bodyText string) {
 		sb.WriteString(tokens[i+1])
 		sb.WriteByte(' ')
 		sb.WriteString(tokens[i+2])
-		tg := sb.String()
-		if d, ok := a.trigrams[tg]; ok {
-			d.count++
-		} else {
-			a.trigrams[tg] = &ngramData{count: 1}
-		}
-		pageTrigrams[tg] = struct{}{}
+		pn.trigrams[sb.String()]++
 	}
+	return pn
+}
 
-	// Update page counts
-	for term := range pageUnigrams {
-		a.unigrams[term].pages++
+// AddPrepared merges one page's counts into the totals.
+func (a *NgramAnalyzer) AddPrepared(pn *PageNgrams) {
+	if pn == nil {
+		return
 	}
-	for term := range pageBigrams {
-		a.bigrams[term].pages++
-	}
-	for term := range pageTrigrams {
-		a.trigrams[term].pages++
-	}
-
-	// Memory cap
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.totalPages++
+	a.totalTokens += pn.tokens
+	mergeNgrams(a.unigrams, pn.unigrams)
+	mergeNgrams(a.bigrams, pn.bigrams)
+	mergeNgrams(a.trigrams, pn.trigrams)
 	pruneIfNeeded(a.unigrams)
 	pruneIfNeeded(a.bigrams)
 	pruneIfNeeded(a.trigrams)
 }
 
+func mergeNgrams(dst map[string]*ngramData, page map[string]int) {
+	for term, c := range page {
+		if d, ok := dst[term]; ok {
+			d.count += c
+			d.pages++
+		} else {
+			dst[term] = &ngramData{count: c, pages: 1}
+		}
+	}
+}
+
+// AddPage processes a page's body text and updates n-gram counts.
+func (a *NgramAnalyzer) AddPage(bodyText string) {
+	a.AddPrepared(a.PreparePage(bodyText))
+}
+
 // GetResults returns the final n-gram analysis.
 func (a *NgramAnalyzer) GetResults(topN int) NgramStats {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if topN == 0 {
 		topN = 50
 	}
@@ -191,8 +207,11 @@ func buildEntries(m map[string]*ngramData, totalPages, totalTokens, topN int) []
 	return entries
 }
 
+// pruneIfNeeded trims a term map back to the maxEntries most frequent terms
+// once it grows past 2*maxEntries. The slack means pruning (a sort of every
+// entry) runs every few hundred pages instead of on almost every page.
 func pruneIfNeeded(m map[string]*ngramData) {
-	if len(m) <= maxEntries {
+	if len(m) <= 2*maxEntries {
 		return
 	}
 	type kv struct {
@@ -207,7 +226,7 @@ func pruneIfNeeded(m map[string]*ngramData) {
 		return items[i].count > items[j].count
 	})
 
-	keepCount := maxEntries * 3 / 4
+	keepCount := maxEntries
 	// Clear map and re-add top entries
 	keep := make(map[string]struct{}, keepCount)
 	for i := 0; i < keepCount && i < len(items); i++ {

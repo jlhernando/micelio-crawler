@@ -1614,7 +1614,7 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 	// Post-crawl: Page weight analysis
 	if config.PageWeight && len(result.ResourceRefs) > 0 {
 		fmt.Fprintf(os.Stderr, "  Analyzing page weight...\n")
-		analysis.ComputePageWeight(result.Pages, result.ResourceRefs, result.TransferSizes, config.Concurrency, config.UserAgent)
+		analysis.ComputePageWeight(ctx, result.Pages, result.ResourceRefs, result.TransferSizes, config.Concurrency, result.ResourceSizer)
 		result.ResourceRefs = nil
 		result.TransferSizes = nil
 		debug.FreeOSMemory()
@@ -1701,6 +1701,15 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 	hasSummaryData := ppCfg != nil || len(brokenExternal) > 0
 	if config.OutputPath != "" && hasSummaryData {
 		summaryFile := summaryFilePath(config.OutputPath)
+		// The CLI summary is written once, so it keeps the full URL ->
+		// PageRank map (analysis stores scores on pages and only keeps the
+		// map in stats for small crawls).
+		if stats.PageRankScores == nil && stats.PageRankHistogram != nil {
+			stats.PageRankScores = make(map[string]float64, len(result.Pages))
+			for _, p := range result.Pages {
+				stats.PageRankScores[p.URL] = p.PageRank
+			}
+		}
 		if writeErr := writeStatsSummary(summaryFile, stats); writeErr != nil {
 			fmt.Fprintf(os.Stderr, "  [warn] Failed to write summary: %v\n", writeErr)
 		} else {

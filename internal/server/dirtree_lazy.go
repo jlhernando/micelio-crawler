@@ -3,13 +3,42 @@ package server
 import (
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"weak"
 
+	"github.com/micelio/micelio/internal/storage"
 	"github.com/micelio/micelio/internal/types"
 )
+
+// dirPageSource gives the directory index read access to pages. In-memory
+// crawls hand out their cached *PageData; crawls answered from the page_index
+// table (pages not loaded yet) build a PageData in scratch, so a returned
+// pointer is only valid until scratch is reused.
+type dirPageSource interface {
+	Len() int
+	Page(i int, scratch *types.PageData) *types.PageData
+}
+
+type memPages []*types.PageData
+
+func (m memPages) Len() int                                      { return len(m) }
+func (m memPages) Page(i int, _ *types.PageData) *types.PageData { return m[i] }
+
+// indexPages adapts page_index rows. Only the fields the tree aggregates are
+// set (status, inlinks, indexability); the rest stay zero.
+type indexPages []storage.PageIndexEntry
+
+func (x indexPages) Len() int { return len(x) }
+func (x indexPages) Page(i int, scratch *types.PageData) *types.PageData {
+	e := &x[i]
+	*scratch = types.PageData{URL: e.URL, StatusCode: e.StatusCode, Inlinks: e.Inlinks}
+	scratch.Indexability.Indexable = e.Indexable
+	return scratch
+}
 
 // Lazy directory tree: the dashboard loads one directory at a time, like map
 // tiles. The server keeps an index of directories only (pages stay as indices
@@ -103,7 +132,7 @@ func getDirIndex(crawlID string, results *CrawlResults) *dirIndex {
 			delete(dirIndexCache.items, id)
 		}
 	}
-	ix := buildDirIndex(results.Pages)
+	ix := buildDirIndex(memPages(results.Pages))
 	ix.pageTraffic, ix.treeRoot = traffic, root
 	if !traffic {
 		ix.applyTreeTraffic(root)
@@ -113,8 +142,10 @@ func getDirIndex(crawlID string, results *CrawlResults) *dirIndex {
 	return ix
 }
 
-func buildDirIndex(pages []*types.PageData) *dirIndex {
-	ix := &dirIndex{n: len(pages), dirs: map[string]*dirIndexEntry{}, variants: map[string]bool{}}
+func buildDirIndex(src dirPageSource) *dirIndex {
+	n := src.Len()
+	ix := &dirIndex{n: n, dirs: map[string]*dirIndexEntry{}, variants: map[string]bool{}}
+	var scratch, scratchB types.PageData
 	entry := func(segs []string) *dirIndexEntry {
 		key := dirPath(segs)
 		e := ix.dirs[key]
@@ -136,9 +167,9 @@ func buildDirIndex(pages []*types.PageData) *dirIndex {
 		query bool
 		ok    bool
 	}
-	parsedPages := make([]parsed, len(pages)) // parse each URL once for both passes
-	for k, p := range pages {
-		segs, query, ok := pageSegments(p)
+	parsedPages := make([]parsed, n) // parse each URL once for both passes
+	for k := range n {
+		segs, query, ok := pageSegments(src.Page(k, &scratch))
 		parsedPages[k] = parsed{segs, query != "", ok}
 		if !ok {
 			continue
@@ -154,11 +185,12 @@ func buildDirIndex(pages []*types.PageData) *dirIndex {
 
 	// Pass 2: aggregate metrics up the tree. A page whose path is also a
 	// directory is shown as that directory (isPage), not as a separate leaf.
-	for i, p := range pages {
+	for i := range n {
 		segs, ok := parsedPages[i].segs, parsedPages[i].ok
 		if !ok {
 			continue
 		}
+		p := src.Page(i, &scratch)
 		for d := 0; d < len(segs); d++ {
 			bubbleUpMetrics(ix.dirs[dirPath(segs[:d])].node, p)
 		}
@@ -181,7 +213,9 @@ func buildDirIndex(pages []*types.PageData) *dirIndex {
 			}
 			return e.subdirs[a].node.Name < e.subdirs[b].node.Name
 		})
-		sort.SliceStable(e.pages, func(a, b int) bool { return pages[e.pages[a]].PageRank > pages[e.pages[b]].PageRank })
+		sort.SliceStable(e.pages, func(a, b int) bool {
+			return src.Page(int(e.pages[a]), &scratch).PageRank > src.Page(int(e.pages[b]), &scratchB).PageRank
+		})
 	}
 	return ix
 }
@@ -190,10 +224,11 @@ func (e *dirIndexEntry) childCount() int { return len(e.subdirs) + len(e.pages) 
 
 // children returns children [offset, offset+limit): subdirectories first
 // (most pages first), then the directory's own pages (PageRank first).
-func (ix *dirIndex) children(e *dirIndexEntry, pages []*types.PageData, offset, limit, depth int) []lazyDirNode {
+func (ix *dirIndex) children(e *dirIndexEntry, pages dirPageSource, offset, limit, depth int) []lazyDirNode {
 	total := e.childCount()
 	end := min(total, offset+limit)
 	out := make([]lazyDirNode, 0, max(0, end-offset))
+	var scratch types.PageData
 	for k := offset; k < end; k++ {
 		if k < len(e.subdirs) {
 			sub := e.subdirs[k]
@@ -204,7 +239,7 @@ func (ix *dirIndex) children(e *dirIndexEntry, pages []*types.PageData, offset, 
 			out = append(out, n)
 			continue
 		}
-		p := pages[e.pages[k-len(e.subdirs)]]
+		p := pages.Page(int(e.pages[k-len(e.subdirs)]), &scratch)
 		segs, query, _ := pageSegments(p)
 		name, path := segs[len(segs)-1], dirPath(segs)
 		plain := path
@@ -217,10 +252,10 @@ func (ix *dirIndex) children(e *dirIndexEntry, pages []*types.PageData, offset, 
 		finalizeDirNode(leaf)
 		missing := false
 		if ix.fromTree != nil {
-			src := ix.fromTree[plain]
-			missing = src == nil || ix.variants[plain]
+			from := ix.fromTree[plain]
+			missing = from == nil || ix.variants[plain]
 			if !missing {
-				copyTraffic(leaf, src)
+				copyTraffic(leaf, from)
 			}
 		}
 		out = append(out, lazyDirNode{dirNode: leaf, TrafficMissing: missing})
@@ -228,9 +263,9 @@ func (ix *dirIndex) children(e *dirIndexEntry, pages []*types.PageData, offset, 
 	return out
 }
 
-// serveLazyDirTree answers GET /directory-tree?lazy=1&path=/a/b&offset=&limit=.
-// It returns false when pages are not in memory, so the caller can fall back
-// to the full (capped) tree.
+// serveLazyDirTree answers GET /directory-tree?lazy=1&path=/a/b&offset=&limit=
+// from in-memory pages. It returns false when pages are not loaded, so the
+// caller can answer from the crawl DB instead (serveLazyDirTreeFromDB).
 func serveLazyDirTree(w http.ResponseWriter, r *http.Request, crawlID string, results *CrawlResults) bool {
 	if results == nil {
 		return false
@@ -240,7 +275,65 @@ func serveLazyDirTree(w http.ResponseWriter, r *http.Request, crawlID string, re
 	if !results.PagesReady || len(results.Pages) == 0 {
 		return false
 	}
-	ix := getDirIndex(crawlID, results)
+	writeLazyDirTree(w, r, getDirIndex(crawlID, results), memPages(results.Pages))
+	return true
+}
+
+// dbDirIndexCache keeps the last index built from a crawl DB's page_index so
+// expanding folders does not re-read the table. One entry is enough: it only
+// serves the window before a crawl's pages are loaded into memory.
+var dbDirIndexCache struct {
+	sync.Mutex
+	crawlID, dbPath string
+	modTime         time.Time
+	size            int64
+	ix              *dirIndex
+	pages           indexPages
+}
+
+// serveLazyDirTreeFromDB answers a lazy request from the page_index table.
+// It returns false when the DB has no page index.
+func serveLazyDirTreeFromDB(w http.ResponseWriter, r *http.Request, crawlID, dbPath string) bool {
+	ix, pages := dbDirIndex(crawlID, dbPath)
+	if ix == nil {
+		return false
+	}
+	writeLazyDirTree(w, r, ix, pages)
+	return true
+}
+
+func dbDirIndex(crawlID, dbPath string) (*dirIndex, indexPages) {
+	fi, err := os.Stat(dbPath)
+	if err != nil {
+		return nil, nil
+	}
+	c := &dbDirIndexCache
+	c.Lock()
+	defer c.Unlock()
+	if c.ix != nil && c.crawlID == crawlID && c.dbPath == dbPath && c.modTime.Equal(fi.ModTime()) && c.size == fi.Size() {
+		return c.ix, c.pages
+	}
+	cs, err := storage.NewCrawlStore(dbPath)
+	if err != nil {
+		return nil, nil
+	}
+	entries, err := cs.GetPageIndex()
+	cs.Close()
+	if err != nil || len(entries) == 0 {
+		return nil, nil
+	}
+	pages := indexPages(entries)
+	c.crawlID, c.dbPath, c.modTime, c.size = crawlID, dbPath, fi.ModTime(), fi.Size()
+	c.ix, c.pages = buildDirIndex(pages), pages
+	return c.ix, c.pages
+}
+
+// writeEmptyLazyDirTree answers a lazy request for a crawl with no pages.
+func writeEmptyLazyDirTree(w http.ResponseWriter, r *http.Request) {
+	writeLazyDirTree(w, r, buildDirIndex(memPages(nil)), memPages(nil))
+}
+
+func writeLazyDirTree(w http.ResponseWriter, r *http.Request, ix *dirIndex, pages dirPageSource) {
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		path = "/"
@@ -248,20 +341,19 @@ func serveLazyDirTree(w http.ResponseWriter, r *http.Request, crawlID string, re
 	e := ix.dirs[path]
 	if e == nil {
 		jsonError(w, "directory not found", http.StatusNotFound)
-		return true
+		return
 	}
 	offset := intParam(r, "offset", 0, 0, e.childCount())
 	limit := intParam(r, "limit", dirTreePageSize, 1, 1000)
 	depth := intParam(r, "depth", 1, 1, 2)
 	node := lazyDirNode{dirNode: e.node, HasChildren: e.childCount() > 0, ChildCount: e.childCount(), TrafficMissing: e.trafficMissing}
-	node.Children = ix.children(e, results.Pages, offset, limit, depth)
+	node.Children = ix.children(e, pages, offset, limit, depth)
 	jsonOK(w, map[string]interface{}{
 		"lazy":       true,
 		"tree":       node,
 		"offset":     offset,
-		"totalPages": len(results.Pages),
+		"totalPages": pages.Len(),
 	})
-	return true
 }
 
 // applyTreeTraffic restores GSC, GA4 and Plausible numbers. Cached pages lose

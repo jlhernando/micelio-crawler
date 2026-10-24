@@ -1,12 +1,8 @@
 import { mount } from 'svelte';
 import './app.css';
 import App from './App.svelte';
-import { Chart } from 'chart.js';
 
-Chart.defaults.color = '#a1a5ad';
-Chart.defaults.borderColor = '#303235';
-Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
-Chart.defaults.font.size = 11;
+// Chart.js defaults live in lib/chartjs.ts, loaded on demand by chart components.
 
 const app = mount(App, {
   target: document.getElementById('app')!,
@@ -14,9 +10,18 @@ const app = mount(App, {
 
 export default app;
 
-// Register service worker for graph data caching
+// Older builds registered /graph-sw.js to cache the removed Full Graph
+// endpoint. Unregister any leftover registration so its stale cache goes away.
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/graph-sw.js').catch(() => {
-    // SW registration failure is non-critical
-  });
+  navigator.serviceWorker
+    .getRegistrations()
+    .then((regs) => {
+      for (const r of regs) {
+        const script = (r.active || r.waiting || r.installing)?.scriptURL || '';
+        if (script.endsWith('/graph-sw.js')) r.unregister();
+      }
+    })
+    .catch(() => {
+      // Cleanup failure is non-critical
+    });
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatDateTime, formatDuration } from '../lib/format';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import { api, type ScheduleState } from '../lib/api';
@@ -82,25 +83,6 @@
     } finally {
       deleting = null;
     }
-  }
-
-  function formatDate(iso: string | undefined): string {
-    if (!iso) return '—';
-    const d = new Date(iso);
-    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-  }
-
-  function formatDuration(ms: number): string {
-    if (!ms) return '—';
-    if (ms < 1000) return `${ms}ms`;
-    const s = Math.floor(ms / 1000);
-    if (s < 60) return `${s}s`;
-    const m = Math.floor(s / 60);
-    if (m < 60) return `${m}m ${s % 60}s`;
-    const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ${m % 60}m`;
-    const d = Math.floor(h / 24);
-    return `${d}d ${h % 24}h ${m % 60}m`;
   }
 
   function statusBadge(status: string | undefined): string {
@@ -274,7 +256,7 @@
                     <span class="inline-block px-1.5 py-0.5 rounded text-xs {statusBadge(schedule.lastStatus)}">
                       {schedule.lastStatus || 'unknown'}
                     </span>
-                    <span class="text-fg-2 text-xs">{formatDate(schedule.lastRun)}</span>
+                    <span class="text-fg-2 text-xs">{formatDateTime(schedule.lastRun)}</span>
                   </div>
                   <div class="text-xs text-fg-2 mt-0.5">
                     {schedule.lastPages.toLocaleString()} pages in {formatDuration(schedule.lastDurationMs)}
@@ -284,7 +266,7 @@
                 {/if}
               </td>
               <td class="px-3 py-3 text-fg-2 text-xs hidden md:table-cell">
-                {formatDate(schedule.nextRun)}
+                {formatDateTime(schedule.nextRun)}
               </td>
               <td class="px-3 py-3 text-fg-2 font-mono text-xs hidden sm:table-cell">
                 {schedule.totalRuns}

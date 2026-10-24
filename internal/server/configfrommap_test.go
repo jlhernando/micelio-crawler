@@ -196,3 +196,20 @@ func TestConfigFromMapInvalidTypes(t *testing.T) {
 		t.Fatalf("expected default concurrency due to bad type, got %d", cfg.Concurrency)
 	}
 }
+
+func TestConfigFromMapDashboardDelayAndURLList(t *testing.T) {
+	cfg := configFromMap(map[string]interface{}{
+		"mode": "list", "delay": float64(300),
+		"urlList": "https://a.com/x\n\n  https://a.com/y  \n",
+	})
+	if cfg.DelayMs != 300 {
+		t.Errorf("DelayMs = %d, want 300", cfg.DelayMs)
+	}
+	if len(cfg.URLs) != 2 || cfg.URLs[1] != "https://a.com/y" {
+		t.Errorf("URLs = %q", cfg.URLs)
+	}
+	// An explicit delayMs wins.
+	if c := configFromMap(map[string]interface{}{"delay": float64(300), "delayMs": float64(900)}); c.DelayMs != 900 {
+		t.Errorf("explicit delayMs = %d", c.DelayMs)
+	}
+}

@@ -38,16 +38,46 @@ func prepareLoadedPages(crawlID string, pages []*types.PageData, stats map[strin
 		agg.statsUpdates[k] = v
 	}
 
-	assignPageRankFromStatsMap(pages, merged)
-	agg.graph = buildGraphFromCrawlDB(pages, dbPath)
-	if scores := recomputeFlatPageRank(pages, agg.graph); scores != nil {
-		set("pageRankScores", scoresToJSONMap(scores))
-		agg.persist = true
-		log.Printf("backfill: recomputed flat PageRank for crawl %s from link graph", crawlID)
+	// Crawls analysed by this version stored the link graph and per-page
+	// scores in the crawl DB: no second decode of every page for links, no
+	// PageRank map in stats, no HITS recompute.
+	storedGraph, scoresOK := loadStoredAnalysis(dbPath, pages)
+	agg.graph = storedGraph
+	if agg.graph == nil {
+		agg.graph = buildGraphFromCrawlDB(pages, dbPath)
 	}
-
-	if restoreHits(pages, agg.graph) {
-		log.Printf("backfill: recomputed authority/hub scores for crawl %s from link graph", crawlID)
+	if !scoresOK {
+		assignPageRankFromStatsMap(pages, merged)
+		if scores := recomputeFlatPageRank(pages, agg.graph); scores != nil {
+			for k, v := range pageRankStatsUpdates(scores) {
+				set(k, v)
+			}
+			agg.persist = true
+			log.Printf("backfill: recomputed flat PageRank for crawl %s from link graph", crawlID)
+		}
+		if restoreHits(pages, agg.graph) {
+			log.Printf("backfill: recomputed authority/hub scores for crawl %s from link graph", crawlID)
+		}
+	}
+	if (storedGraph == nil || !scoresOK) && agg.graph != nil {
+		// Older crawl: store what was just rebuilt so the next reload is
+		// fast, then drop the per-URL PageRank map from stats.
+		if snapshotAnalysis(pages, agg.graph, storedGraph == nil).save(dbPath) {
+			if _, hasMap := merged["pageRankScores"]; hasMap && len(pages) > types.PageRankScoresInlineMax {
+				set("pageRankScores", nil)
+				agg.persist = true
+			}
+			if _, ok := merged["pageRankHistogram"]; !ok {
+				h := types.NewPageRankHistogram(func(yield func(float64)) {
+					for _, p := range pages {
+						yield(p.PageRank)
+					}
+				})
+				set("pageRankHistogram", toJSONValue(h))
+				agg.persist = true
+			}
+			log.Printf("backfill: stored link graph and page scores for crawl %s in its crawl DB", crawlID)
+		}
 	}
 
 	agg.inlinkIdx = newInlinkIndex(agg.graph, pages)
@@ -65,7 +95,7 @@ func prepareLoadedPages(crawlID string, pages []*types.PageData, stats map[strin
 
 	if agg.graph != nil && len(stats) > 0 {
 		if backfillGraphOrphanStats(crawlID, merged, agg.graph, seedURL, pages) {
-			for _, k := range []string{"orphanPages", "orphanMethodology", "alertSummary"} {
+			for _, k := range []string{"orphanPages", "totalOrphanPages", "orphanMethodology", "alertSummary"} {
 				agg.statsUpdates[k] = merged[k] // nil when removed
 			}
 			agg.persist = true
@@ -115,15 +145,18 @@ func backfillGraphOrphanStats(crawlID string, stats map[string]interface{}, g *a
 	}
 	changed := false
 	if methodology, _ := stats["orphanMethodology"].(string); methodology != "graph" {
-		orphans := analysis.ComputeGraphOrphans(g, seedURL)
-		oldCount := lenAny(stats["orphanPages"])
+		oldCount := orphanCountFromMap(stats)
+		var typed types.CrawlStats
+		typed.SetOrphanPages(analysis.ComputeGraphOrphans(g, seedURL))
+		orphans := typed.OrphanPages
 		if orphans == nil {
 			orphans = []string{}
 		}
 		stats["orphanPages"] = orphans
+		stats["totalOrphanPages"] = typed.TotalOrphanPages
 		stats["orphanMethodology"] = "graph"
 		changed = true
-		log.Printf("backfill: recomputed orphans for crawl %s (%d → %d, methodology: graph)", crawlID, oldCount, len(orphans))
+		log.Printf("backfill: recomputed orphans for crawl %s (%d → %d, methodology: graph)", crawlID, oldCount, typed.TotalOrphanPages)
 	}
 	if !changed && !orphanAlertStale(stats) {
 		return false
@@ -146,7 +179,7 @@ func orphanAlertStale(stats map[string]interface{}) bool {
 	if total <= 0 {
 		return false
 	}
-	rate := float64(lenAny(stats["orphanPages"])) / total * 100
+	rate := float64(orphanCountFromMap(stats)) / total * 100
 	var stored *float64
 	if summary, ok := stats["alertSummary"].(map[string]interface{}); ok {
 		list, _ := summary["alerts"].([]interface{})
@@ -165,6 +198,36 @@ func orphanAlertStale(stats map[string]interface{}) bool {
 		return rate > 5
 	}
 	return rate <= 5 || math.Abs(*stored-rate) > 0.05
+}
+
+// orphanCountFromMap returns the orphan total from stored stats: the
+// totalOrphanPages count when the list was capped, else the list length.
+func orphanCountFromMap(stats map[string]interface{}) int {
+	n := lenAny(stats["orphanPages"])
+	switch t := stats["totalOrphanPages"].(type) {
+	case float64:
+		n = max(n, int(t))
+	case int:
+		n = max(n, t)
+	}
+	return n
+}
+
+// pageRankStatsUpdates returns the stats keys describing recomputed
+// PageRank: the histogram always, the URL map only for small crawls (nil
+// deletes a stale map left by an older version).
+func pageRankStatsUpdates(scores map[string]float64) map[string]interface{} {
+	var tmp types.CrawlStats
+	tmp.PageRankHistogram = types.NewPageRankHistogram(func(yield func(float64)) {
+		for _, v := range scores {
+			yield(v)
+		}
+	})
+	out := map[string]interface{}{"pageRankHistogram": toJSONValue(tmp.PageRankHistogram), "pageRankScores": nil}
+	if len(scores) <= types.PageRankScoresInlineMax {
+		out["pageRankScores"] = scoresToJSONMap(scores)
+	}
+	return out
 }
 
 // lenAny returns the length of a JSON-decoded or typed string list.

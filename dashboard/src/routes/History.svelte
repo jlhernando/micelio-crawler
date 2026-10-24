@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatDateTime, formatDuration } from '../lib/format';
   import HistoryOverview from '../lib/components/results/HistoryOverview.svelte';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
@@ -160,24 +161,6 @@
     }
   }
 
-  function formatDate(iso: string): string {
-    const d = new Date(iso);
-    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) +
-      ' ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  }
-
-  function formatDuration(ms: number | null): string {
-    if (ms == null) return '—';
-    const s = Math.floor(ms / 1000);
-    if (s < 60) return `${s}s`;
-    const m = Math.floor(s / 60);
-    if (m < 60) return `${m}m ${s % 60}s`;
-    const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ${m % 60}m`;
-    const d = Math.floor(h / 24);
-    return `${d}d ${h % 24}h ${m % 60}m`;
-  }
-
   function statusBadge(status: string): { color: string; label: string } {
     switch (status) {
       case 'completed': return { color: 'bg-green-500/20 text-green-400', label: 'Completed' };
@@ -324,7 +307,7 @@
               <td class="px-3 py-3 hidden sm:table-cell font-mono">{crawl.pageCount.toLocaleString()}</td>
               <td class="px-3 py-3 hidden sm:table-cell font-mono {crawl.errorCount > 0 ? 'text-red-400' : ''}">{crawl.errorCount.toLocaleString()}</td>
               <td class="px-3 py-3 hidden md:table-cell text-fg-2">{formatDuration(crawl.durationMs)}</td>
-              <td class="px-3 py-3 hidden lg:table-cell text-fg-2 text-xs">{formatDate(crawl.startedAt)}</td>
+              <td class="px-3 py-3 hidden lg:table-cell text-fg-2 text-xs">{formatDateTime(crawl.startedAt)}</td>
               <td class="px-3 py-3">
                 <div class="flex gap-1">
                   {#if crawl.status === 'completed'}

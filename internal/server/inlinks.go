@@ -7,11 +7,11 @@ import (
 
 // inlinkIndex answers "which pages link to this URL?". It reads the link
 // graph (pages reloaded from a crawl DB, or stripped during the crawl, no
-// longer carry InternalLinks). Sources are found on demand with a binary
-// search per node, so the only extra memory is one in-degree per page; a
-// target→sources map would cost ~16 bytes per edge (hundreds of MB at 700K
-// pages). The legacy map is used only when no graph exists and pages still
-// carry InternalLinks.
+// longer carry InternalLinks). Counts come from the graph's cached
+// in-degree; sources from its reverse CSR, built on the first Sources call
+// and shared with the Universe view (4 bytes per edge, vs ~16 for a
+// target→sources map). Self-links never count as inlinks. The legacy map is
+// used only when no graph exists and pages still carry InternalLinks.
 type inlinkIndex struct {
 	graph    *analysis.AdjacencyGraph
 	inDegree []int32
@@ -23,15 +23,7 @@ func newGraphInlinkIndex(g *analysis.AdjacencyGraph) *inlinkIndex {
 	if g == nil {
 		return nil
 	}
-	inDegree := make([]int32, g.N)
-	for i := 0; i < g.N; i++ {
-		for _, t := range g.Neighbors(i) {
-			if int(t) != i && int(t) < g.N {
-				inDegree[t]++
-			}
-		}
-	}
-	return &inlinkIndex{graph: g, inDegree: inDegree}
+	return &inlinkIndex{graph: g, inDegree: g.InDegree()}
 }
 
 // newInlinkIndex prefers the graph and falls back to pages' InternalLinks.
@@ -79,11 +71,10 @@ func (ix *inlinkIndex) Sources(u string) []string {
 	if !ok || ix.inDegree[dst] == 0 {
 		return nil
 	}
-	out := make([]string, 0, ix.inDegree[dst])
-	for src := 0; src < ix.graph.N && len(out) < int(ix.inDegree[dst]); src++ {
-		if src != dst && ix.graph.HasEdge(src, dst) {
-			out = append(out, ix.graph.URLs[src])
-		}
+	in := ix.graph.InNeighbors(dst)
+	out := make([]string, len(in))
+	for k, src := range in {
+		out[k] = ix.graph.URLs[src]
 	}
 	return out
 }

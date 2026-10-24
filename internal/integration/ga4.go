@@ -17,6 +17,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/micelio/micelio/internal/types"
+	"github.com/micelio/micelio/internal/urlutil"
 )
 
 var ga4Endpoint = "https://analyticsdata.googleapis.com/v1beta"
@@ -280,25 +281,8 @@ func (c *GA4Client) getToken(ctx context.Context) (string, error) {
 	return c.cachedToken, nil
 }
 
-func normalizeGA4Path(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	p := u.Path
-	if p == "" {
-		p = "/"
-	}
-	// Remove trailing slash (except root)
-	if len(p) > 1 && strings.HasSuffix(p, "/") {
-		p = strings.TrimRight(p, "/")
-	}
-	// Decode percent-encoding
-	if decoded, err := url.PathUnescape(p); err == nil {
-		p = decoded
-	}
-	return strings.ToLower(p)
-}
+// normalizeGA4Path is the key GA4 rows are matched on (same as Plausible).
+func normalizeGA4Path(rawURL string) string { return urlutil.PathKey(rawURL) }
 
 func parseIntFromString(s string) int {
 	var v int

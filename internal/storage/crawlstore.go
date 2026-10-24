@@ -63,13 +63,34 @@ func NewCrawlStore(dbPath string) (*CrawlStore, error) {
 	sqlitex.Execute(conn, "PRAGMA temp_store = MEMORY;", nil)
 	sqlitex.Execute(conn, "PRAGMA mmap_size = 268435456;", nil)
 
-	if err := initCrawlSchema(conn); err != nil {
-		conn.Close()
-		return nil, err
+	// API handlers open the crawl DB per request; skip the schema script and
+	// migrations (a failing ALTER TABLE each time) when the file is already
+	// at the current version.
+	if crawlSchemaVersionOf(conn) < crawlSchemaVersion {
+		if err := initCrawlSchema(conn); err != nil {
+			conn.Close()
+			return nil, err
+		}
+		migrateCrawlSchema(conn)
+		sqlitex.Execute(conn, fmt.Sprintf("PRAGMA user_version = %d;", crawlSchemaVersion), nil)
 	}
-	migrateCrawlSchema(conn)
 
 	return &CrawlStore{conn: conn}, nil
+}
+
+// crawlSchemaVersion is stored in PRAGMA user_version once initCrawlSchema
+// and migrateCrawlSchema have run. Bump it when adding a migration.
+const crawlSchemaVersion = 4
+
+func crawlSchemaVersionOf(conn *sqlite.Conn) int {
+	v := 0
+	sqlitex.Execute(conn, "PRAGMA user_version;", &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			v = stmt.ColumnInt(0)
+			return nil
+		},
+	})
+	return v
 }
 
 // Close closes the database connection.
@@ -134,6 +155,8 @@ func migrateCrawlSchema(conn *sqlite.Conn) {
 			is_redirect INTEGER NOT NULL DEFAULT 0
 		);
 	`, nil)
+	// v3 → v4: stored link graph and page scores (crawlstore_analysis.go)
+	sqlitex.ExecuteScript(conn, analysisSchema, nil)
 }
 
 // saveMeta stores a key-value pair in crawl metadata (caller must hold s.mu).

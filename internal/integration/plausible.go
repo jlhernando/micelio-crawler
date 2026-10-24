@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/micelio/micelio/internal/types"
+	"github.com/micelio/micelio/internal/urlutil"
 )
 
 const (
@@ -188,22 +188,5 @@ func parsePlausibleResponse(body []byte) (map[string]*types.PlausibleData, error
 	return results, nil
 }
 
-func normalizePlausiblePath(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	p := u.Path
-	if p == "" {
-		p = "/"
-	}
-	// Remove trailing slash (except root)
-	if len(p) > 1 && strings.HasSuffix(p, "/") {
-		p = strings.TrimRight(p, "/")
-	}
-	// Decode percent-encoding
-	if decoded, err := url.PathUnescape(p); err == nil {
-		p = decoded
-	}
-	return strings.ToLower(p)
-}
+// normalizePlausiblePath is the key Plausible rows are matched on.
+func normalizePlausiblePath(rawURL string) string { return urlutil.PathKey(rawURL) }

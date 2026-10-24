@@ -47,6 +47,14 @@ make build-with-dashboard
 make install
 ```
 
+### Docker
+
+```bash
+docker build -t micelio .                                   # add --build-arg WITH_CHROMIUM=true for JS rendering
+docker run -p 3100:3100 -v micelio-data:/home/micelio/.micelio micelio
+# Open http://localhost:3100
+```
+
 ### Run
 
 ```bash

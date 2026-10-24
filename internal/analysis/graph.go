@@ -5,6 +5,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/micelio/micelio/internal/types"
 )
@@ -19,6 +20,119 @@ type AdjacencyGraph struct {
 	URLs        []string       // node index -> URL
 	StatusCodes []int16        // node index -> HTTP status code
 	N           int
+
+	// Lazily built, cached derived indexes (see InDegree / InNeighbors).
+	// A graph must not be modified after either is first used.
+	derived *graphDerived
+}
+
+// graphDerived holds indexes computed once per graph on first use.
+type graphDerived struct {
+	inDegOnce sync.Once
+	inDeg     []int32
+	revOnce   sync.Once
+	rev       *ReverseCSR
+}
+
+// derivedMu guards creation of AdjacencyGraph.derived (graphs are built in
+// several places, including struct literals in tests, so there is no single
+// constructor to allocate it in).
+var derivedMu sync.Mutex
+
+func (g *AdjacencyGraph) derivedIndexes() *graphDerived {
+	derivedMu.Lock()
+	defer derivedMu.Unlock()
+	if g.derived == nil {
+		g.derived = &graphDerived{}
+	}
+	return g.derived
+}
+
+// InDegree returns, per node, the number of distinct pages linking to it.
+// Self-links never count as inlinks: a page linking to itself does not make
+// it less orphaned. (buildGraph already drops self-links; the check here
+// keeps hand-built graphs consistent.) Computed once and cached; callers must
+// not modify the returned slice.
+func (g *AdjacencyGraph) InDegree() []int32 {
+	if g == nil {
+		return nil
+	}
+	d := g.derivedIndexes()
+	d.inDegOnce.Do(func() {
+		in := make([]int32, g.N)
+		for src := 0; src < g.N; src++ {
+			for _, t := range g.Edges[g.Offsets[src]:g.Offsets[src+1]] {
+				if int(t) < g.N && int(t) != src {
+					in[t]++
+				}
+			}
+		}
+		d.inDeg = in
+	})
+	return d.inDeg
+}
+
+// ReverseCSR is the transposed graph: node i's inlink sources are
+// Sources[Offsets[i]:Offsets[i+1]], sorted ascending, self-links excluded.
+type ReverseCSR struct {
+	Offsets []int32
+	Sources []int32
+}
+
+// In returns the sources linking to node i.
+func (r *ReverseCSR) In(i int) []int32 {
+	return r.Sources[r.Offsets[i]:r.Offsets[i+1]]
+}
+
+// BuildReverse builds the transposed graph without caching it. Use it for
+// one-off passes (e.g. near-orphan detection) so the graph does not keep the
+// extra 4 bytes per edge alive.
+func (g *AdjacencyGraph) BuildReverse() *ReverseCSR {
+	offsets := make([]int32, g.N+1)
+	for src := 0; src < g.N; src++ {
+		for _, t := range g.Edges[g.Offsets[src]:g.Offsets[src+1]] {
+			if int(t) < g.N && int(t) != src {
+				offsets[t+1]++
+			}
+		}
+	}
+	for i := 0; i < g.N; i++ {
+		offsets[i+1] += offsets[i]
+	}
+	sources := make([]int32, offsets[g.N])
+	fill := make([]int32, g.N)
+	copy(fill, offsets[:g.N])
+	// Sources are visited in ascending order, so each list ends up sorted.
+	for src := 0; src < g.N; src++ {
+		for _, t := range g.Edges[g.Offsets[src]:g.Offsets[src+1]] {
+			if int(t) < g.N && int(t) != src {
+				sources[fill[t]] = int32(src)
+				fill[t]++
+			}
+		}
+	}
+	return &ReverseCSR{Offsets: offsets, Sources: sources}
+}
+
+// Reverse returns the cached transposed graph, building it on first use
+// (O(E) time, 4 bytes per edge + 4 per node). Use it for repeated inlink
+// lookups (per-click inlinks in the dashboard) instead of scanning every edge.
+func (g *AdjacencyGraph) Reverse() *ReverseCSR {
+	if g == nil {
+		return nil
+	}
+	d := g.derivedIndexes()
+	d.revOnce.Do(func() { d.rev = g.BuildReverse() })
+	return d.rev
+}
+
+// InNeighbors returns the nodes linking to node i (sorted, no self-link),
+// using the cached reverse index.
+func (g *AdjacencyGraph) InNeighbors(i int) []int32 {
+	if g == nil || i < 0 || i >= g.N {
+		return nil
+	}
+	return g.Reverse().In(i)
 }
 
 // URL returns the URL for node i.
@@ -139,11 +253,13 @@ func BuildAdjacencyListFromDisk(pages []*types.PageData, iter func(fn func(sourc
 	return buildGraph(pages, iter)
 }
 
-func buildGraph(pages []*types.PageData, diskIter func(fn func(source string, targets []string)) error) *AdjacencyGraph {
+// graphNodes builds the per-node arrays shared by every graph built from
+// pages: node i is pages[i]; FinalURL aliases resolve redirects.
+func graphNodes(pages []*types.PageData) (urls []string, statusCodes []int16, urlIndex map[string]int) {
 	n := len(pages)
-	urls := make([]string, n)
-	statusCodes := make([]int16, n)
-	urlIndex := make(map[string]int, n*2)
+	urls = make([]string, n)
+	statusCodes = make([]int16, n)
+	urlIndex = make(map[string]int, n*2)
 	for i, p := range pages {
 		urls[i] = p.URL
 		statusCodes[i] = int16(p.StatusCode)
@@ -154,6 +270,34 @@ func buildGraph(pages []*types.PageData, diskIter func(fn func(source string, ta
 			}
 		}
 	}
+	return urls, statusCodes, urlIndex
+}
+
+// NewAdjacencyGraphFromCSR rebuilds a graph from stored CSR arrays (see
+// storage.CrawlStore.SaveLinkGraph). Node i must be pages[i]. Returns nil
+// when the arrays do not fit the pages.
+func NewAdjacencyGraphFromCSR(pages []*types.PageData, offsets, edges []int32) *AdjacencyGraph {
+	n := len(pages)
+	if len(offsets) != n+1 || offsets[0] != 0 || int(offsets[n]) != len(edges) {
+		return nil
+	}
+	for i := 0; i < n; i++ {
+		if offsets[i+1] < offsets[i] {
+			return nil
+		}
+	}
+	for _, t := range edges {
+		if t < 0 || int(t) >= n {
+			return nil
+		}
+	}
+	urls, statusCodes, urlIndex := graphNodes(pages)
+	return &AdjacencyGraph{URLIndex: urlIndex, Edges: edges, Offsets: offsets, URLs: urls, StatusCodes: statusCodes, N: n}
+}
+
+func buildGraph(pages []*types.PageData, diskIter func(fn func(source string, targets []string)) error) *AdjacencyGraph {
+	n := len(pages)
+	urls, statusCodes, urlIndex := graphNodes(pages)
 
 	resolveLink := func(link string) (int, bool) {
 		if idx, ok := urlIndex[link]; ok {

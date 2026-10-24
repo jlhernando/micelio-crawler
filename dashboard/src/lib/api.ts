@@ -56,6 +56,50 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return res.json();
 }
 
+export interface DirTreeQuery { path?: string; offset?: number; limit?: number; depth?: number }
+
+export interface DirTreeResponse {
+  tree: {
+    name: string; path: string; pages: number; depth: number; isPage: boolean;
+    statusCodes: Record<number, number>; avgResponseTime: number;
+    children?: Array<unknown>; hasChildren?: boolean; childCount?: number;
+  };
+  totalPages: number;
+  offset?: number;
+  lazy?: boolean;
+}
+
+// Short-lived cache of lazy directory-tree responses, keyed by everything but
+// the limit. The server pages only the requested directory's own children
+// (nested depth-2 children have a fixed size), so a cached response with a
+// larger limit also answers a smaller one by slicing. Callers mutate the
+// nodes they get (expanding, appending pages), so each gets a deep copy.
+const DIR_TREE_TTL_MS = 60_000;
+const dirTreeCache = new Map<string, { limit: number; at: number; promise: Promise<DirTreeResponse> }>();
+
+function getLazyDirTree(id: string, q: DirTreeQuery): Promise<DirTreeResponse> {
+  const path = q.path ?? '/';
+  const offset = q.offset ?? 0;
+  const depth = q.depth ?? 1;
+  const limit = q.limit ?? 100; // server default
+  const key = `${id}\n${path}\n${offset}\n${depth}`;
+  const now = Date.now();
+  let hit = dirTreeCache.get(key);
+  if (!hit || hit.limit < limit || now - hit.at > DIR_TREE_TTL_MS) {
+    const params = new URLSearchParams({ lazy: '1', path, offset: String(offset), limit: String(limit), depth: String(depth) });
+    const promise = request<DirTreeResponse>('GET', `/api/crawl/${id}/directory-tree?${params}`);
+    hit = { limit, at: now, promise };
+    dirTreeCache.set(key, hit);
+    promise.catch(() => { if (dirTreeCache.get(key) === hit) dirTreeCache.delete(key); });
+  }
+  const cachedLimit = hit.limit;
+  return hit.promise.then((data) => {
+    const copy = structuredClone(data);
+    if (copy.lazy && copy.tree.children && cachedLimit > limit) copy.tree.children = copy.tree.children.slice(0, limit);
+    return copy;
+  });
+}
+
 export const api = {
   // Crawl operations
   startCrawl: (config: Record<string, unknown>) =>
@@ -78,9 +122,6 @@ export const api = {
 
   restartCrawl: (id: string, config?: Record<string, unknown>) =>
     request<{ id: string; status: string }>('POST', `/api/crawl/${id}/restart`, config),
-
-  getCrawlResults: (id: string) =>
-    request<{ pages: unknown[]; stats: unknown }>('GET', `/api/crawl/${id}/results`),
 
   getCrawlPages: (id: string, params: {
     offset?: number; limit?: number; sort?: string; order?: string;
@@ -148,18 +189,14 @@ export const api = {
       totalUnique: number;
     }>('GET', `/api/crawl/${id}/anchor-stats`),
 
-  /** Full (capped) tree, or with lazy one directory at a time: path, offset/limit paging, depth 1-2. */
-  getDirectoryTree: (id: string, lazy?: { path?: string; offset?: number; limit?: number; depth?: number }) => {
-    const q = lazy ? '?' + new URLSearchParams({ lazy: '1', ...Object.fromEntries(Object.entries(lazy).map(([k, v]) => [k, String(v)])) }).toString() : '';
-    return request<{
-      tree: {
-        name: string; path: string; pages: number; depth: number; isPage: boolean;
-        statusCodes: Record<number, number>; avgResponseTime: number;
-        children?: Array<unknown>; hasChildren?: boolean; childCount?: number;
-      };
-      totalPages: number;
-      lazy?: boolean;
-    }>('GET', `/api/crawl/${id}/directory-tree${q}`);
+  /**
+   * Full (capped) tree, or with lazy one directory at a time: path, offset/limit
+   * paging, depth 1-2. Lazy responses are shared for a short time (see
+   * getLazyDirTree), so Directory Tree and Treemap reuse one root request.
+   */
+  getDirectoryTree: (id: string, lazy?: DirTreeQuery): Promise<DirTreeResponse> => {
+    if (lazy) return getLazyDirTree(id, lazy);
+    return request<DirTreeResponse>('GET', `/api/crawl/${id}/directory-tree`);
   },
 
   deleteCrawl: (id: string) =>
@@ -170,21 +207,8 @@ export const api = {
     request<{ crawls: Array<{ id: string; seedUrl: string; mode: string; status: string; startedAt: string; completedAt: string | null; pageCount: number; errorCount: number; durationMs: number | null; stats?: Record<string, unknown> }>; total: number }>('GET', '/api/crawls'),
 
   // Diff
-  diffCrawls: (oldId: string, newId: string, fields?: string[]) =>
-    request<unknown>('POST', '/api/crawl/diff', { oldId, newId, fields }),
-
   compareCrawls: (oldId: string, newId: string) =>
     request<{ comparison: Record<string, unknown> }>('POST', '/api/crawl/diff', { oldId, newId, full: true }),
-
-  // Presets
-  listPresets: () =>
-    request<unknown[]>('GET', '/api/presets'),
-
-  savePreset: (name: string, config: Record<string, unknown>) =>
-    request<unknown>('POST', '/api/presets', { name, config }),
-
-  deletePreset: (id: string) =>
-    request<{ deleted: boolean }>('DELETE', `/api/presets/${id}`),
 
   // Settings
   getSettings: () =>
@@ -205,11 +229,6 @@ export const api = {
 
   deleteSchedule: (id: string) =>
     request<{ deleted: boolean }>('DELETE', `/api/schedules/${id}`),
-
-  // Log Analysis — single file (legacy)
-  uploadLog: async (file: File, format?: string) => {
-    return api.uploadLogs([file], format);
-  },
 
   // Log Analysis — one or more files merged into a single unified analysis job.
   uploadLogs: async (files: File[], format?: string) => {
@@ -235,9 +254,6 @@ export const api = {
 
   getLogBots: (id: string) =>
     request<Record<string, unknown>>('GET', `/api/logs/${id}/bots`),
-
-  getLogUrls: (id: string) =>
-    request<{ urls: Array<{ path: string; hits: number; botHits: number; humanHits: number; topBot: string; status: number }> }>('GET', `/api/logs/${id}/urls`),
 
   mergeLogWithCrawl: (logId: string, crawlId: string) =>
     request<Record<string, unknown>>('POST', `/api/logs/${logId}/merge`, { crawlId }),

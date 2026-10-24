@@ -40,16 +40,9 @@ func DetectNearOrphans(
 		minSourceDepth = 4
 	}
 
-	// Build reverse adjacency: target → source indices
-	reverseAdj := make([][]int32, graph.N)
-	for i := 0; i < graph.N; i++ {
-		for _, j := range graph.Neighbors(i) {
-			if int(j) >= len(reverseAdj) {
-				continue
-			}
-			reverseAdj[j] = append(reverseAdj[j], int32(i))
-		}
-	}
+	// Reverse adjacency (target → sources) as a one-off CSR: 4 bytes per
+	// edge instead of a slice header + growth slack per node.
+	reverse := graph.BuildReverse()
 
 	var nearOrphans []NearOrphanInfo
 
@@ -63,7 +56,7 @@ func DetectNearOrphans(
 		}
 
 		worstDepth := 0
-		for _, srcIdx := range reverseAdj[i] {
+		for _, srcIdx := range reverse.In(i) {
 			if int(srcIdx) >= graph.N {
 				continue
 			}
@@ -200,6 +193,23 @@ func GenerateLinkSuggestions(
 	indexable []bool,
 	opts LinkSuggestionsOptions,
 ) []types.LinkSuggestion {
+	return generateLinkSuggestions(graph, embeddings, clickDepths, func(i int) float64 {
+		return pageRanks[graph.URLs[i]]
+	}, inDegree, wordCounts, indexable, opts)
+}
+
+// generateLinkSuggestions is GenerateLinkSuggestions with PageRank read by
+// node index, so callers holding scores on pages need no URL-keyed map.
+func generateLinkSuggestions(
+	graph *AdjacencyGraph,
+	embeddings map[string][]float64,
+	clickDepths map[string]int,
+	pageRankOf func(node int) float64,
+	inDegree []int,
+	wordCounts []int32,
+	indexable []bool,
+	opts LinkSuggestionsOptions,
+) []types.LinkSuggestion {
 	if opts.MaxSuggestions == 0 {
 		opts = DefaultLinkSuggestionsOptions()
 	}
@@ -233,7 +243,7 @@ func GenerateLinkSuggestions(
 	// Cap candidates for performance
 	if len(sourceCandidates) > 500 {
 		sort.Slice(sourceCandidates, func(i, j int) bool {
-			return pageRanks[sourceCandidates[i].url] > pageRanks[sourceCandidates[j].url]
+			return pageRankOf(sourceCandidates[i].idx) > pageRankOf(sourceCandidates[j].idx)
 		})
 		sourceCandidates = sourceCandidates[:500]
 	}
@@ -271,7 +281,7 @@ func GenerateLinkSuggestions(
 			}
 
 			targetInDeg := inDegree[target.idx]
-			targetPR := pageRanks[target.url]
+			targetPR := pageRankOf(target.idx)
 			targetCD, targetCDOK := clickDepths[target.url]
 			sourceCD, sourceCDOK := clickDepths[source.url]
 

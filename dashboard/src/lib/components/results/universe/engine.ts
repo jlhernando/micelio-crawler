@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
+import { C, GRAPH_IN_COLOR, GRAPH_PALETTE, GRAPH_RAMP } from '../../../palette';
 
 export interface UniverseCard {
   i: number; url: string; title: string; pr: number; in: number; out: number; status: number; depth: number;
@@ -37,13 +38,13 @@ export interface Progress {
 }
 
 // Neighbouring entries contrast, since the biggest clusters take the first colours.
-export const PALETTE = ['#75a6ff', '#e5b66e', '#73d9ac', '#f2a3c7', '#b09aff', '#7fd3e6', '#c9b48a', '#aabddd'];
+export const PALETTE = GRAPH_PALETTE;
 export const DEPTH_COLORS = ['#4361ee', '#2ec4b6', '#f5a623', '#e63946', '#9b59b6', '#7d828a']; // 0..4, 5+
-export const RAMP = ['#4a5468', '#75a6ff', '#f2c46d']; // low, mid, high
+export const RAMP = GRAPH_RAMP; // low, mid, high
 export type ColorMode = 'cluster' | 'depth' | 'pagerank' | 'authority' | 'hub';
 export const OUT_COLOR = '#f2c46d';
-export const IN_COLOR = '#73d9ac';
-const ERROR_COLOR = '#f58f98';
+export const IN_COLOR = GRAPH_IN_COLOR;
+const ERROR_COLOR = C.danger;
 const MAX_FRAME_MS = 14; // stop loading more when a frame gets slower than this
 
 export function clusterColor(i: number) { return PALETTE[i % PALETTE.length]; }

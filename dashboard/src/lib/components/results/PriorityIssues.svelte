@@ -14,7 +14,7 @@
       { key:'title', label:'Missing titles', count:Number(stats.pagesWithoutTitle || 0), unit:'pages', priority:'Medium', evidence:'Observed missing tag', action:'Add a descriptive title to each page that should appear in search.', filter:'missing-title' },
       { key:'duplicates', label:'Duplicate titles', count:Number(stats.duplicateTitleCount || 0), unit:'pages', priority:'Medium', evidence:'Review recommended', action:'Check whether these pages serve different purposes before rewriting titles or consolidating URLs.', filter:'duplicate-titles' },
       { key:'description', label:'Missing descriptions', count:Number(stats.pagesWithoutDescription || 0), unit:'pages', priority:'Low', evidence:'Review recommended', action:'Prioritize useful descriptions for important landing pages. A missing description does not block indexing.', filter:'missing-description' },
-      { key:'orphans', label:'Possible orphan pages', count:orphans.length, unit:'candidates', priority:'Verify', evidence:'Incomplete link evidence', action:'No incoming links were recorded in this crawl. Check a broader crawl and sitemap or another URL source before calling these pages orphaned.', urls:orphans },
+      { key:'orphans', label:'Possible orphan pages', count:Number(stats.totalOrphanPages || orphans.length), unit:'candidates', priority:'Verify', evidence:'Incomplete link evidence', action:'No incoming links were recorded in this crawl. Check a broader crawl and sitemap or another URL source before calling these pages orphaned.', urls:orphans },
     );
     const rank: Record<string,number> = {High:0,Medium:1,Low:2,Verify:3};
     return rows.filter(r=>r.count>0).sort((a,b)=>rank[a.priority]-rank[b.priority] || b.count-a.count);
@@ -67,9 +67,9 @@
   article + article {border-top:1px solid var(--color-border);}
   .finding {display:grid;grid-template-columns:64px minmax(0,1fr) minmax(80px,180px) 125px;gap:16px;align-items:center;text-align:left;width:100%;padding:16px 0;cursor:pointer;}
   .finding:hover .finding-name strong {text-decoration:underline;}
-  .priority {font-size:11px;color:#e5b66e;}.priority.high{color:#f58f98;}
+  .priority {font-size:11px;color:var(--color-warning);}.priority.high{color:var(--color-danger);}
   .finding-name strong {font-size:13px;font-weight:500;} .finding-name small {display:block;color:var(--color-fg-2);font-size:11px;margin-top:4px;}
-  .bar {height:8px;border-radius:4px;background:var(--color-surface-3);overflow:hidden;}.bar i{display:block;height:100%;background:#b09aff;border-radius:4px;}
+  .bar {height:8px;border-radius:4px;background:var(--color-surface-3);overflow:hidden;}.bar i{display:block;height:100%;background:var(--color-purple);border-radius:4px;}
   .amount {text-align:right;font-size:11px;color:var(--color-fg-2);}.amount strong {font-size:17px;color:var(--color-fg);font-weight:500;}
   .finding-details {padding:0 0 18px 80px;font-size:12px;line-height:1.6;color:var(--color-fg-2);}.finding-details h3 {margin:14px 0 6px;color:var(--color-fg);font-size:11px;}
   .example-url {overflow-wrap:anywhere;padding:5px 0;}

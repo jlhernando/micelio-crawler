@@ -34,14 +34,18 @@
   let { crawlId }: { crawlId: string } = $props();
 
   let canvas = $state<HTMLCanvasElement>()!;
-  let tree = $state<TreeNode | null>(null);
+  // The tree is plain (not proxied): lazy loading appends children in place
+  // and bumps treeVersion; the canvas is redrawn imperatively. zoomStack and
+  // hoveredRect are raw too so they hold the same node objects, not proxies.
+  let tree = $state.raw<TreeNode | null>(null);
+  let treeVersion = $state(0);
   let totalPages = $state(0);
   let message = $state('');
   let loaded = $state(false);
   let loading = $state(false);
   let colorMode = $state<'depth' | 'indexability' | 'pagerank' | 'status'>('depth');
-  let zoomStack = $state<TreeNode[]>([]);
-  let hoveredRect = $state<Rect | null>(null);
+  let zoomStack = $state.raw<TreeNode[]>([]);
+  let hoveredRect = $state.raw<Rect | null>(null);
   let rects: Rect[] = [];
   let destroyed = false;
   let animProgress = 0; // 0-1 entrance animation
@@ -58,7 +62,7 @@
   let lazy = false;
 
   let currentNode = $derived(zoomStack.length > 0 ? zoomStack[zoomStack.length - 1] : tree);
-  let dirCount = $derived(tree ? countDirs(tree) : 0);
+  let dirCount = $derived(treeVersion >= 0 && tree ? countDirs(tree) : 0);
   let hasPageRank = $derived(tree ? tree.avgPageRank > 0 || (tree.children ?? []).some(c => c.avgPageRank > 0) : false);
 
   function countDirs(node: TreeNode): number {
@@ -96,11 +100,12 @@
     if (!data.lazy) {
       node.children = findByPath(data.tree as unknown as TreeNode, node.path)?.children ?? [];
       node.childCount = node.children.length;
-      return;
+    } else {
+      const kids = ((data.tree as unknown as TreeNode).children ?? []);
+      node.children = [...(node.children ?? []), ...kids];
+      node.childCount = (data.tree as unknown as TreeNode).childCount;
     }
-    const kids = ((data.tree as unknown as TreeNode).children ?? []);
-    node.children = [...(node.children ?? []), ...kids];
-    node.childCount = (data.tree as unknown as TreeNode).childCount;
+    treeVersion++;
   }
 
   function getColor(node: TreeNode, mode: string): string {

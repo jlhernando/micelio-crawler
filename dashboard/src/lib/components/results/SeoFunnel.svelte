@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { C } from '../../palette';
   let { stats, onFilter }: {
     stats: Record<string, unknown>;
     onFilter?: (filter: { classification?: string }) => void;
@@ -76,9 +77,9 @@
     return [
       { key: 'crawled', label: 'Crawled', count: f.crawled, pct: 100, dropOff: 0, color: '#8b949e' },
       { key: 'renderable', label: 'Renderable', count: f.renderable, pct: f.renderable / total * 100, dropOff: (f.crawled - f.renderable) / total * 100, color: '#79c0ff' },
-      { key: 'indexable', label: 'Indexable', count: f.indexable, pct: f.indexable / total * 100, dropOff: (f.renderable - f.indexable) / total * 100, color: '#75a6ff' },
-      { key: 'visible', label: 'Ranked', count: visibleTotal, pct: visibleTotal / total * 100, dropOff: (f.indexable - visibleTotal) / total * 100, color: '#e5b66e' },
-      { key: 'active', label: 'Converting', count: f.active, pct: f.active / total * 100, dropOff: (visibleTotal - f.active) / total * 100, color: '#73d9ac' },
+      { key: 'indexable', label: 'Indexable', count: f.indexable, pct: f.indexable / total * 100, dropOff: (f.renderable - f.indexable) / total * 100, color: C.blue },
+      { key: 'visible', label: 'Ranked', count: visibleTotal, pct: visibleTotal / total * 100, dropOff: (f.indexable - visibleTotal) / total * 100, color: C.warning },
+      { key: 'active', label: 'Converting', count: f.active, pct: f.active / total * 100, dropOff: (visibleTotal - f.active) / total * 100, color: C.success },
     ];
   });
 

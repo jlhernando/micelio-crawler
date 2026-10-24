@@ -2,6 +2,47 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.3.2] - 2026-10-24
+
+Kinder to the sites you crawl, much lighter on your machine, and a smaller dashboard.
+
+### Fixed: crawling politeness
+
+- **Crawls started from the dashboard ignored the delay.** The dashboard sent `delay` and the server read `delayMs`, so every dashboard crawl ran with no delay between requests. List mode from the dashboard also crawled nothing. Both now work.
+- **Adaptive rate no longer goes faster than your delay or the site's robots.txt Crawl-delay.** It used to speed up to 50 ms between requests. Each host now has its own rate.
+- **robots.txt follows Google's rules:** `*` and `$` wildcards, query strings, longest match wins, groups chosen by product token. It is fetched through your proxy, follows redirects, is parsed once per host, and is checked for every allowed domain, not only the start URL. Expect more URLs to be blocked than before.
+- **429 and 503 responses:** `Retry-After` pauses the host for all workers (up to 10 minutes). At most 3 attempts per URL. Timeouts and network errors also slow the crawl down.
+- **Non-HTML files** (PDFs, videos, archives) are no longer downloaded in full just to read the status code. At most 64 KB is read.
+- **Page weight checks** use the crawl's client and proxy, with at most 2 requests at a time per host.
+
+### Fixed: stability
+
+- Two requests to `/stats` at the same time could crash the server.
+- Diff crashed on the URLs and Technical tabs when a list was empty.
+
+### Changed: memory and speed (measured on 200,000 pages)
+
+- Stats are capped: long URL lists keep the top 1,000 plus a total, and PageRank is stored per page with a histogram. Stats JSON: 25.8 MB → 0.22 MB.
+- Pages are written in batches outside the crawl lock: 83.5 → 7.4 µs per page with 16 workers.
+- Inlinks use a shared reverse index: 2.7 ms → 42 ns per lookup. Self-links no longer count as inlinks anywhere.
+- The link graph, PageRank and HITS scores are stored in the crawl database, so reopening a crawl is about twice as fast. Authority and hub scores no longer reset to 0 after a restart.
+- Embeddings compare pages 37 times faster. Above 10,000 pages they compare pages within the same folder.
+- `/pages` caches sorted results; the crawl cache loads each crawl once and can evict by memory when `--memlimit` is set.
+- Custom-search regexes are compiled once.
+- Removed the unused `/api/crawl/{id}/results` and `/api/crawl/{id}/graph` endpoints, which could allocate several GB on large crawls.
+
+### Changed: dashboard
+
+- Main bundle: 827 KB → 369 KB (247 → 108 KB gzipped). Secondary pages, Explorer, Universe, Treemap and charts load when opened.
+- The Content tab's word-count histogram now covers every page (it fetched 50,000 pages and used 100).
+- Diff lists show 200 rows with "Show more".
+- One WebSocket for the whole dashboard; shared number, date and status formatting.
+- Removed 7 unused dependencies.
+
+### Docker
+
+- The Docker image now builds the Go binary with the embedded dashboard. It used to build the old TypeScript crawler. Add `--build-arg WITH_CHROMIUM=true` for JS rendering.
+
 ## [1.3.1] - 2026-10-24
 
 ### Added
@@ -95,6 +136,7 @@ A redesigned dashboard, clearer crawl results, and security fixes.
 
 First public release: spider, list, sitemap, HEAD-only and scheduled crawls; embedded web dashboard; SEO, content and link analysis; server log analysis; PSI, CrUX, GSC, GA4, Plausible and AI integrations; JS rendering; robots.txt testing; and an in-app updater.
 
+[1.3.2]: https://github.com/jlhernando/micelio-crawler/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/jlhernando/micelio-crawler/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/jlhernando/micelio-crawler/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/jlhernando/micelio-crawler/compare/v1.1.0...v1.2.0

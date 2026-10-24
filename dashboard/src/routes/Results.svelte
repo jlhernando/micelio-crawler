@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatMs } from '../lib/format';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
@@ -10,9 +11,6 @@
   import SummaryHeader from '../lib/components/results/SummaryHeader.svelte';
   import IssueCards from '../lib/components/results/IssueCards.svelte';
   import PagesTable from '../lib/components/results/PagesTable.svelte';
-  import GraphExplorer from '../lib/components/results/GraphExplorer.svelte';
-  import UniverseGraph from '../lib/components/results/UniverseGraph.svelte';
-  import SiteTreemap from '../lib/components/results/SiteTreemap.svelte';
   import DirectoryTree from '../lib/components/results/DirectoryTree.svelte';
   import AnchorCloud from '../lib/components/results/AnchorCloud.svelte';
   import SeoFunnel from '../lib/components/results/SeoFunnel.svelte';
@@ -42,7 +40,7 @@
 
   let loading = $state(true);
   let error = $state<string | null>(null);
-  let stats = $state<Record<string, unknown> | null>(null);
+  let stats = $state.raw<Record<string, unknown> | null>(null);
   let pageCount = $state(0);
   let crawlJob = $state<Record<string, unknown> | null>(null);
   let scopeUnavailable = $state(false);
@@ -65,7 +63,7 @@
   let filterGeneration = $state(0);
 
   // Store original unfiltered stats for restoring when filter is cleared
-  let baseStats = $state<Record<string, unknown> | null>(null);
+  let baseStats = $state.raw<Record<string, unknown> | null>(null);
   let basePageCount = $state(0);
   let filteredStatsLoading = $state(false);
   // True when stats hold a template subset merged over the whole-site stats.
@@ -132,8 +130,11 @@
   let readabilityStats = $derived((stats?.readabilityStats as { avgScore: number; difficult: { url: string; score: number }[]; veryEasy: { url: string; score: number }[] }) || null);
   let ngramStats = $derived((stats?.ngramStats as { unigrams: { term: string; count: number; tfidf: number }[]; bigrams: { term: string; count: number; tfidf: number }[]; totalPages: number; totalTokens: number }) || null);
   let nearDuplicates = $derived((stats?.nearDuplicateGroups as { urls: string[]; similarity: number }[]) || []);
-  let wordCountPages = $state<{ wordCount?: number }[]>([]);
-  let wordCountLoaded = $state(false);
+  type WordCountBuckets = { edges: number[]; counts: number[]; avgWords: number; pages: number };
+  // Older crawls get the histogram backfilled by /stats once pages are loaded.
+  let backfilledBuckets = $state.raw<WordCountBuckets | null>(null);
+  let wordCountRequested = false;
+  let wordCountBuckets = $derived((stats?.wordCountBuckets as WordCountBuckets | undefined) || backfilledBuckets);
   let textToCode = $derived((stats?.textToCodeStats as { avgRatio: number; contentPoor: { url: string; ratio: number }[] }) || null);
 
   // ── Link derived data ──
@@ -201,20 +202,19 @@
     return () => clearInterval(interval);
   });
 
-  // Lazy-load word counts when Content tab is opened
+  // The word-count histogram comes from stats.wordCountBuckets. Crawls analysed
+  // before that key existed get it backfilled by /stats once pages are loaded,
+  // so re-ask once when the Content tab opens.
   $effect(() => {
-    if (activeTab === 'content' && !wordCountLoaded && pagesReady) {
-      wordCountLoaded = true;
-      api.getCrawlPages(id, { limit: 50000 }).then((data: Record<string, unknown>) => {
-        wordCountPages = ((data.pages as { wordCount?: number }[]) || []);
+    if (activeTab === 'content' && pagesReady && stats && !stats.wordCountBuckets && !wordCountRequested) {
+      wordCountRequested = true;
+      api.getCrawlStats(id).then((data: Record<string, unknown>) => {
+        const s = data.stats as Record<string, unknown> | undefined;
+        backfilledBuckets = (s?.wordCountBuckets as WordCountBuckets | undefined) || null;
       }).catch((err: Error) => { console.warn('Failed to load word count data:', err.message); });
     }
   });
 
-  function formatMs(ms: number): string {
-    if (ms < 1000) return `${Math.round(ms)}ms`;
-    return `${(ms / 1000).toFixed(1)}s`;
-  }
 </script>
 
 <div class="max-w-7xl mx-auto space-y-4">
@@ -364,7 +364,7 @@
     {:else if activeTab === 'content'}
       <div class="space-y-4">
         <!-- Word Count Distribution -->
-        <WordCountHistogram pages={wordCountPages} />
+        <WordCountHistogram buckets={wordCountBuckets} />
 
         <!-- Text-to-Code Ratio -->
         {#if textToCode}
@@ -582,12 +582,21 @@
               {graphSubTab === 'explorer' ? 'Drill-down — start from homepage, expand one level at a time' : graphSubTab === 'universe' ? '3D map of the link structure: each page hangs from the page that links to it. Click a page for its links and a thumbnail' : 'Full-site overview — directories sized by page count'}
             </span>
           </div>
+          <!-- Graph views load on demand: the Explorer pulls in sigma + graphology. -->
           {#if graphSubTab === 'explorer'}
-            <GraphExplorer crawlId={id} focusUrl={explorerFocus} />
+            {#await import('../lib/components/results/GraphExplorer.svelte')}
+              <div class="rounded-xl border border-border bg-surface-2 p-5 text-xs text-fg-2">Loading explorer…</div>
+            {:then { default: GraphExplorer }}
+              <GraphExplorer crawlId={id} focusUrl={explorerFocus} />
+            {/await}
           {:else if graphSubTab === 'universe'}
-            <UniverseGraph crawlId={id} onOpenExplorer={(url) => { explorerFocus = url; graphSubTab = 'explorer'; }} />
+            {#await import('../lib/components/results/UniverseGraph.svelte') then { default: UniverseGraph }}
+              <UniverseGraph crawlId={id} onOpenExplorer={(url) => { explorerFocus = url; graphSubTab = 'explorer'; }} />
+            {/await}
           {:else}
-            <SiteTreemap crawlId={id} />
+            {#await import('../lib/components/results/SiteTreemap.svelte') then { default: SiteTreemap }}
+              <SiteTreemap crawlId={id} />
+            {/await}
           {/if}
         </div>
 

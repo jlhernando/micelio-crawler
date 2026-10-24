@@ -1,12 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { UniverseEngine, UniverseMeta, UniverseCard, NodeLinks, Progress, ColorMode } from './universe/engine.js';
+  // Same colours as the WebGL engine, shared via palette so this component
+  // does not pull the lazily loaded engine (three.js) into its chunk.
+  import { GRAPH_IN_COLOR, GRAPH_PALETTE } from '../../palette';
 
   let { crawlId, onOpenExplorer }: { crawlId: string; onOpenExplorer?: (url: string) => void } = $props();
 
-  const PALETTE = ['#75a6ff', '#e5b66e', '#73d9ac', '#f2a3c7', '#b09aff', '#7fd3e6', '#c9b48a', '#aabddd'];
+  const PALETTE = GRAPH_PALETTE;
   const OUT_COLOR = '#f2c46d';
-  const IN_COLOR = '#73d9ac';
+  const IN_COLOR = GRAPH_IN_COLOR;
   const DIM_LABELS: Record<string, string> = { section: 'Section', dir1: 'Folder', dir2: 'Subfolder', template: 'Template' };
   const PAGE_SIZE = 50;
 
@@ -320,13 +323,13 @@
           {/each}
         </div>
         <div class="relative mt-3">
-          <input class="w-full rounded-md border border-border bg-[#101112] px-3 py-1.5 text-xs text-fg placeholder:text-[#6e737a] focus:border-[#5a5f66] focus:outline-none"
+          <input class="w-full rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-fg placeholder:text-[#6e737a] focus:border-[#5a5f66] focus:outline-none"
             placeholder="Search pages by title or URL" bind:value={query} oninput={onSearch}
             onkeydown={(e) => { if (e.key === 'Enter' && hits[0]) pickHit(hits[0]); if (e.key === 'Escape') { query = ''; hits = []; e.stopPropagation(); } }} />
           {#if hits.length}
-            <div class="absolute left-0 right-0 top-full z-20 mt-1 max-h-72 overflow-auto rounded-md border border-border bg-[#171819] shadow-xl">
+            <div class="absolute left-0 right-0 top-full z-20 mt-1 max-h-72 overflow-auto rounded-md border border-border bg-surface-2 shadow-xl">
               {#each hits as h (h.i)}
-                <button class="block w-full px-3 py-2 text-left hover:bg-[#232527]" onclick={() => pickHit(h)}>
+                <button class="block w-full px-3 py-2 text-left hover:bg-surface-3" onclick={() => pickHit(h)}>
                   <div class="truncate text-xs text-fg">{h.title}</div>
                   <div class="truncate text-[10.5px] text-fg-2">{h.url} · PR {h.pr.toFixed(2)}</div>
                 </button>
@@ -440,7 +443,7 @@
 </div>
 
 <style>
-  .uv-root { height: clamp(620px, 78vh, 920px); background: radial-gradient(ellipse at 40% 45%, #17191b 0%, #101112 60%, #0d0e0f 100%); }
+  .uv-root { height: clamp(620px, 78vh, 920px); background: radial-gradient(ellipse at 40% 45%, #17191b 0%, var(--color-surface) 60%, #0d0e0f 100%); }
   .uv-panel { background: #171819f2; border: 1px solid var(--color-border); border-radius: 10px; backdrop-filter: blur(10px); box-shadow: 0 20px 50px #0007; }
   .uv-metrics { display: flex; width: max-content; border: 1px solid var(--color-border); border-radius: 10px; overflow: hidden; background: #171819cc; backdrop-filter: blur(8px); }
   .uv-metrics div { padding: 10px 16px; border-right: 1px solid var(--color-border); }
@@ -474,10 +477,10 @@
   :global(.uv-chip.uv-hide) { opacity: 0; pointer-events: none; }
   :global(.uv-marker) { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 4px #ffffff22, 0 0 18px #ffffff55; pointer-events: none; }
   .uv-switch { position: relative; width: 24px; height: 14px; border-radius: 999px; background: #3a3d41; transition: background 0.15s; }
-  .uv-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: #d2d4d7; transition: transform 0.15s; }
-  .uv-switch.on { background: #75a6ff; }
+  .uv-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--color-fg-1); transition: transform 0.15s; }
+  .uv-switch.on { background: var(--blue); }
   .uv-switch.on::after { transform: translateX(10px); }
-  .uv-ramp { width: 72px; height: 6px; border-radius: 3px; background: linear-gradient(90deg, #4a5468, #75a6ff, #f2c46d); }
+  .uv-ramp { width: 72px; height: 6px; border-radius: 3px; background: linear-gradient(90deg, #4a5468, var(--blue), #f2c46d); }
   :global(.uv-chip.uv-mono .uv-dot) { visibility: hidden; }
   .uv-line { display: inline-block; width: 14px; height: 2px; border-radius: 1px; }
 </style>

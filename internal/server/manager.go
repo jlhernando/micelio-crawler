@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,6 +46,7 @@ type CrawlResults struct {
 	loadingProgress atomic.Int32             // 0-100 progress of background page loading (lock-free)
 	loadCancel      context.CancelFunc       // cancels background page loading goroutine
 	mu              sync.RWMutex             // protects Pages during deferred analysis
+	views           pageViewCache            // /pages filter+sort results (pages_view.go)
 }
 
 // ActiveCrawl tracks a running crawl job.
@@ -95,6 +97,8 @@ type CrawlManager struct {
 	schedulers  map[string]*scheduler.Scheduler
 	onProgress  ProgressCallback
 	resultOrder []string
+	resultSize  map[string]int64 // estimated bytes per cached result
+	loads       *resultLoads
 	logBotIPs   map[string]map[string]map[string]struct{} // jobID -> bot -> IPs
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -107,6 +111,8 @@ func NewCrawlManager(store *UiStore) *CrawlManager {
 	return &CrawlManager{
 		store:      store,
 		results:    make(map[string]*CrawlResults),
+		resultSize: make(map[string]int64),
+		loads:      newResultLoads(),
 		schedulers: make(map[string]*scheduler.Scheduler),
 		ctx:        ctx,
 		cancel:     cancel,
@@ -614,7 +620,7 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		intLinksClose := result.InternalLinksClose
 		// Compute page weight before releasing CrawlResult
 		if crawlConfig.PageWeight && len(result.ResourceRefs) > 0 {
-			analysis.ComputePageWeight(pages, result.ResourceRefs, result.TransferSizes, crawlConfig.Concurrency, crawlConfig.UserAgent)
+			analysis.ComputePageWeight(ctx, pages, result.ResourceRefs, result.TransferSizes, crawlConfig.Concurrency, result.ResourceSizer)
 		} else if len(result.ResourceRefs) > 0 {
 			// Even without full page weight mode, populate from available data
 			analysis.AssignPageWeightFromRefs(pages, result.ResourceRefs, result.TransferSizes)
@@ -651,8 +657,8 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		// every edge from disk.
 		postCfg.Graph = coreGraph
 
-		// Assign PageRank scores to individual pages for the /pages API
-		assignPageRankScores(pages, crawlStats.PageRankScores)
+		// The reporter already stored PageRank on each page (stats keep only
+		// a histogram, plus the URL map for small crawls).
 
 		// Inlink counts feed segment stats and the /pages API, so compute them
 		// before stats are serialized. Pages no longer carry InternalLinks, so
@@ -692,6 +698,13 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		// Check if deferred analysis (link intelligence, embeddings) is needed
 		needsDeferred := crawlConfig.LinkIntelligence || (crawlConfig.Embeddings && crawlConfig.EmbeddingKey != "")
 
+		// Link graph + PageRank go to the crawl DB so reloads skip rebuilding
+		// them. Scores are copied now; the write happens in the background.
+		var coreSnap *analysisSnapshot
+		if dbPath != "" {
+			coreSnap = snapshotAnalysis(pages, coreGraph, true)
+		}
+
 		// Pre-compute aggregations before stripping (Anchors, InternalLinks, etc.)
 		anchorStats := anchorCloudToMap(crawlStats.AnchorCloud)
 		if anchorStats == nil {
@@ -730,19 +743,9 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		newResult.loadingProgress.Store(100)
 
 		m.mu.Lock()
-		// Cancel old result's background loading if present (e.g. from GetQuickStats)
-		if old := m.results[crawlID]; old != nil && old.loadCancel != nil {
-			old.loadCancel()
-		}
-		m.results[crawlID] = newResult
-		m.resultOrder = append(m.resultOrder, crawlID)
-		for len(m.resultOrder) > maxCachedResults {
-			m.evictOldestResult()
-		}
+		// Replaces (and cancels the background load of) any older entry.
+		m.cacheResultLocked(crawlID, newResult, pageCount)
 		m.mu.Unlock()
-
-		// Release core analysis memory back to OS
-		debug.FreeOSMemory()
 
 		// Clear active before emitting complete so listeners see no active crawl.
 		clearActive()
@@ -766,10 +769,16 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 						intLinksClose()
 					}
 				}()
-				m.runDeferredAnalysis(crawlID, pages, postCfg, crawlStats)
+				coreSnap.save(dbPath)
+				m.runDeferredAnalysis(crawlID, pages, postCfg, crawlStats, dbPath)
 			}()
-		} else if intLinksClose != nil {
-			intLinksClose()
+		} else {
+			if intLinksClose != nil {
+				intLinksClose()
+			}
+			if coreSnap != nil {
+				go coreSnap.save(dbPath)
+			}
 		}
 
 		return
@@ -787,7 +796,7 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 // runDeferredAnalysis runs link intelligence and embeddings in the background.
 // Updates cached results and persists stats when complete.
 // Receives crawlStats directly from RunCoreAnalysis to avoid JSON round-trip.
-func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageData, cfg analysis.PostProcessConfig, crawlStats types.CrawlStats) {
+func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageData, cfg analysis.PostProcessConfig, crawlStats types.CrawlStats, dbPath string) {
 	// Panic recovery: if analysis panics, clear pending flag so UI doesn't hang.
 	defer func() {
 		if r := recover(); r != nil {
@@ -846,6 +855,10 @@ func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageDa
 	graph := analysis.RunDeferredAnalysis(m.ctx, pages, cfg, &crawlStats)
 	// Link intelligence adds graph in-degree; refresh segment inlink averages.
 	refreshAutoSegmentStats(pages, &crawlStats)
+	// Store HITS scores with PageRank (the graph was stored after core analysis).
+	if dbPath != "" {
+		snapshotAnalysis(pages, graph, false).save(dbPath)
+	}
 
 	// Convert updated stats to map for JSON API
 	updatedData, err := json.Marshal(crawlStats)
@@ -904,6 +917,7 @@ func (m *CrawlManager) evictOldestResult() {
 		old.loadCancel()
 	}
 	delete(m.results, oldest)
+	delete(m.resultSize, oldest)
 }
 
 func (m *CrawlManager) emit(event ProgressEvent) {
@@ -935,6 +949,20 @@ func (m *CrawlManager) GetOrLoadResults(crawlID string) *CrawlResults {
 	}
 	m.mu.RUnlock()
 
+	// One load per crawl at a time: concurrent requests share it instead of
+	// each decoding every page.
+	return m.loads.do(crawlID, func() *CrawlResults { return m.loadResults(crawlID) })
+}
+
+// loadResults loads a completed crawl from its stats and crawl DB.
+func (m *CrawlManager) loadResults(crawlID string) *CrawlResults {
+	m.mu.RLock()
+	if r, ok := m.results[crawlID]; ok {
+		m.mu.RUnlock()
+		return r // cached while this call waited
+	}
+	m.mu.RUnlock()
+
 	// Try loading from persisted stats + crawl DB
 	job, err := m.store.GetCrawlJob(crawlID)
 	if err != nil || job == nil || job.Status != "completed" {
@@ -953,6 +981,8 @@ func (m *CrawlManager) GetOrLoadResults(crawlID string) *CrawlResults {
 	var inlinkIdx *inlinkIndex
 	var graph *analysis.AdjacencyGraph
 	if job.DBPath != "" {
+		m.loads.acquire(context.Background())
+		defer m.loads.release()
 		cs, csErr := storage.NewCrawlStore(job.DBPath)
 		if csErr == nil {
 			var loadErr error
@@ -998,11 +1028,7 @@ func (m *CrawlManager) GetOrLoadResults(crawlID string) *CrawlResults {
 		m.mu.Unlock()
 		return existing
 	}
-	m.results[crawlID] = result
-	m.resultOrder = append(m.resultOrder, crawlID)
-	for len(m.resultOrder) > maxCachedResults {
-		m.evictOldestResult()
-	}
+	m.cacheResultLocked(crawlID, result, max(job.PageCount, len(pages)))
 	m.mu.Unlock()
 
 	return result
@@ -1047,11 +1073,7 @@ func (m *CrawlManager) GetQuickStats(crawlID string) *CrawlResults {
 		loadCancel() // don't leak the context
 		return existing
 	}
-	m.results[crawlID] = result
-	m.resultOrder = append(m.resultOrder, crawlID)
-	for len(m.resultOrder) > maxCachedResults {
-		m.evictOldestResult()
-	}
+	m.cacheResultLocked(crawlID, result, job.PageCount)
 	m.mu.Unlock()
 
 	// Start background page loading with cancellable context
@@ -1072,6 +1094,12 @@ func (m *CrawlManager) loadPagesInBackground(ctx context.Context, crawlID string
 		result.loadingProgress.Store(100)
 		return
 	}
+
+	// Full loads hold every page in memory: run them one at a time.
+	if !m.loads.acquire(ctx) {
+		return // evicted while waiting
+	}
+	defer m.loads.release()
 
 	cs, csErr := storage.NewCrawlStore(result.DBPath)
 	if csErr != nil {
@@ -1266,6 +1294,21 @@ func configFromMap(m map[string]interface{}) types.CrawlConfig {
 	}
 	if v, ok := m["depth"]; ok && m["maxDepth"] == nil {
 		m["maxDepth"] = v
+	}
+	// The dashboard sends "delay" (ms) and "urlList" (one URL per line).
+	// Without these two mappings every dashboard crawl ran with no delay
+	// and list mode crawled nothing.
+	if v, ok := m["delay"]; ok && m["delayMs"] == nil {
+		m["delayMs"] = v
+	}
+	if v, ok := m["urlList"].(string); ok && m["urls"] == nil {
+		var urls []string
+		for _, line := range strings.Split(v, "\n") {
+			if s := strings.TrimSpace(line); s != "" {
+				urls = append(urls, s)
+			}
+		}
+		m["urls"] = urls
 	}
 
 	// Marshal to JSON then unmarshal to struct for reliable type conversion

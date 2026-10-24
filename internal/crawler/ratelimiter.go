@@ -5,16 +5,20 @@ import (
 	"math"
 	"math/rand/v2"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
 
-// tokenBucket enforces a global minimum interval between requests.
+// tokenBucket enforces a minimum interval between requests.
 // Unlike per-worker sleep, it guarantees even spacing across all concurrent workers.
+// It can also be paused (e.g. after a 429 with Retry-After) so every worker
+// sharing the bucket waits, not just the one that saw the error.
 type tokenBucket struct {
-	mu       sync.Mutex
-	interval time.Duration
-	next     time.Time
+	mu          sync.Mutex
+	interval    time.Duration
+	next        time.Time
+	pausedUntil time.Time
 }
 
 func newTokenBucket(interval time.Duration) *tokenBucket {
@@ -26,15 +30,31 @@ func newTokenBucket(interval time.Duration) *tokenBucket {
 func (tb *tokenBucket) Wait(ctx context.Context) {
 	tb.mu.Lock()
 	now := time.Now()
-	if now.Before(tb.next) {
-		wait := time.Until(tb.next)
-		tb.next = tb.next.Add(tb.interval)
-		tb.mu.Unlock()
-		sleepCtx(ctx, wait)
-		return
+	start := now
+	if tb.next.After(start) {
+		start = tb.next
 	}
-	tb.next = now.Add(tb.interval)
+	if tb.pausedUntil.After(start) {
+		start = tb.pausedUntil
+	}
+	tb.next = start.Add(tb.interval)
 	tb.mu.Unlock()
+
+	if wait := time.Until(start); wait > 0 {
+		sleepCtx(ctx, wait)
+	}
+	// A pause may have been set while we slept on a slot reserved earlier.
+	// Honor it so no request slips out during a server-requested backoff.
+	for ctx.Err() == nil {
+		tb.mu.Lock()
+		paused := tb.pausedUntil
+		tb.mu.Unlock()
+		wait := time.Until(paused)
+		if wait <= 0 {
+			return
+		}
+		sleepCtx(ctx, wait)
+	}
 }
 
 // SetInterval updates the gap between tokens dynamically.
@@ -44,12 +64,125 @@ func (tb *tokenBucket) SetInterval(d time.Duration) {
 	tb.mu.Unlock()
 }
 
+// Interval returns the current gap between tokens.
+func (tb *tokenBucket) Interval() time.Duration {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	return tb.interval
+}
+
+// PauseFor blocks every caller of Wait for at least d from now.
+// A shorter pause never shortens an existing longer one.
+func (tb *tokenBucket) PauseFor(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	until := time.Now().Add(d)
+	tb.mu.Lock()
+	if until.After(tb.pausedUntil) {
+		tb.pausedUntil = until
+	}
+	tb.mu.Unlock()
+}
+
+// hostRateLimiter keeps one token bucket per host so politeness (delay,
+// robots.txt Crawl-delay, Retry-After pauses) is enforced per server and
+// shared by all workers hitting that server.
+type hostRateLimiter struct {
+	mu       sync.Mutex
+	buckets  map[string]*tokenBucket
+	floors   map[string]time.Duration // per-host floor (robots.txt Crawl-delay)
+	base     time.Duration            // configured delay (global floor)
+	adaptive *AdaptiveRateLimiter     // optional
+}
+
+func newHostRateLimiter(base time.Duration, adaptive *AdaptiveRateLimiter) *hostRateLimiter {
+	return &hostRateLimiter{
+		buckets:  make(map[string]*tokenBucket),
+		floors:   make(map[string]time.Duration),
+		base:     base,
+		adaptive: adaptive,
+	}
+}
+
+// floorLocked returns the minimum interval for host. Caller holds h.mu.
+func (h *hostRateLimiter) floorLocked(host string) time.Duration {
+	f := h.base
+	if hf := h.floors[host]; hf > f {
+		f = hf
+	}
+	return f
+}
+
+func (h *hostRateLimiter) bucket(host string) *tokenBucket {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	b, ok := h.buckets[host]
+	if !ok {
+		interval := h.floorLocked(host)
+		if h.adaptive != nil {
+			if d := h.adaptive.currentDelayForDomain(host); d > interval {
+				interval = d
+			}
+		}
+		b = newTokenBucket(interval)
+		h.buckets[host] = b
+	}
+	return b
+}
+
+// Wait blocks until a request to rawURL's host may be sent.
+func (h *hostRateLimiter) Wait(ctx context.Context, rawURL string) {
+	h.bucket(extractDomain(rawURL)).Wait(ctx)
+}
+
+// SetHostFloor raises the minimum interval for a host (robots.txt Crawl-delay).
+func (h *hostRateLimiter) SetHostFloor(host string, d time.Duration) {
+	host = strings.ToLower(host)
+	h.mu.Lock()
+	if d > h.floors[host] {
+		h.floors[host] = d
+	}
+	floor := h.floorLocked(host)
+	b := h.buckets[host]
+	h.mu.Unlock()
+	if h.adaptive != nil {
+		h.adaptive.SetDomainMinDelay(host, floor)
+	}
+	if b != nil && b.Interval() < floor {
+		b.SetInterval(floor)
+	}
+}
+
+// SetInterval sets the bucket interval for rawURL's host, never below its floor.
+func (h *hostRateLimiter) SetInterval(rawURL string, d time.Duration) {
+	host := extractDomain(rawURL)
+	b := h.bucket(host)
+	h.mu.Lock()
+	if f := h.floorLocked(host); d < f {
+		d = f
+	}
+	h.mu.Unlock()
+	b.SetInterval(d)
+}
+
+// Interval returns the current interval for rawURL's host.
+func (h *hostRateLimiter) Interval(rawURL string) time.Duration {
+	return h.bucket(extractDomain(rawURL)).Interval()
+}
+
+// Pause makes every worker wait at least d before the next request to rawURL's host.
+func (h *hostRateLimiter) Pause(rawURL string, d time.Duration) {
+	h.bucket(extractDomain(rawURL)).PauseFor(d)
+}
+
 // AdaptiveRateLimiter dynamically adjusts request rate based on server feedback.
 // It tracks per-domain response times, error rates, and 429/503 signals.
+// The delay never drops below max(adaptiveMinDelay, base delay, per-domain floor).
 type AdaptiveRateLimiter struct {
 	mu          sync.Mutex
 	domains     map[string]*domainState
-	baseRate    time.Duration // initial delay between requests
+	baseRate    time.Duration // initial delay between requests (also the floor)
 	delayFactor float64       // Heritrix-style: delay = factor * avgResponseTime (0 = disabled)
 }
 
@@ -64,18 +197,20 @@ type domainState struct {
 }
 
 const (
-	adaptiveMinDelay     = 50 * time.Millisecond
-	adaptiveMaxDelay     = 30 * time.Second
-	adaptiveEMA          = 0.3  // weight for new samples in EMA
-	adaptiveSlowdownRT   = 2.0  // response time multiplier that triggers slowdown
-	adaptiveSpeedupRT    = 0.8  // response time multiplier that allows speedup
-	adaptiveBackoffMult  = 2.0  // multiply delay on error
-	adaptiveSpeedupMult  = 0.9  // multiply delay when conditions improve
-	adaptiveErrorWindow  = 30 * time.Second
+	adaptiveMinDelay    = 50 * time.Millisecond
+	adaptiveMaxDelay    = 30 * time.Second
+	adaptiveEMA         = 0.3 // weight for new samples in EMA
+	adaptiveSlowdownRT  = 2.0 // response time multiplier that triggers slowdown
+	adaptiveSpeedupRT   = 0.8 // response time multiplier that allows speedup
+	adaptiveBackoffMult = 2.0 // multiply delay on error
+	adaptiveSpeedupMult = 0.9 // multiply delay when conditions improve
+	adaptiveErrorWindow = 30 * time.Second
 )
 
 // NewAdaptiveRateLimiter creates a rate limiter with the given base delay.
-// delayFactor controls Heritrix-style delay: delay = max(minDelay, factor * avgResponseTime).
+// The base delay is also the floor: adaptive speedups never go below it
+// (nor below adaptiveMinDelay).
+// delayFactor controls Heritrix-style delay: delay = max(floor, factor * avgResponseTime).
 // Set delayFactor to 0 to use the original backoff/speedup logic.
 func NewAdaptiveRateLimiter(baseDelay time.Duration, delayFactor float64) *AdaptiveRateLimiter {
 	if baseDelay < adaptiveMinDelay {
@@ -91,19 +226,18 @@ func NewAdaptiveRateLimiter(baseDelay time.Duration, delayFactor float64) *Adapt
 func extractDomain(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return rawURL
+		return strings.ToLower(rawURL)
 	}
-	return parsed.Host
+	return strings.ToLower(parsed.Host)
 }
 
-func (rl *AdaptiveRateLimiter) getDomainState(domain string) *domainState {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
+// domainStateLocked returns (creating if needed) the state for domain. Caller holds rl.mu.
+func (rl *AdaptiveRateLimiter) domainStateLocked(domain string) *domainState {
 	ds, ok := rl.domains[domain]
 	if !ok {
 		ds = &domainState{
 			currentDelay: rl.baseRate,
-			minDelay:     adaptiveMinDelay,
+			minDelay:     rl.baseRate,
 			maxDelay:     adaptiveMaxDelay,
 		}
 		rl.domains[domain] = ds
@@ -111,23 +245,32 @@ func (rl *AdaptiveRateLimiter) getDomainState(domain string) *domainState {
 	return ds
 }
 
+// SetDomainMinDelay raises the floor for a domain (e.g. robots.txt Crawl-delay).
+func (rl *AdaptiveRateLimiter) SetDomainMinDelay(domain string, d time.Duration) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	ds := rl.domainStateLocked(strings.ToLower(domain))
+	if d > ds.minDelay {
+		ds.minDelay = d
+	}
+	if ds.maxDelay < ds.minDelay {
+		ds.maxDelay = ds.minDelay
+	}
+	if ds.currentDelay < ds.minDelay {
+		ds.currentDelay = ds.minDelay
+	}
+}
+
+func (rl *AdaptiveRateLimiter) currentDelayForDomain(domain string) time.Duration {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	return rl.domainStateLocked(domain).currentDelay
+}
+
 // Wait blocks until it's safe to send the next request to the given URL's domain.
 // Adds random jitter (0-50%) to avoid uniform request patterns that trigger bot detection.
 func (rl *AdaptiveRateLimiter) Wait(ctx context.Context, rawURL string) {
-	domain := extractDomain(rawURL)
-	rl.mu.Lock()
-	ds, ok := rl.domains[domain]
-	if !ok {
-		ds = &domainState{
-			currentDelay: rl.baseRate,
-			minDelay:     adaptiveMinDelay,
-			maxDelay:     adaptiveMaxDelay,
-		}
-		rl.domains[domain] = ds
-	}
-	delay := ds.currentDelay
-	rl.mu.Unlock()
-
+	delay := rl.currentDelayForDomain(extractDomain(rawURL))
 	if delay > 0 {
 		sleepCtx(ctx, jitter(delay))
 	}
@@ -139,12 +282,15 @@ func jitter(d time.Duration) time.Duration {
 }
 
 // RecordResponse updates the rate limiter with the result of a request.
+// statusCode 0 means a network error or timeout and is treated as a server
+// overload signal (same as 503).
 func (rl *AdaptiveRateLimiter) RecordResponse(rawURL string, statusCode int, responseTimeMs int64, rateLimitRemaining int, rateLimitResetSecs int) {
 	domain := extractDomain(rawURL)
-	ds := rl.getDomainState(domain)
 
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
+	ds := rl.domainStateLocked(domain)
+	defer ds.clamp()
 
 	rtMs := float64(responseTimeMs)
 
@@ -163,21 +309,19 @@ func (rl *AdaptiveRateLimiter) RecordResponse(rawURL string, statusCode int, res
 			if resetDelay > ds.currentDelay {
 				ds.currentDelay = resetDelay
 			}
-			if ds.currentDelay > ds.maxDelay {
-				ds.currentDelay = ds.maxDelay
-			}
 		}
 
-	case statusCode == 503 || statusCode == 504:
-		// Server overload: back off with smaller factor
+	case statusCode == 503 || statusCode == 504 || statusCode == 0:
+		// Server overload / timeout / network error: back off with smaller factor
 		ds.errorStreak++
 		factor := 1.5 + 0.5*float64(ds.errorStreak)
 		if factor > adaptiveBackoffMult {
 			factor = adaptiveBackoffMult
 		}
 		ds.currentDelay = time.Duration(float64(ds.currentDelay) * factor)
-		if ds.currentDelay > ds.maxDelay {
-			ds.currentDelay = ds.maxDelay
+		if statusCode == 503 {
+			// Treat 503 like a soft 429 for the speedup window.
+			ds.last429 = time.Now()
 		}
 
 	case statusCode >= 200 && statusCode < 400:
@@ -203,9 +347,6 @@ func (rl *AdaptiveRateLimiter) RecordResponse(rawURL string, statusCode int, res
 			// Original logic: response time based slowdown/speedup
 			if ds.avgResponseMs > 0 && rtMs > ds.avgResponseMs*adaptiveSlowdownRT {
 				ds.currentDelay = time.Duration(float64(ds.currentDelay) * 1.3)
-				if ds.currentDelay > ds.maxDelay {
-					ds.currentDelay = ds.maxDelay
-				}
 				return
 			}
 			speedup := false
@@ -214,34 +355,33 @@ func (rl *AdaptiveRateLimiter) RecordResponse(rawURL string, statusCode int, res
 					ds.currentDelay = time.Duration(float64(ds.currentDelay) * adaptiveSpeedupMult)
 					speedup = true
 				}
+				if !speedup && rateLimitRemaining > 10 {
+					ds.currentDelay = time.Duration(float64(ds.currentDelay) * adaptiveSpeedupMult)
+				}
 			}
-			if !speedup && rateLimitRemaining > 10 {
-				ds.currentDelay = time.Duration(float64(ds.currentDelay) * adaptiveSpeedupMult)
-			}
 		}
-		if ds.currentDelay < ds.minDelay {
-			ds.currentDelay = ds.minDelay
-		}
-		if ds.currentDelay > ds.maxDelay {
-			ds.currentDelay = ds.maxDelay
-		}
+	}
+}
+
+// clamp keeps currentDelay within [minDelay, maxDelay].
+func (ds *domainState) clamp() {
+	if ds.currentDelay < ds.minDelay {
+		ds.currentDelay = ds.minDelay
+	}
+	if ds.currentDelay > ds.maxDelay {
+		ds.currentDelay = ds.maxDelay
 	}
 }
 
 // CurrentDelay returns the current delay for a domain (for logging/monitoring).
 func (rl *AdaptiveRateLimiter) CurrentDelay(rawURL string) time.Duration {
-	domain := extractDomain(rawURL)
-	ds := rl.getDomainState(domain)
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	return ds.currentDelay
+	return rl.currentDelayForDomain(extractDomain(rawURL))
 }
 
 // AvgResponseTime returns the current EMA response time for a domain.
 func (rl *AdaptiveRateLimiter) AvgResponseTime(rawURL string) float64 {
-	domain := extractDomain(rawURL)
-	ds := rl.getDomainState(domain)
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
+	ds := rl.domainStateLocked(extractDomain(rawURL))
 	return math.Round(ds.avgResponseMs*100) / 100
 }

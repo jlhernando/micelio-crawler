@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCompact } from '../../format';
   let { stats, pageCount }: { stats: Record<string, unknown>; pageCount: number } = $props();
 
   let scoreData = $derived.by(() => {
@@ -64,13 +65,6 @@
   let color = $derived(score < 0 ? 'var(--color-fg-2)' : score >= 80 ? 'var(--color-success)' : score >= 60 ? 'var(--color-warning)' : 'var(--color-danger)');
   let label = $derived(score < 0 ? '—' : score >= 80 ? 'Good' : score >= 60 ? 'Needs Work' : 'Poor');
 
-  function compact(n: number): string {
-    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
-    if (n >= 10_000) return (n / 1_000).toFixed(0) + 'K';
-    if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
-    return n.toString();
-  }
-
   const radius = 40;
   const circumference = 2 * Math.PI * radius;
   let dashOffset = $derived(score < 0 ? circumference : circumference - (score / 100) * circumference);
@@ -91,10 +85,10 @@
       {#if score >= 0}
         <div class="flex gap-1.5 mt-0.5">
           {#if scoreData.critical > 0}
-            <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-danger/20 text-danger" title="{scoreData.critical.toLocaleString()} critical issues">{compact(scoreData.critical)}</span>
+            <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-danger/20 text-danger" title="{scoreData.critical.toLocaleString()} critical issues">{formatCompact(scoreData.critical)}</span>
           {/if}
           {#if scoreData.warning > 0}
-            <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-warning/20 text-warning" title="{scoreData.warning.toLocaleString()} warnings">{compact(scoreData.warning)}</span>
+            <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-warning/20 text-warning" title="{scoreData.warning.toLocaleString()} warnings">{formatCompact(scoreData.warning)}</span>
           {/if}
           {#if scoreData.critical === 0 && scoreData.warning === 0}
             <span class="text-xs text-success">No issues</span>

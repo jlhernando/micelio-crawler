@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pct } from '../../format';
   interface ScoreEntry { url: string; score: number; }
 
   let { liStats }: { liStats: Record<string, unknown> } = $props();
@@ -27,9 +28,6 @@
     totalLinks ? ((positions.content ?? 0) + (positions.related ?? 0) + (positions.comments ?? 0)) / totalLinks : 0,
   );
 
-  function pct(n: number): string {
-    return totalLinks ? `${((n / totalLinks) * 100).toFixed(1)}%` : '0%';
-  }
 </script>
 
 {#if totalLinks > 0 || mostConnected.length > 0 || mostIsolated.length > 0}
@@ -46,14 +44,14 @@
         </div>
         <div class="flex h-3 w-full overflow-hidden rounded-full bg-surface-3" role="img" aria-label="Internal links by page zone">
           {#each zones as z (z.key)}
-            <div style="width: {(z.count / totalLinks) * 100}%; background: {z.color}" title="{z.label}: {z.count.toLocaleString()} ({pct(z.count)})"></div>
+            <div style="width: {(z.count / totalLinks) * 100}%; background: {z.color}" title="{z.label}: {z.count.toLocaleString()} ({pct(z.count, totalLinks)})"></div>
           {/each}
         </div>
         <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-fg-2">
           {#each zones as z (z.key)}
             <span class="inline-flex items-center gap-1.5">
               <span class="inline-block h-2 w-2 rounded-full" style="background: {z.color}"></span>
-              {z.label} <span class="tabular-nums text-fg">{z.count.toLocaleString()}</span> ({pct(z.count)})
+              {z.label} <span class="tabular-nums text-fg">{z.count.toLocaleString()}</span> ({pct(z.count, totalLinks)})
             </span>
           {/each}
         </div>

@@ -1,222 +1,144 @@
 <script lang="ts">
   import { formatDateTime, formatDuration } from '../lib/format';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
+  import ScheduleForm from '../lib/components/schedule/ScheduleForm.svelte';
   import { onMount } from 'svelte';
-  import { api, type ScheduleState } from '../lib/api';
+  import { api, type ScheduleState, type PrecheckResult } from '../lib/api';
 
   let loading = $state(true);
   let schedules = $state<ScheduleState[]>([]);
   let error = $state<string | null>(null);
   let showForm = $state(false);
-  let creating = $state(false);
-  let deleting = $state<string | null>(null);
+  let busy = $state<string | null>(null);
+  let checks = $state<Record<string, PrecheckResult>>({});
 
-  // Form state
+  // Quick form: the basics. "Schedule…" on New Crawl schedules any crawl config.
+  let formMode = $state<'spider' | 'sitemap'>('spider');
   let formUrl = $state('');
-  let formCron = $state('@daily');
-  let formCustomCron = $state('');
-  let formDepth = $state(10);
   let formLimit = $state(1000);
-  let formConcurrency = $state(5);
-  let formDelay = $state(200);
-  let formWebhook = $state('');
-  let formError = $state<string | null>(null);
+  let formConcurrency = $state(4);
+  let formDelay = $state(500);
 
-  const cronPresets = [
-    { label: 'Every hour', value: '@hourly' },
-    { label: 'Every day at midnight', value: '@daily' },
-    { label: 'Every Monday at midnight', value: '0 9 * * 1' },
-    { label: 'First of every month', value: '@monthly' },
-    { label: 'Custom', value: 'custom' },
-  ];
+  function quickConfig(): Record<string, unknown> {
+    const u = formUrl.trim();
+    if (!u) throw new Error('URL is required');
+    const base = { mode: formMode, limit: formLimit, depth: 20, concurrency: formConcurrency, delay: formDelay, adaptiveRate: true, respectRobots: true, linkIntelligence: true };
+    return formMode === 'sitemap' ? { ...base, sitemapUrls: u.split(/\s+/).filter(Boolean) } : { ...base, seedUrl: u };
+  }
 
-  onMount(() => { loadSchedules(); });
+  onMount(() => {
+    loadSchedules();
+    const t = setInterval(loadSchedules, 15000); // runs and checks change in the background
+    return () => clearInterval(t);
+  });
 
   async function loadSchedules() {
     try {
       schedules = await api.listSchedules();
-      loading = false;
     } catch (err) {
       error = (err as Error).message;
+    } finally {
       loading = false;
     }
   }
 
-  async function createSchedule() {
-    formError = null;
-    if (!formUrl) { formError = 'URL is required'; return; }
-
-    const cron = formCron === 'custom' ? formCustomCron : formCron;
-    if (!cron) { formError = 'Cron expression is required'; return; }
-
-    creating = true;
+  async function act(id: string, fn: () => Promise<unknown>) {
+    busy = id;
+    error = null;
     try {
-      await api.createSchedule({
-        url: formUrl,
-        cron,
-        depth: formDepth,
-        limit: formLimit,
-        concurrency: formConcurrency,
-        delay: formDelay,
-        webhook: formWebhook || undefined,
-      });
-      showForm = false;
-      formUrl = '';
-      formCron = '@daily';
-      formCustomCron = '';
-      formWebhook = '';
+      await fn();
       await loadSchedules();
     } catch (err) {
-      formError = (err as Error).message;
-    } finally {
-      creating = false;
-    }
-  }
-
-  async function deleteSchedule(id: string) {
-    deleting = id;
-    try {
-      await api.deleteSchedule(id);
-      schedules = schedules.filter(s => s.id !== id);
-    } catch (err) {
       error = (err as Error).message;
     } finally {
-      deleting = null;
+      busy = null;
     }
   }
 
-  function statusBadge(status: string | undefined): string {
-    if (status === 'success') return 'bg-success/20 text-success';
-    if (status === 'failed') return 'bg-danger/20 text-danger';
+  const runNow = (id: string) => act(id, () => api.runSchedule(id));
+  const checkNow = (id: string) => act(id, async () => { checks[id] = await api.checkSchedule(id); });
+  const remove = (id: string) => act(id, () => api.deleteSchedule(id));
+
+  function statusBadge(s: ScheduleState): string {
+    if (s.running) return s.paused ? 'bg-warning/20 text-warning' : 'bg-accent/20 text-accent';
+    if (s.lastStatus === 'success') return 'bg-success/20 text-success';
+    if (s.lastStatus === 'failed') return 'bg-danger/20 text-danger';
+    if (s.lastStatus === 'skipped' || s.lastStatus === 'stopped') return 'bg-warning/20 text-warning';
     return 'bg-surface-3 text-fg-2';
   }
+  function statusLabel(s: ScheduleState): string {
+    if (s.running) return s.paused ? 'paused' : 'running';
+    return s.lastStatus || 'never run';
+  }
+  function modeOf(s: ScheduleState): string {
+    const m = (s.crawlConfig?.mode as string) || 'spider';
+    const limit = s.crawlConfig?.limit ?? s.crawlConfig?.maxPages;
+    return limit ? `${m} · ${Number(limit).toLocaleString()} pages` : m;
+  }
+  function checkLabel(s: ScheduleState): string {
+    const p = s.precheck;
+    if (!p || (!p.egressCidrs?.length && !(p as { command?: string }).command)) return '';
+    const parts = [];
+    if (p.egressCidrs?.length) parts.push(`IP in ${p.egressCidrs.length} range${p.egressCidrs.length > 1 ? 's' : ''}`);
+    if ((p as { command?: string }).command) parts.push('command');
+    return parts.join(' + ');
+  }
+  const field = 'w-full px-3 py-2 rounded-md border border-border bg-surface-1 text-fg text-sm focus:outline-none focus:border-accent';
 </script>
 
-<div class="max-w-5xl mx-auto">
-  <PageHeading title="Schedules" description="Set recurring crawls and review their next run and latest outcome." section="Automation" />
+<div class="max-w-6xl mx-auto">
+  <PageHeading title="Schedules" description="Recurring crawls. Each run appears in History, so you can compare runs and get alerts." section="Automation" />
   <div class="flex items-center justify-between mb-6">
-    <div>
-      <h2 class="text-sm font-medium text-fg">Recurring crawls</h2>
-
-    </div>
-    <button
-      class="px-4 py-2 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent/90 transition-colors cursor-pointer"
-      onclick={() => { showForm = !showForm; }}
-    >
+    <p class="text-xs text-fg-2">To schedule any crawl setup (sitemaps, filters, extractions…), use <a class="underline hover:text-fg" href="#/setup">New Crawl</a> → Schedule….</p>
+    <button class="px-4 py-2 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent/90 transition-colors cursor-pointer" onclick={() => { showForm = !showForm; }}>
       {showForm ? 'Cancel' : 'New Schedule'}
     </button>
   </div>
 
-  {#if error}
-    <div class="mb-4 px-4 py-3 rounded-md bg-danger/10 text-danger text-sm">{error}</div>
-  {/if}
+  {#if error}<div class="mb-4 px-4 py-3 rounded-md bg-danger/10 text-danger text-sm">{error}</div>{/if}
 
   {#if !loading && schedules.length > 0}
     <dl class="metric-strip">
-      <div><dt>Schedules</dt><dd>{schedules.length}</dd><small>Recurring crawls</small></div>
+      <div><dt>Schedules</dt><dd>{schedules.length}</dd><small>{schedules.filter((s) => s.active).length} active</small></div>
       <div><dt>Total runs</dt><dd>{schedules.reduce((sum, s) => sum + s.totalRuns, 0).toLocaleString()}</dd><small>Across all schedules</small></div>
-      <div><dt>Last run succeeded</dt><dd class="text-success">{schedules.filter(s => s.lastStatus === 'success').length}</dd><small>Schedules with a successful last run</small></div>
-      <div><dt>Need attention</dt><dd class="text-danger">{schedules.filter(s => s.lastStatus === 'failed').length}</dd><small>Schedules with a failed last run</small></div>
+      <div><dt>Last run succeeded</dt><dd class="text-success">{schedules.filter((s) => s.lastStatus === 'success').length}</dd><small>Schedules</small></div>
+      <div><dt>Need attention</dt><dd class="text-danger">{schedules.filter((s) => s.lastStatus && s.lastStatus !== 'success').length}</dd><small>Failed, skipped or stopped</small></div>
     </dl>
   {/if}
 
-  <!-- Create form -->
   {#if showForm}
-    <div class="mb-6 p-5 rounded-lg border border-border bg-surface-2">
-      <h2 class="text-lg font-semibold text-fg mb-4">Create Schedule</h2>
-
-      {#if formError}
-        <div class="mb-4 px-4 py-2 rounded-md bg-danger/10 text-danger text-sm">{formError}</div>
-      {/if}
-
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div class="md:col-span-2">
-          <label for="sched-url" class="block text-sm text-fg-2 mb-1">URL</label>
-          <input
-            id="sched-url"
-            type="url"
-            bind:value={formUrl}
-            placeholder="https://example.com"
-            class="w-full px-3 py-2 rounded-md border border-border bg-surface-1 text-fg text-sm focus:outline-none focus:border-accent"
-          />
-        </div>
-
+    <div class="mb-6 p-5 rounded-lg border border-border bg-surface-2 space-y-4">
+      <h2 class="text-lg font-semibold text-fg">Create schedule</h2>
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div>
-          <label for="sched-cron" class="block text-sm text-fg-2 mb-1">Schedule</label>
-          <select
-            id="sched-cron"
-            bind:value={formCron}
-            class="w-full px-3 py-2 rounded-md border border-border bg-surface-1 text-fg text-sm focus:outline-none focus:border-accent"
-          >
-            {#each cronPresets as preset}
-              <option value={preset.value}>{preset.label}</option>
-            {/each}
+          <label for="q-mode" class="block text-sm text-fg-2 mb-1">Mode</label>
+          <select id="q-mode" class={field} bind:value={formMode}>
+            <option value="spider">Spider from a URL</option>
+            <option value="sitemap">Sitemap URLs</option>
           </select>
         </div>
-
-        {#if formCron === 'custom'}
-          <div>
-            <label for="sched-custom-cron" class="block text-sm text-fg-2 mb-1">Cron Expression</label>
-            <input
-              id="sched-custom-cron"
-              type="text"
-              bind:value={formCustomCron}
-              placeholder="0 9 * * 1"
-              class="w-full px-3 py-2 rounded-md border border-border bg-surface-1 text-fg text-sm font-mono focus:outline-none focus:border-accent"
-            />
-            <p class="text-xs text-fg-2 mt-1">Format: minute hour day-of-month month day-of-week</p>
-          </div>
-        {/if}
-
+        <div class="md:col-span-3">
+          <label for="q-url" class="block text-sm text-fg-2 mb-1">{formMode === 'sitemap' ? 'Sitemap URLs (space or line separated)' : 'Start URL'}</label>
+          <input id="q-url" class={field} bind:value={formUrl} placeholder={formMode === 'sitemap' ? 'https://example.com/sitemap.xml' : 'https://example.com'} />
+        </div>
         <div>
-          <label for="sched-depth" class="block text-sm text-fg-2 mb-1">Depth</label>
-          <input id="sched-depth" type="number" bind:value={formDepth} min="1" max="100"
-            class="w-full px-3 py-2 rounded-md border border-border bg-surface-1 text-fg text-sm focus:outline-none focus:border-accent" />
+          <label for="q-limit" class="block text-sm text-fg-2 mb-1">Page limit</label>
+          <input id="q-limit" type="number" min="1" class={field} bind:value={formLimit} />
         </div>
-
         <div>
-          <label for="sched-limit" class="block text-sm text-fg-2 mb-1">Page Limit</label>
-          <input id="sched-limit" type="number" bind:value={formLimit} min="1"
-            class="w-full px-3 py-2 rounded-md border border-border bg-surface-1 text-fg text-sm focus:outline-none focus:border-accent" />
+          <label for="q-conc" class="block text-sm text-fg-2 mb-1">Concurrency</label>
+          <input id="q-conc" type="number" min="1" max="50" class={field} bind:value={formConcurrency} />
         </div>
-
         <div>
-          <label for="sched-concurrency" class="block text-sm text-fg-2 mb-1">Concurrency</label>
-          <input id="sched-concurrency" type="number" bind:value={formConcurrency} min="1" max="50"
-            class="w-full px-3 py-2 rounded-md border border-border bg-surface-1 text-fg text-sm focus:outline-none focus:border-accent" />
+          <label for="q-delay" class="block text-sm text-fg-2 mb-1">Delay (ms)</label>
+          <input id="q-delay" type="number" min="0" class={field} bind:value={formDelay} />
         </div>
-
-        <div>
-          <label for="sched-delay" class="block text-sm text-fg-2 mb-1">Delay (ms)</label>
-          <input id="sched-delay" type="number" bind:value={formDelay} min="0"
-            class="w-full px-3 py-2 rounded-md border border-border bg-surface-1 text-fg text-sm focus:outline-none focus:border-accent" />
-        </div>
-
-        <div class="md:col-span-2">
-          <label for="sched-webhook" class="block text-sm text-fg-2 mb-1">Webhook URL <span class="text-fg-2/50">(optional)</span></label>
-          <input
-            id="sched-webhook"
-            type="url"
-            bind:value={formWebhook}
-            placeholder="https://hooks.slack.com/services/..."
-            class="w-full px-3 py-2 rounded-md border border-border bg-surface-1 text-fg text-sm focus:outline-none focus:border-accent"
-          />
-        </div>
+        <div class="text-xs text-fg-2 self-end pb-2">Adaptive rate, robots.txt and link intelligence on.</div>
       </div>
-
-      <div class="flex justify-end mt-5">
-        <button
-          class="px-4 py-2 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent/90 transition-colors disabled:opacity-50 cursor-pointer"
-          disabled={creating}
-          onclick={createSchedule}
-        >
-          {creating ? 'Creating...' : 'Create Schedule'}
-        </button>
-      </div>
+      <ScheduleForm config={quickConfig} onCreated={() => { showForm = false; formUrl = ''; loadSchedules(); }} />
     </div>
   {/if}
 
-  <!-- Schedule list -->
   {#if loading}
     <div class="flex items-center justify-center py-12">
       <div class="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>
@@ -224,61 +146,60 @@
     </div>
   {:else if schedules.length === 0}
     <div class="text-center py-16">
-      <div class="text-fg-2 text-4xl mb-3">&#128197;</div>
       <p class="text-fg-2">No scheduled crawls yet.</p>
-      <p class="text-fg-2 text-sm mt-1">Create a schedule to automatically crawl a site on a recurring basis.</p>
+      <p class="text-fg-2 text-sm mt-1">Create a schedule to crawl a site on a recurring basis.</p>
     </div>
   {:else}
-    <div class="rounded-lg border border-border overflow-hidden">
+    <div class="rounded-lg border border-border overflow-x-auto">
       <table class="w-full text-sm">
         <thead class="bg-surface-2">
           <tr class="text-left text-xs text-fg-2 border-b border-border">
-            <th class="px-4 py-3">URL</th>
-            <th class="px-3 py-3 hidden sm:table-cell">Schedule</th>
-            <th class="px-3 py-3 hidden md:table-cell">Last Run</th>
-            <th class="px-3 py-3 hidden md:table-cell">Next Run</th>
-            <th class="px-3 py-3 hidden sm:table-cell">Runs</th>
-            <th class="px-3 py-3 w-20"></th>
+            <th class="px-4 py-3">Schedule</th>
+            <th class="px-3 py-3">When</th>
+            <th class="px-3 py-3">Only when</th>
+            <th class="px-3 py-3">Last run</th>
+            <th class="px-3 py-3">Next run</th>
+            <th class="px-3 py-3"></th>
           </tr>
         </thead>
         <tbody>
-          {#each schedules as schedule}
-            <tr class="border-b border-border/50 hover:bg-surface-3/50 transition-colors">
-              <td class="px-4 py-3">
-                <div class="font-mono text-xs text-accent truncate max-w-xs">{schedule.url}</div>
+          {#each schedules as s (s.id)}
+            {@const ck = checks[s.id] ?? s.lastCheck}
+            <tr class="border-b border-border/50 align-top hover:bg-surface-3/50 transition-colors">
+              <td class="px-4 py-3 max-w-xs">
+                <div class="text-fg text-sm truncate">{s.name || s.url}</div>
+                {#if s.name}<div class="font-mono text-[11px] text-fg-2 truncate">{s.url}</div>{/if}
+                <div class="text-[11px] text-fg-2 mt-0.5">{modeOf(s)}{s.source === 'cli' ? ' · CLI' : ''}{s.active ? '' : ' · inactive'}</div>
               </td>
-              <td class="px-3 py-3 text-fg-2 hidden sm:table-cell">
-                <span class="text-fg text-xs">{schedule.description || schedule.cron}</span>
-              </td>
-              <td class="px-3 py-3 hidden md:table-cell">
-                {#if schedule.lastRun}
-                  <div class="flex items-center gap-2">
-                    <span class="inline-block px-1.5 py-0.5 rounded text-xs {statusBadge(schedule.lastStatus)}">
-                      {schedule.lastStatus || 'unknown'}
-                    </span>
-                    <span class="text-fg-2 text-xs">{formatDateTime(schedule.lastRun)}</span>
-                  </div>
-                  <div class="text-xs text-fg-2 mt-0.5">
-                    {schedule.lastPages.toLocaleString()} pages in {formatDuration(schedule.lastDurationMs)}
-                  </div>
+              <td class="px-3 py-3 text-xs text-fg">{s.description || s.cron}</td>
+              <td class="px-3 py-3 text-xs">
+                {#if checkLabel(s)}
+                  <div class="text-fg-1">{checkLabel(s)}</div>
+                  {#if ck}
+                    <div class="mt-0.5 {ck.ok ? 'text-success' : 'text-danger'}" title={ck.at}>{ck.ok ? 'passing' : ck.reason}</div>
+                  {/if}
                 {:else}
-                  <span class="text-fg-2 text-xs">Never</span>
+                  <span class="text-fg-2">—</span>
                 {/if}
               </td>
-              <td class="px-3 py-3 text-fg-2 text-xs hidden md:table-cell">
-                {formatDateTime(schedule.nextRun)}
+              <td class="px-3 py-3 text-xs">
+                <span class="inline-block px-1.5 py-0.5 rounded {statusBadge(s)}">{statusLabel(s)}</span>
+                {#if s.lastRun}<span class="text-fg-2 ml-1">{formatDateTime(s.lastRun)}</span>{/if}
+                {#if s.lastReason}<div class="text-fg-2 mt-0.5 max-w-[260px]">{s.lastReason}</div>{/if}
+                {#if s.lastRun && s.lastStatus !== 'skipped'}
+                  <div class="text-fg-2 mt-0.5">{s.lastPages.toLocaleString()} pages in {formatDuration(s.lastDurationMs)}</div>
+                {/if}
+                {#if s.lastCrawlId}<a class="text-accent hover:underline" href="#/results/{s.lastCrawlId}">Open crawl →</a>{/if}
               </td>
-              <td class="px-3 py-3 text-fg-2 font-mono text-xs hidden sm:table-cell">
-                {schedule.totalRuns}
-              </td>
-              <td class="px-3 py-3">
-                <button
-                  class="px-2 py-1 text-xs text-danger hover:bg-danger/10 rounded transition-colors cursor-pointer disabled:opacity-50"
-                  disabled={deleting === schedule.id}
-                  onclick={() => deleteSchedule(schedule.id)}
-                >
-                  {deleting === schedule.id ? '...' : 'Delete'}
-                </button>
+              <td class="px-3 py-3 text-xs text-fg-2">{formatDateTime(s.nextRun)}</td>
+              <td class="px-3 py-3 whitespace-nowrap text-right">
+                {#if s.active}
+                  <button class="px-2 py-1 text-xs text-fg-1 hover:text-fg rounded cursor-pointer disabled:opacity-50" disabled={busy === s.id || s.running} onclick={() => runNow(s.id)}>Run now</button>
+                  {#if checkLabel(s)}
+                    <button class="px-2 py-1 text-xs text-fg-1 hover:text-fg rounded cursor-pointer disabled:opacity-50" disabled={busy === s.id} onclick={() => checkNow(s.id)}>Test check</button>
+                  {/if}
+                {/if}
+                <button class="px-2 py-1 text-xs text-danger hover:bg-danger/10 rounded cursor-pointer disabled:opacity-50" disabled={busy === s.id} onclick={() => remove(s.id)}>Delete</button>
               </td>
             </tr>
           {/each}

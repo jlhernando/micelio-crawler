@@ -2,6 +2,28 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.3.3] - 2026-10-25
+
+Scheduled crawls get the full crawl setup, show up in History, and can be limited to an allowed network.
+
+### Added
+
+- **Schedule any crawl.** "Schedule…" on New Crawl schedules the current setup: sitemap or list mode, include/exclude patterns, adaptive rate, extractions and every other option. The Schedules page keeps a quick form.
+- **Runs appear in History.** Each scheduled run is a normal crawl, tagged with its schedule, so you can open it, compare runs with Diff and get alerts.
+- **Schedules survive restarts.** Dashboard schedules are saved and resume when Micelio starts.
+- **"Only run when…" checks.** Limit runs to a public IP range (for example, your office network). A failing check skips the run with a reason. During a crawl the check repeats every minute: the crawl pauses until it passes again and stops (with analysis) after 6 hours paused.
+- **Run now** and **Test check** buttons, the reason for skipped or stopped runs, and a link to the last run's crawl.
+- Webhooks also report skipped and stopped runs (`crawl_skipped`, `crawl_stopped`) with a reason.
+- **CLI:** `micelio schedule --config file.json` takes a crawl config in the dashboard's JSON format. New flags: `--name`, `--precheck-egress`, `--precheck-cmd` (shell command that must exit 0; CLI only), `--precheck-interval` and `--check-only`.
+
+### Changed
+
+- Signal and report descriptions now describe Micelio's crawl-time proxies plainly and point to Search Console, logs and analytics for validation.
+
+### Fixed
+
+- A flaky server test that raced post-crawl work against temp-dir cleanup.
+
 ## [1.3.2] - 2026-10-24
 
 Kinder to the sites you crawl, much lighter on your machine, and a smaller dashboard.
@@ -136,6 +158,7 @@ A redesigned dashboard, clearer crawl results, and security fixes.
 
 First public release: spider, list, sitemap, HEAD-only and scheduled crawls; embedded web dashboard; SEO, content and link analysis; server log analysis; PSI, CrUX, GSC, GA4, Plausible and AI integrations; JS rendering; robots.txt testing; and an in-app updater.
 
+[1.3.3]: https://github.com/jlhernando/micelio-crawler/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/jlhernando/micelio-crawler/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/jlhernando/micelio-crawler/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/jlhernando/micelio-crawler/compare/v1.2.0...v1.3.0

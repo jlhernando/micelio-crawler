@@ -23,6 +23,7 @@ type Payload struct {
 	Duration   string    `json:"duration"`
 	OutputFile string    `json:"outputFile"`
 	HTMLReport string    `json:"htmlReport,omitempty"`
+	Reason     string    `json:"reason,omitempty"` // why a run was skipped or stopped
 	Pages      int       `json:"pages"`
 	Errors     int       `json:"errors"`
 }

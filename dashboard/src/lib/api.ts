@@ -23,19 +23,42 @@ export interface InstallResult {
   status: UpdateStatus;
 }
 
+export interface SchedulePrecheck {
+  egressCidrs?: string[];
+  intervalSec?: number;
+}
+
+export interface PrecheckResult {
+  ok: boolean;
+  reason?: string;
+  egressIp?: string;
+  at: string;
+}
+
 export interface ScheduleState {
   id: string;
+  name?: string;
+  source?: 'ui' | 'cli';
   url: string;
   cron: string;
   description?: string;
+  active?: boolean;
   createdAt: string;
   lastRun?: string;
-  lastStatus?: string;
+  lastStatus?: 'success' | 'failed' | 'skipped' | 'stopped' | string;
+  lastReason?: string;
+  lastCrawlId?: string;
+  running?: boolean;
+  paused?: boolean;
   nextRun: string;
   outputDir: string;
   lastPages: number;
   lastDurationMs: number;
   totalRuns: number;
+  crawlConfig?: Record<string, unknown>;
+  precheck?: SchedulePrecheck;
+  lastCheck?: PrecheckResult;
+  webhook?: string;
 }
 
 const BASE = '';
@@ -221,11 +244,22 @@ export const api = {
   listSchedules: () =>
     request<ScheduleState[]>('GET', '/api/schedules'),
 
-  createSchedule: (config: {
-    url: string; cron: string; depth?: number; limit?: number;
-    concurrency?: number; delay?: number; webhook?: string; outputDir?: string;
+  /** config uses the same keys as startCrawl (what the New Crawl page builds). */
+  createSchedule: (body: {
+    cron: string; name?: string; url?: string; webhook?: string;
+    config: Record<string, unknown>; precheck?: SchedulePrecheck;
   }) =>
-    request<ScheduleState>('POST', '/api/schedules', config),
+    request<ScheduleState>('POST', '/api/schedules', body),
+
+  runSchedule: (id: string) =>
+    request<{ started: boolean }>('POST', `/api/schedules/${encodeURIComponent(id)}/run`),
+
+  checkSchedule: (id: string) =>
+    request<PrecheckResult>('POST', `/api/schedules/${encodeURIComponent(id)}/check`),
+
+  /** Runs a check without saving a schedule. */
+  testPrecheck: (precheck: SchedulePrecheck) =>
+    request<PrecheckResult>('POST', '/api/schedules/check', precheck),
 
   deleteSchedule: (id: string) =>
     request<{ deleted: boolean }>('DELETE', `/api/schedules/${id}`),

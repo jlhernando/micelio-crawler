@@ -103,6 +103,7 @@ type CrawlManager struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	mu          sync.RWMutex
+	background  sync.WaitGroup // post-crawl work that outlives the "complete" event
 }
 
 // NewCrawlManager creates a new crawl manager.
@@ -123,6 +124,10 @@ func NewCrawlManager(store *UiStore) *CrawlManager {
 func (m *CrawlManager) Close() {
 	m.cancel()
 }
+
+// WaitBackground blocks until running crawls and their post-crawl work
+// (deferred analysis, saving the link graph) have finished. Used by tests.
+func (m *CrawlManager) WaitBackground() { m.background.Wait() }
 
 // TrackScheduler registers a running scheduler for lifecycle management.
 func (m *CrawlManager) TrackScheduler(s *scheduler.Scheduler) {
@@ -217,7 +222,11 @@ func (m *CrawlManager) StartCrawl(crawlID string, config map[string]interface{})
 		m.store.AddCrawlEvent(crawlID, "started", "")
 	}
 
-	go m.runCrawl(ctx, crawlID, config)
+	m.background.Add(1)
+	go func() {
+		defer m.background.Done()
+		m.runCrawl(ctx, crawlID, config)
+	}()
 	return nil
 }
 
@@ -763,7 +772,9 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		// Launch deferred analysis (link intelligence, embeddings) in background.
 		// Pass crawlStats directly to avoid JSON round-trip precision loss.
 		if needsDeferred {
+			m.background.Add(1)
 			go func() {
+				defer m.background.Done()
 				defer func() {
 					if intLinksClose != nil {
 						intLinksClose()
@@ -777,7 +788,11 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 				intLinksClose()
 			}
 			if coreSnap != nil {
-				go coreSnap.save(dbPath)
+				m.background.Add(1)
+				go func() {
+					defer m.background.Done()
+					coreSnap.save(dbPath)
+				}()
 			}
 		}
 
@@ -1284,6 +1299,10 @@ func stripPagesForCache(pages []*types.PageData) {
 }
 
 // configFromMap converts a JSON-like map to CrawlConfig.
+// ConfigFromMap converts a dashboard-format crawl config (the JSON the New
+// Crawl page sends) to a CrawlConfig. Used by `micelio schedule --config`.
+func ConfigFromMap(m map[string]interface{}) types.CrawlConfig { return configFromMap(m) }
+
 func configFromMap(m map[string]interface{}) types.CrawlConfig {
 	// Map dashboard field names to CrawlConfig JSON tags
 	if v, ok := m["url"]; ok && m["seedUrl"] == nil {

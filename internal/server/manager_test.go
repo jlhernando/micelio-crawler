@@ -7,7 +7,7 @@ import (
 
 func TestStartCrawl(t *testing.T) {
 	s := newTestStore(t)
-	m := NewCrawlManager(s)
+	m := newTestManager(t, s)
 
 	done := make(chan struct{})
 	m.SetProgressCallback(func(e ProgressEvent) {
@@ -37,12 +37,12 @@ func TestStartCrawl(t *testing.T) {
 
 func TestStartCrawlRejectsSecond(t *testing.T) {
 	s := newTestStore(t)
-	m := NewCrawlManager(s)
+	m := newTestManager(t, s)
 
-	doneCh := make(chan struct{})
+	doneCh := make(chan struct{}, 2)
 	m.SetProgressCallback(func(e ProgressEvent) {
 		if e.Type == "complete" {
-			close(doneCh)
+			doneCh <- struct{}{}
 		}
 	})
 
@@ -52,22 +52,26 @@ func TestStartCrawlRejectsSecond(t *testing.T) {
 
 	// Try to start a second crawl while first is active
 	job2, _ := s.CreateCrawlJob(map[string]interface{}{"url": "http://127.0.0.1:1", "maxPages": 1})
-	err := m.StartCrawl(job2.ID, job2.Config)
-	if err == nil {
-		// If first crawl already finished, that's fine — skip rejection test
+	started := 1
+	if err := m.StartCrawl(job2.ID, job2.Config); err == nil {
+		started++ // the first crawl had already finished; both run
 	}
 
-	// Wait for the goroutine to finish using the store before test cleanup
-	select {
-	case <-doneCh:
-	case <-time.After(30 * time.Second):
-		t.Fatal("timed out waiting for crawl goroutine")
+	// Wait for every started crawl and its background work before the temp
+	// dir is removed (post-crawl saves used to race the cleanup).
+	for i := 0; i < started; i++ {
+		select {
+		case <-doneCh:
+		case <-time.After(30 * time.Second):
+			t.Fatal("timed out waiting for crawl goroutine")
+		}
 	}
+	m.WaitBackground()
 }
 
 func TestCancelCrawl(t *testing.T) {
 	s := newTestStore(t)
-	m := NewCrawlManager(s)
+	m := newTestManager(t, s)
 
 	var events []ProgressEvent
 	m.SetProgressCallback(func(e ProgressEvent) {
@@ -86,7 +90,7 @@ func TestCancelCrawl(t *testing.T) {
 
 func TestPauseResumeCrawl(t *testing.T) {
 	s := newTestStore(t)
-	m := NewCrawlManager(s)
+	m := newTestManager(t, s)
 
 	job, _ := s.CreateCrawlJob(map[string]interface{}{"url": "https://example.com"})
 	err := m.PauseCrawl(job.ID)
@@ -101,7 +105,7 @@ func TestPauseResumeCrawl(t *testing.T) {
 
 func TestNewCrawlManager(t *testing.T) {
 	s := newTestStore(t)
-	m := NewCrawlManager(s)
+	m := newTestManager(t, s)
 
 	if m == nil {
 		t.Fatal("expected non-nil manager")
@@ -119,7 +123,7 @@ func TestNewCrawlManager(t *testing.T) {
 
 func TestGetStatus_NoActiveCrawl(t *testing.T) {
 	s := newTestStore(t)
-	m := NewCrawlManager(s)
+	m := newTestManager(t, s)
 
 	status := m.GetStatus()
 	if status != nil {
@@ -129,7 +133,7 @@ func TestGetStatus_NoActiveCrawl(t *testing.T) {
 
 func TestSetProgressCallback(t *testing.T) {
 	s := newTestStore(t)
-	m := NewCrawlManager(s)
+	m := newTestManager(t, s)
 
 	if m.onProgress != nil {
 		t.Fatal("expected nil callback initially")
@@ -153,7 +157,7 @@ func TestSetProgressCallback(t *testing.T) {
 
 func TestEmit_NoCallback(t *testing.T) {
 	s := newTestStore(t)
-	m := NewCrawlManager(s)
+	m := newTestManager(t, s)
 
 	// Should not panic when no callback is set
 	m.emit(ProgressEvent{Type: "test"})
@@ -161,7 +165,7 @@ func TestEmit_NoCallback(t *testing.T) {
 
 func TestGetOrLoadResults_NonExistent(t *testing.T) {
 	s := newTestStore(t)
-	m := NewCrawlManager(s)
+	m := newTestManager(t, s)
 
 	result := m.GetOrLoadResults("nonexistent-crawl-id")
 	if result != nil {
@@ -171,7 +175,7 @@ func TestGetOrLoadResults_NonExistent(t *testing.T) {
 
 func TestGetOrLoadResults_CachedResult(t *testing.T) {
 	s := newTestStore(t)
-	m := NewCrawlManager(s)
+	m := newTestManager(t, s)
 
 	// Manually inject a cached result
 	m.results["test-crawl"] = &CrawlResults{

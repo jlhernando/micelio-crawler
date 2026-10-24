@@ -24,7 +24,6 @@ import (
 	"github.com/micelio/micelio/internal/storage"
 	"github.com/micelio/micelio/internal/types"
 	"github.com/micelio/micelio/internal/updater"
-	"github.com/micelio/micelio/internal/webhook"
 )
 
 const (
@@ -802,99 +801,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		jsonOK(w, result)
 	})
 
-	mux.HandleFunc("POST /api/schedules", func(w http.ResponseWriter, r *http.Request) {
-		body, err := readJSON(r)
-		if err != nil {
-			jsonError(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		siteURL, _ := body["url"].(string)
-		cronExpr, _ := body["cron"].(string)
-		if siteURL == "" || cronExpr == "" {
-			jsonError(w, "url and cron are required", http.StatusBadRequest)
-			return
-		}
-		outputDir, _ := body["outputDir"].(string)
-		if outputDir == "" {
-			outputDir = "scheduled-crawls"
-		}
-		// Reject absolute paths to prevent writing outside project
-		if filepath.IsAbs(outputDir) {
-			jsonError(w, "outputDir must be a relative path", http.StatusBadRequest)
-			return
-		}
-		// Validate seed URL against SSRF
-		if crawler.IsPrivateURL(siteURL) {
-			jsonError(w, "seed URL targets a private/loopback address", http.StatusBadRequest)
-			return
-		}
-
-		webhookURL, _ := body["webhook"].(string)
-		if webhookURL != "" {
-			if err := webhook.ValidateURL(webhookURL); err != nil {
-				jsonError(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-		}
-
-		// Build crawl config from body
-		crawlCfg := types.CrawlConfig{
-			SeedURL: siteURL,
-		}
-		if v, ok := body["depth"].(float64); ok {
-			crawlCfg.MaxDepth = int(v)
-		} else {
-			crawlCfg.MaxDepth = 10
-		}
-		if v, ok := body["limit"].(float64); ok {
-			crawlCfg.MaxPages = int(v)
-		} else {
-			crawlCfg.MaxPages = 1000
-		}
-		if v, ok := body["concurrency"].(float64); ok {
-			crawlCfg.Concurrency = int(v)
-		} else {
-			crawlCfg.Concurrency = 5
-		}
-		if v, ok := body["delay"].(float64); ok {
-			crawlCfg.DelayMs = int(v)
-		} else {
-			crawlCfg.DelayMs = 200
-		}
-
-		cfg := scheduler.Config{
-			URL:         siteURL,
-			CronExpr:    cronExpr,
-			OutputDir:   outputDir,
-			CrawlConfig: crawlCfg,
-		}
-		if webhookURL != "" {
-			cfg.Webhook = &webhook.Options{URL: webhookURL}
-		}
-
-		s, err := scheduler.New(cfg)
-		if err != nil {
-			jsonError(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		// Check for duplicate before starting
-		state := s.GetState()
-		if manager.IsSchedulerActive(state.ID) {
-			jsonError(w, "a schedule with this URL and cron already exists", http.StatusConflict)
-			return
-		}
-		// Start the scheduler in a background goroutine
-		go s.Run()
-		manager.TrackScheduler(s)
-		jsonOK(w, map[string]interface{}{
-			"id":          state.ID,
-			"url":         state.URL,
-			"cron":        state.Cron,
-			"description": scheduler.DescribeCron(state.Cron),
-			"nextRun":     state.NextRun,
-			"outputDir":   state.OutputDir,
-		})
-	})
+	registerScheduleRoutes(mux, store, manager)
 
 	mux.HandleFunc("DELETE /api/schedules/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -1476,6 +1383,18 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 }
 
 // ── Helpers ──
+
+// decodeJSONBody decodes a size-limited JSON request body into v.
+func decodeJSONBody(r *http.Request, v interface{}) error {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBody))
+	if err != nil {
+		return fmt.Errorf("read body: %w", err)
+	}
+	if err := json.Unmarshal(body, v); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	return nil
+}
 
 func readJSON(r *http.Request) (map[string]interface{}, error) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBody))

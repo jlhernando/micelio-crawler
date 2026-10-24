@@ -1084,15 +1084,73 @@ func scheduleCmd() *cobra.Command {
 		sitemapOut        bool
 		customExtractions []string
 		customSearches    []string
+		configFile        string
+		name              string
+		pcEgress          []string
+		pcCommand         string
+		pcInterval        int
+		checkOnly         bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "schedule <url>",
+		Use:   "schedule [url]",
 		Short: "Run scheduled crawls on a cron schedule",
-		Long:  "Run crawls on a cron schedule with state persistence and optional webhook notifications.",
-		Args:  cobra.ExactArgs(1),
+		Long: `Run crawls on a cron schedule with state persistence and optional webhook notifications.
+
+--config takes a crawl config in the dashboard's JSON format (the body of
+POST /api/crawl/start), so a schedule can use any option a dashboard crawl
+has: sitemap or list mode, include/exclude patterns, adaptive rate, etc.
+
+Checks (--precheck-*) must pass before each run; a run is skipped otherwise.
+They repeat during the crawl and stop it if they fail (the CLI cannot pause).
+Example, only crawl from an allowed network:
+
+  micelio schedule --config site.json --cron "0 2 * * *" \
+    --precheck-egress 203.0.113.0/24`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			seedURL := ensureScheme(args[0])
+			pc := &scheduler.Precheck{EgressCIDRs: pcEgress, Command: pcCommand, IntervalSec: pcInterval}
+			if err := pc.Validate(); err != nil {
+				return err
+			}
+			if checkOnly {
+				r := pc.Run(cmd.Context())
+				data, _ := json.MarshalIndent(r, "", "  ")
+				fmt.Println(string(data))
+				if !r.OK {
+					os.Exit(1)
+				}
+				return nil
+			}
+			var fileCfg map[string]interface{}
+			if configFile != "" {
+				raw, err := os.ReadFile(configFile)
+				if err != nil {
+					return err
+				}
+				if err := json.Unmarshal(raw, &fileCfg); err != nil {
+					return fmt.Errorf("parse %s: %w", configFile, err)
+				}
+			}
+			seedURL := ""
+			if len(args) == 1 {
+				seedURL = ensureScheme(args[0])
+			} else if fileCfg != nil {
+				for _, k := range []string{"seedUrl", "url"} {
+					if s, ok := fileCfg[k].(string); ok && s != "" {
+						seedURL = s
+						break
+					}
+				}
+				if seedURL == "" {
+					if list, ok := fileCfg["sitemapUrls"].([]interface{}); ok && len(list) > 0 {
+						seedURL, _ = list[0].(string)
+					}
+				}
+			}
+			if seedURL == "" {
+				return fmt.Errorf("give a URL or a --config with seedUrl/sitemapUrls")
+			}
 
 			format := types.FormatJSONL
 			if outputFormat == "csv" {
@@ -1145,6 +1203,22 @@ func scheduleCmd() *cobra.Command {
 				},
 			}
 
+			if fileCfg != nil {
+				// The config file decides the crawl; output settings stay CLI-side.
+				fc := server.ConfigFromMap(fileCfg)
+				if fc.SeedURL == "" && fc.Mode == types.ModeSpider {
+					fc.SeedURL = seedURL
+				}
+				fc.OutputFormat = format
+				if _, ok := fileCfg["respectRobots"]; !ok {
+					fc.RespectRobots = true
+				}
+				cfg.CrawlConfig = fc
+			}
+			cfg.Name = name
+			if pc.Enabled() {
+				cfg.Precheck = pc
+			}
 			if webhookURL != "" {
 				cfg.Webhook = &webhook.Options{URL: webhookURL}
 			}
@@ -1185,6 +1259,12 @@ func scheduleCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&sitemapOut, "sitemap-out", false, "Generate XML sitemap")
 	cmd.Flags().StringArrayVar(&customExtractions, "extract", nil, "Custom CSS extraction (name:selector)")
 	cmd.Flags().StringArrayVar(&customSearches, "search", nil, "Search for text or /regex/ in source")
+	cmd.Flags().StringVar(&configFile, "config", "", "Crawl config JSON in the dashboard format (overrides crawl flags)")
+	cmd.Flags().StringVar(&name, "name", "", "Schedule name (lets one URL have several schedules)")
+	cmd.Flags().StringArrayVar(&pcEgress, "precheck-egress", nil, "Only run when the public IP is in this range (CIDR or IP, repeatable)")
+	cmd.Flags().StringVar(&pcCommand, "precheck-cmd", "", "Only run when this shell command exits 0")
+	cmd.Flags().IntVar(&pcInterval, "precheck-interval", 60, "Seconds between checks during a crawl")
+	cmd.Flags().BoolVar(&checkOnly, "check-only", false, "Run the checks once, print the result and exit (1 if they fail)")
 	return cmd
 }
 

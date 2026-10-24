@@ -96,6 +96,7 @@ func StartUIServerWithOptions(opts ServerOptions, dashboardFS fs.FS) error {
 	}
 
 	manager := NewCrawlManager(store)
+	manager.ResumeUISchedules(store) // dashboard schedules survive restarts
 
 	upd := newUpdater(opts.Version)
 	srv := &Server{

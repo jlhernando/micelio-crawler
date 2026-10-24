@@ -12,6 +12,7 @@
   import PagesTable from '../lib/components/results/PagesTable.svelte';
   import LinkGraph from '../lib/components/results/LinkGraph.svelte';
   import GraphExplorer from '../lib/components/results/GraphExplorer.svelte';
+  import UniverseGraph from '../lib/components/results/UniverseGraph.svelte';
   import SiteTreemap from '../lib/components/results/SiteTreemap.svelte';
   import DirectoryTree from '../lib/components/results/DirectoryTree.svelte';
   import AnchorCloud from '../lib/components/results/AnchorCloud.svelte';
@@ -52,7 +53,7 @@
 
   // Active tab
   let activeTab = $state<'overview' | 'pages' | 'segments' | 'issues' | 'performance' | 'content' | 'links' | 'signals' | 'ai-visibility'>('overview');
-  let graphSubTab = $state<'explorer' | 'full' | 'treemap'>('explorer');
+  let graphSubTab = $state<'explorer' | 'universe' | 'full' | 'treemap'>('explorer');
 
   // Filters passed from SummaryHeader clicks
   let initialFilterStatus = $state('all');
@@ -566,6 +567,12 @@
               Explorer
             </button>
             <button
+              class="px-3 py-1 text-xs rounded-lg {graphSubTab === 'universe' ? 'bg-accent text-white' : 'bg-surface-3 text-fg-2 hover:bg-surface-1'}"
+              onclick={() => graphSubTab = 'universe'}
+            >
+              Universe
+            </button>
+            <button
               class="px-3 py-1 text-xs rounded-lg {graphSubTab === 'full' ? 'bg-accent text-white' : 'bg-surface-3 text-fg-2 hover:bg-surface-1'}"
               onclick={() => graphSubTab = 'full'}
             >
@@ -578,11 +585,13 @@
               Treemap
             </button>
             <span class="text-[10px] text-fg-2/50 ml-2">
-              {graphSubTab === 'explorer' ? 'Drill-down — start from homepage, expand one level at a time' : graphSubTab === 'treemap' ? 'Full-site overview — directories sized by page count' : 'All nodes at once (may be slow for large crawls)'}
+              {graphSubTab === 'explorer' ? 'Drill-down — start from homepage, expand one level at a time' : graphSubTab === 'universe' ? '3D map of the link structure: each page hangs from the page that links to it. Click a page for its links and a thumbnail' : graphSubTab === 'treemap' ? 'Full-site overview — directories sized by page count' : 'All nodes at once (may be slow for large crawls)'}
             </span>
           </div>
           {#if graphSubTab === 'explorer'}
             <GraphExplorer crawlId={id} />
+          {:else if graphSubTab === 'universe'}
+            <UniverseGraph crawlId={id} />
           {:else if graphSubTab === 'treemap'}
             <SiteTreemap crawlId={id} />
           {:else}

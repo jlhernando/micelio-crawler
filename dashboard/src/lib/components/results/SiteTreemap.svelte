@@ -17,6 +17,10 @@
     totalInlinks: number;
     avgInternalLinks: number;
     children?: TreeNode[];
+    // Lazy loading (see DirectoryTree): children arrive when a block is opened.
+    hasChildren?: boolean;
+    childCount?: number;
+    moreOf?: TreeNode; // synthetic block standing in for children not loaded yet
   }
 
   interface Rect {
@@ -50,6 +54,8 @@
     '#1abc9c', '#e67e22', '#e74c3c', '#3498db', '#2ecc71',
   ];
   const GAP = 2;
+  const LIMIT = 300; // blocks per request; the rest show as one "N more" block
+  let lazy = false;
 
   let currentNode = $derived(zoomStack.length > 0 ? zoomStack[zoomStack.length - 1] : tree);
   let dirCount = $derived(tree ? countDirs(tree) : 0);
@@ -61,7 +67,44 @@
     return count;
   }
 
+  // One block for the children not loaded yet, sized by their page count.
+  function moreBlock(node: TreeNode): TreeNode | null {
+    const loadedKids = node.children ?? [];
+    const missing = (node.childCount ?? 0) - loadedKids.length;
+    if (!lazy || missing <= 0) return null;
+    const pages = node.pages - loadedKids.reduce((s, c) => s + c.pages, 0) - (node.isPage ? 1 : 0);
+    if (pages <= 0) return null;
+    return {
+      name: `${missing.toLocaleString()} more`, path: node.path, pages, depth: node.depth + 1, isPage: false,
+      statusCodes: {}, avgResponseTime: 0, totalPageRank: 0, avgPageRank: 0, indexable: 0, nonIndexable: 0,
+      totalInlinks: 0, avgInternalLinks: 0, moreOf: node,
+    };
+  }
+
+  function findByPath(root: TreeNode, path: string): TreeNode | null {
+    if (root.path === path) return root;
+    for (const c of root.children ?? []) {
+      if (path === c.path || path.startsWith(c.path + '/')) return findByPath(c, path);
+    }
+    return null;
+  }
+
+  // Loads the next batch of a block's children (lazy mode only).
+  async function fetchChildren(node: TreeNode) {
+    const offset = node.children?.length ?? 0;
+    const data = await api.getDirectoryTree(crawlId, { path: node.path, offset, limit: LIMIT });
+    if (!data.lazy) {
+      node.children = findByPath(data.tree as unknown as TreeNode, node.path)?.children ?? [];
+      node.childCount = node.children.length;
+      return;
+    }
+    const kids = ((data.tree as unknown as TreeNode).children ?? []);
+    node.children = [...(node.children ?? []), ...kids];
+    node.childCount = (data.tree as unknown as TreeNode).childCount;
+  }
+
   function getColor(node: TreeNode, mode: string): string {
+    if (node.moreOf) return '#3a3d41';
     if (mode === 'depth') {
       return DEPTH_COLORS[node.depth % DEPTH_COLORS.length];
     }
@@ -176,6 +219,8 @@
 
     // Get children to display (or the node itself if leaf)
     const children = currentNode!.children?.filter(c => c.pages > 0).sort((a, b) => b.pages - a.pages) ?? [];
+    const more = moreBlock(currentNode!);
+    if (more) children.push(more);
     if (children.length === 0) {
       rects = [{ node: currentNode!, x: GAP, y: GAP, w: w - GAP * 2, h: h - GAP * 2 }];
     } else {
@@ -272,9 +317,26 @@
     }
   }
 
-  function handleClick() {
-    if (!hoveredRect) return;
+  let clickBusy = false;
+  async function handleClick() {
+    if (!hoveredRect || clickBusy) return;
     const node = hoveredRect.node;
+    if (node.moreOf || (lazy && node.hasChildren && !node.children?.length)) {
+      clickBusy = true;
+      try {
+        await fetchChildren(node.moreOf ?? node);
+      } catch (err: any) {
+        message = `Failed to load ${node.moreOf?.path ?? node.path}: ${err.message}`;
+        return;
+      } finally {
+        clickBusy = false;
+      }
+      if (node.moreOf) { // more blocks of the same level: just redraw
+        hoveredRect = null;
+        render();
+        return;
+      }
+    }
     if (!node.children || node.children.length === 0) return;
     zoomStack = [...zoomStack, node];
     hoveredRect = null;
@@ -304,7 +366,8 @@
     loading = true;
     message = 'Loading treemap...';
     try {
-      const data = await api.getDirectoryTree(crawlId);
+      const data = await api.getDirectoryTree(crawlId, { depth: 2, limit: LIMIT });
+      lazy = !!data.lazy;
       if (destroyed) return;
       if (!data.tree) {
         message = 'No directory tree data available.';
@@ -461,8 +524,10 @@
               <span>Status: <strong class="text-fg-1">{statusSummary(hoveredRect.node.statusCodes)}</strong></span>
             {/if}
           </div>
-          {#if hoveredRect.node.children && hoveredRect.node.children.length > 0}
-            <div class="text-fg-2/60 mt-1 text-[10px]">Click to explore {hoveredRect.node.children.length} subdirectories</div>
+          {#if hoveredRect.node.moreOf}
+            <div class="text-fg-2/60 mt-1 text-[10px]">Click to load the next {LIMIT} entries</div>
+          {:else if (hoveredRect.node.childCount ?? hoveredRect.node.children?.length ?? 0) > 0}
+            <div class="text-fg-2/60 mt-1 text-[10px]">Click to explore {(hoveredRect.node.childCount ?? hoveredRect.node.children?.length ?? 0).toLocaleString()} entries</div>
           {/if}
         </div>
       {/if}

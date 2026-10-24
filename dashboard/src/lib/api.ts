@@ -172,15 +172,19 @@ export const api = {
       totalUnique: number;
     }>('GET', `/api/crawl/${id}/anchor-stats`),
 
-  getDirectoryTree: (id: string) =>
-    request<{
+  /** Full (capped) tree, or with lazy one directory at a time: path, offset/limit paging, depth 1-2. */
+  getDirectoryTree: (id: string, lazy?: { path?: string; offset?: number; limit?: number; depth?: number }) => {
+    const q = lazy ? '?' + new URLSearchParams({ lazy: '1', ...Object.fromEntries(Object.entries(lazy).map(([k, v]) => [k, String(v)])) }).toString() : '';
+    return request<{
       tree: {
         name: string; path: string; pages: number; depth: number; isPage: boolean;
         statusCodes: Record<number, number>; avgResponseTime: number;
-        children?: Array<unknown>;
+        children?: Array<unknown>; hasChildren?: boolean; childCount?: number;
       };
       totalPages: number;
-    }>('GET', `/api/crawl/${id}/directory-tree`),
+      lazy?: boolean;
+    }>('GET', `/api/crawl/${id}/directory-tree${q}`);
+  },
 
   deleteCrawl: (id: string) =>
     request<{ deleted: boolean }>('DELETE', `/api/crawl/${id}`),

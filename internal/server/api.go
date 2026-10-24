@@ -72,6 +72,7 @@ var envFallbacks = map[string]string{
 func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Updater) http.Handler {
 	mux := http.NewServeMux()
 	registerUpdateRoutes(mux, upd)
+	registerUniverseRoutes(mux, store, manager)
 
 	mux.HandleFunc("POST /api/crawl/start", func(w http.ResponseWriter, r *http.Request) {
 		config, err := readJSON(r)
@@ -379,6 +380,10 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 
 	mux.HandleFunc("GET /api/crawl/{id}/directory-tree", func(w http.ResponseWriter, r *http.Request) {
 		crawlID := r.PathValue("id")
+		// Lazy mode: one directory per request, like map tiles.
+		if r.URL.Query().Get("lazy") == "1" && serveLazyDirTree(w, r, crawlID, manager.GetCachedResults(crawlID)) {
+			return
+		}
 		// Fast path: check cached results (non-blocking)
 		if results := manager.GetCachedResults(crawlID); results != nil {
 			if results.DirTree != nil {
@@ -695,6 +700,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, "crawl not found", http.StatusNotFound)
 			return
 		}
+		removeCrawlThumbs(r.PathValue("id"))
 		jsonOK(w, map[string]bool{"deleted": true})
 	})
 
@@ -2672,7 +2678,11 @@ type dirNode struct {
 	childMap map[string]*dirNode
 }
 
-const maxTreeDepth = 15
+const (
+	maxTreeDepth    = 15
+	maxTreeChildren = 50   // children kept per directory; the rest are merged
+	maxTreeNodes    = 5000 // nodes sent in total, so huge crawls stay light
+)
 
 func buildDirectoryTree(pages []*types.PageData) map[string]interface{} {
 	root := &dirNode{
@@ -2767,6 +2777,7 @@ func buildDirectoryTree(pages []*types.PageData) map[string]interface{} {
 
 	// Compute averages and flatten children maps to slices
 	finalizeDirNode(root)
+	pruneDirTree(root, maxTreeChildren, maxTreeNodes)
 
 	return map[string]interface{}{
 		"tree":       root,
@@ -2837,6 +2848,65 @@ func finalizeDirNode(node *dirNode) {
 		})
 	}
 	node.childMap = nil // release for GC
+}
+
+// pruneDirTree keeps the tree small enough for the browser. Walking level by
+// level, each directory keeps its biggest children (maxChildren) and the rest
+// are merged into one "N more" node with their summed metrics. Once maxNodes
+// are kept, deeper levels are merged the same way. Without this every page
+// is a leaf node, and a 200K-page crawl sends 200K rows to the dashboard.
+func pruneDirTree(root *dirNode, maxChildren, maxNodes int) {
+	kept := 1
+	queue := []*dirNode{root}
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		if len(n.Children) == 0 {
+			continue
+		}
+		limit := min(maxChildren, maxNodes-kept)
+		if len(n.Children) > limit {
+			keep := max(0, limit-1)
+			n.Children = append(n.Children[:keep:keep], mergeDirNodes(n, n.Children[keep:]))
+		}
+		kept += len(n.Children)
+		queue = append(queue, n.Children...)
+	}
+}
+
+// mergeDirNodes sums a set of sibling nodes into one leaf-like node.
+func mergeDirNodes(parent *dirNode, nodes []*dirNode) *dirNode {
+	m := &dirNode{
+		Name:        fmt.Sprintf("%d more", len(nodes)),
+		Path:        strings.TrimSuffix(parent.Path, "/") + "/…",
+		Depth:       parent.Depth + 1,
+		StatusCodes: make(map[int]int),
+	}
+	for _, c := range nodes {
+		m.Pages += c.Pages
+		for code, k := range c.StatusCodes {
+			m.StatusCodes[code] += k
+		}
+		m.TotalRespTime += c.TotalRespTime
+		m.TotalPageRank += c.TotalPageRank
+		m.TotalInternalLinks += c.TotalInternalLinks
+		m.Indexable += c.Indexable
+		m.NonIndexable += c.NonIndexable
+		m.TotalInlinks += c.TotalInlinks
+		m.GscClicks += c.GscClicks
+		m.GscImpressions += c.GscImpressions
+		m.Ga4Sessions += c.Ga4Sessions
+		m.Ga4Pageviews += c.Ga4Pageviews
+		m.Ga4Conversions += c.Ga4Conversions
+		m.PlausibleVisitors += c.PlausibleVisitors
+		m.PlausibleConversions += c.PlausibleConversions
+	}
+	if m.Pages > 0 {
+		m.AvgResponseTime = int(m.TotalRespTime / int64(m.Pages))
+		m.AvgPageRank = m.TotalPageRank / float64(m.Pages)
+		m.AvgInternalLinks = float64(m.TotalInternalLinks) / float64(m.Pages)
+	}
+	return m
 }
 
 // statsMapToCrawlStats converts a map[string]interface{} stats back to typed CrawlStats

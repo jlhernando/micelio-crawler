@@ -11,6 +11,12 @@
     depth: number;
     isPage: boolean;
     expanded?: boolean;
+    // Lazy loading: children arrive when a directory is opened.
+    hasChildren?: boolean;
+    childCount?: number;
+    loading?: boolean;
+    trafficMissing?: boolean; // GSC/GA4/Plausible numbers unknown for this node
+    loadError?: string; // last failed child load for this folder
     // SEO metrics
     totalPageRank: number;
     avgPageRank: number;
@@ -33,9 +39,14 @@
 
   let loading = $state(true);
   let error = $state<string | null>(null);
-  let tree = $state<TreeNode | null>(null);
+  // Raw state: the tree is mutated in place and rows are rebuilt as new objects,
+  // so a large tree never gets wrapped in deep reactive proxies.
+  let tree = $state.raw<TreeNode | null>(null);
   let totalPages = $state(0);
-  let flatNodes = $state<{ node: TreeNode; indent: number }[]>([]);
+  type Row = { node: TreeNode; indent: number; expanded?: boolean; loading?: boolean; moreOf?: TreeNode; errorOf?: TreeNode };
+  let flatNodes = $state.raw<Row[]>([]);
+  let lazy = false;
+  const PAGE = 100;
   let fetchSeq = 0;
   let sortCol = $state<string>('pages');
   let sortAsc = $state(false);
@@ -45,13 +56,16 @@
     const _id = crawlId;
     loading = true;
     error = null;
-    api.getDirectoryTree(_id).then((data) => {
+    api.getDirectoryTree(_id, { depth: 2, limit: PAGE }).then((data) => {
       if (fetchSeq !== seq) return;
+      lazy = !!data.lazy;
       const root = data.tree as TreeNode;
       root.expanded = true;
-      if (root.children) {
-        for (const child of root.children) {
-          child.expanded = true;
+      // Open first-level directories when there are few of them.
+      const kids = root.children ?? [];
+      if (!lazy || kids.length <= 20) {
+        for (const child of kids) {
+          child.expanded = !lazy || (child.children?.length ?? 0) > 0;
         }
       }
       tree = root;
@@ -65,10 +79,15 @@
     });
   });
 
-  function flattenTree(root: TreeNode): { node: TreeNode; indent: number }[] {
-    const result: { node: TreeNode; indent: number }[] = [];
+  function hasKids(n: TreeNode): boolean {
+    return n.hasChildren ?? (n.children?.length ?? 0) > 0;
+  }
+
+  function flattenTree(root: TreeNode): Row[] {
+    const result: Row[] = [];
     function walk(node: TreeNode, indent: number) {
-      result.push({ node, indent });
+      result.push({ node, indent, expanded: node.expanded, loading: node.loading });
+      if (node.loadError) result.push({ node, indent: indent + 1, errorOf: node });
       if (node.expanded && node.children) {
         const sorted = [...node.children];
         if (sortCol !== 'pages' || sortAsc) {
@@ -76,6 +95,9 @@
         }
         for (const child of sorted) {
           walk(child, indent + 1);
+        }
+        if (lazy && (node.childCount ?? 0) > node.children.length) {
+          result.push({ node, indent: indent + 1, loading: node.loading, moreOf: node });
         }
       }
     }
@@ -86,8 +108,8 @@
   function sortChildren(children: TreeNode[]) {
     const dir = sortAsc ? 1 : -1;
     children.sort((a, b) => {
-      const aDir = (a.children?.length ?? 0) > 0;
-      const bDir = (b.children?.length ?? 0) > 0;
+      const aDir = hasKids(a);
+      const bDir = hasKids(b);
       if (aDir !== bDir) return aDir ? -1 : 1;
       const av = getVal(a, sortCol);
       const bv = getVal(b, sortCol);
@@ -114,8 +136,57 @@
     }
   }
 
-  function toggleNode(node: TreeNode) {
+  // Fetches one page of a directory's children (lazy mode only). A failure
+  // stays on that folder (with Retry) instead of replacing the whole tree.
+  async function fetchChildren(node: TreeNode, offset: number): Promise<boolean> {
+    node.loading = true;
+    node.loadError = undefined;
+    if (tree) flatNodes = flattenTree(tree);
+    try {
+      const data = await api.getDirectoryTree(crawlId, { path: node.path, offset, limit: PAGE });
+      if (!data.lazy) {
+        // The server fell back to the full (capped) tree, e.g. after the
+        // crawl left its cache: take this directory's children from it.
+        const found = findByPath(data.tree as TreeNode, node.path);
+        node.children = found?.children ?? [];
+        node.childCount = node.children.length;
+        return true;
+      }
+      const kids = ((data.tree as TreeNode).children ?? []);
+      node.children = offset === 0 ? kids : [...(node.children ?? []), ...kids];
+      node.childCount = (data.tree as TreeNode).childCount;
+      return true;
+    } catch (err) {
+      node.loadError = (err as Error)?.message || 'request failed';
+      return false;
+    } finally {
+      node.loading = false;
+    }
+  }
+
+  function findByPath(root: TreeNode, path: string): TreeNode | null {
+    if (root.path === path) return root;
+    for (const c of root.children ?? []) {
+      if (path === c.path || path.startsWith(c.path + '/')) return findByPath(c, path);
+    }
+    return null;
+  }
+
+  async function toggleNode(node: TreeNode) {
+    if (node.loading) return; // a fetch for this folder is already running
+    if (!node.expanded && lazy && node.hasChildren && !node.children?.length) {
+      if (!(await fetchChildren(node, 0))) {
+        if (tree) flatNodes = flattenTree(tree); // show the error row; keep the folder closed
+        return;
+      }
+    }
     node.expanded = !node.expanded;
+    if (tree) flatNodes = flattenTree(tree);
+  }
+
+  async function loadMore(node: TreeNode) {
+    if (node.loading) return;
+    await fetchChildren(node, node.children?.length ?? 0);
     if (tree) flatNodes = flattenTree(tree);
   }
 
@@ -148,6 +219,10 @@
   function barWidth(count: number, max: number): string {
     if (max === 0) return '0%';
     return `${Math.max(2, (count / max) * 100)}%`;
+  }
+
+  function traffic(node: TreeNode, v: number | undefined): string {
+    return node.trafficMissing ? '—' : fmt(v ?? 0);
   }
 
   function fmt(n: number): string {
@@ -250,8 +325,24 @@
           </tr>
         </thead>
         <tbody>
-          {#each flatNodes as { node, indent }}
-            {@const hasChildren = (node.children?.length ?? 0) > 0}
+          {#each flatNodes as { node, indent, expanded, loading: rowLoading, moreOf, errorOf }}
+            {#if errorOf}
+              <tr>
+                <td colspan="20" class="py-1 text-[11px] text-danger" style="padding-left: {indent * 16 + 24}px">
+                  Couldn't load this folder ({errorOf.loadError}).
+                  <button class="ml-1 underline cursor-pointer hover:text-fg-1" onclick={() => (errorOf.expanded ? loadMore(errorOf) : toggleNode(errorOf))}>Retry</button>
+                </td>
+              </tr>
+            {:else if moreOf}
+              <tr>
+                <td colspan="20" class="py-1" style="padding-left: {indent * 16 + 24}px">
+                  <button class="text-[11px] text-fg-2 hover:text-fg-1 cursor-pointer disabled:opacity-50" disabled={rowLoading} onclick={() => loadMore(moreOf)}>
+                    {rowLoading ? 'Loading…' : `Load ${Math.min(PAGE, (moreOf.childCount ?? 0) - (moreOf.children?.length ?? 0)).toLocaleString()} more of ${((moreOf.childCount ?? 0) - (moreOf.children?.length ?? 0)).toLocaleString()}`}
+                  </button>
+                </td>
+              </tr>
+            {:else}
+            {@const hasChildren = hasKids(node)}
             {@const depthColor = DEPTH_COLORS[Math.min(node.depth, DEPTH_COLORS.length - 1)]}
             <tr class="hover:bg-surface-3 group">
               <td class="py-0.5" style="padding-left: {indent * 16 + 4}px">
@@ -260,10 +351,10 @@
                     <button
                       class="w-4 h-4 flex items-center justify-center text-fg-2 hover:text-fg-1 shrink-0 cursor-pointer"
                       onclick={() => toggleNode(node)}
-                      aria-expanded={node.expanded}
-                      aria-label="{node.expanded ? 'Collapse' : 'Expand'} {node.name}"
+                      aria-expanded={expanded}
+                      aria-label="{expanded ? 'Collapse' : 'Expand'} {node.name}"
                     >
-                      <svg class="w-3 h-3 transition-transform {node.expanded ? 'rotate-90' : ''}" viewBox="0 0 12 12" fill="currentColor">
+                      <svg class="w-3 h-3 transition-transform {expanded ? 'rotate-90' : ''} {rowLoading ? 'animate-pulse' : ''}" viewBox="0 0 12 12" fill="currentColor">
                         <path d="M4 2l4 4-4 4z"/>
                       </svg>
                     </button>
@@ -280,7 +371,7 @@
                   </span>
 
                   <span class="font-mono text-fg-1 truncate {node.isPage ? '' : 'font-medium'}" title={node.path}>
-                    {node.name === '/' ? '/' : node.name}{hasChildren ? '/' : ''}
+                    {node.name === '/' ? '/' : node.name}{hasChildren && node.name !== '/' ? '/' : ''}
                   </span>
                 </div>
               </td>
@@ -314,18 +405,19 @@
               </td>
 
               {#if hasGsc}
-                <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{fmt(node.gscClicks ?? 0)}</td>
-                <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{fmt(node.gscImpressions ?? 0)}</td>
+                <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{traffic(node, node.gscClicks)}</td>
+                <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{traffic(node, node.gscImpressions)}</td>
               {/if}
               {#if hasGa4}
-                <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{fmt(node.ga4Sessions ?? 0)}</td>
-                <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{fmt(node.ga4Conversions ?? 0)}</td>
+                <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{traffic(node, node.ga4Sessions)}</td>
+                <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{traffic(node, node.ga4Conversions)}</td>
               {/if}
               {#if hasPlausible}
-                <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{fmt(node.plausibleVisitors ?? 0)}</td>
-                <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{fmt(node.plausibleConversions ?? 0)}</td>
+                <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{traffic(node, node.plausibleVisitors)}</td>
+                <td class="text-right px-1.5 text-fg-2/80 tabular-nums">{traffic(node, node.plausibleConversions)}</td>
               {/if}
             </tr>
+            {/if}
           {/each}
         </tbody>
       </table>
@@ -333,7 +425,7 @@
 
     <div class="mt-3 pt-3 border-t border-border flex items-center gap-4 text-[10px] text-fg-2/60">
       <span>{totalPages.toLocaleString()} pages</span>
-      <span>{tree.children?.length ?? 0} top directories</span>
+      <span>{(tree.childCount ?? tree.children?.length ?? 0).toLocaleString()} top-level entries</span>
       {#if hasPageRank}
         <span>Total PR: {fmtDec(tree.totalPageRank, 2)}</span>
       {/if}

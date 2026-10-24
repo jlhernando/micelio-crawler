@@ -73,9 +73,10 @@ The Svelte 5 dashboard is embedded in the Go binary via `go:embed`. No separate 
 | <img src="docs/screenshot-dashboard.png" alt="New crawl setup with presets"><br>**New crawl**: presets, scope, and 10+ config sections | <img src="docs/screenshot-monitor.png" alt="Live crawl monitor"><br>**Monitor**: live status codes, response times, and recent pages |
 | <img src="docs/screenshot-overview.png" alt="Site overview with crawl coverage"><br>**Site overview**: headline metrics and crawl coverage | <img src="docs/screenshot-issues.png" alt="SEO issues grouped by severity"><br>**Issues**: critical, warning, and info checks with page counts |
 | <img src="docs/screenshot-site-graph.png" alt="Link Explorer graph"><br>**Link Explorer**: drill-down link graph with Depth, Authority, Hub, and PageRank modes | <img src="docs/screenshot-treemap.png" alt="Site treemap"><br>**Treemap**: directories sized by page count |
-| <img src="docs/screenshot-table.png" alt="All pages table"><br>**All Pages**: filterable table with status, timing, weight, and titles | |
+| <img src="docs/screenshot-universe.png" alt="Universe link map"><br>**Universe**: 3D map of the link structure. Each page sits next to the page that links to it | <img src="docs/screenshot-universe-page.png" alt="Universe page detail"><br>**Page detail**: click a page to see its inlinks, outlinks, click path, and a thumbnail |
+| <img src="docs/screenshot-directory-tree.png" alt="Directory tree"><br>**Directory tree**: loads one folder at a time, so it stays fast on 1M-page crawls | <img src="docs/screenshot-table.png" alt="All pages table"><br>**All Pages**: filterable table with status, timing, weight, and titles |
 
-For a walkthrough of every screen, see the [User Guide](docs/USER-GUIDE.md). Every CLI flag is listed in the [CLI Reference](docs/CLI-REFERENCE.md).
+For a walkthrough of every screen, see the [User Guide](docs/USER-GUIDE.md). Every CLI flag is listed in the [CLI Reference](docs/CLI-REFERENCE.md). What changed in each version is in the [Changelog](CHANGELOG.md).
 
 ### Dashboard Pages
 
@@ -83,7 +84,7 @@ For a walkthrough of every screen, see the [User Guide](docs/USER-GUIDE.md). Eve
 |------|-------------|
 | **New Crawl** | Configure and start crawls with 5 presets and 10+ config sections. User-agent dropdown with Chrome DevTools-inspired presets (Desktop, Mobile, Bots). Recent sites quick-start. |
 | **Monitor** | Real-time progress via WebSocket — status codes, response times, error log, pause/resume/cancel, stop & analyze, per-pattern excluded URL counters |
-| **Results** | Overview with crawl coverage (exclusion reasons with example URLs) and priority issues, plus tabs for Issues, Performance, Content, Links, Signals, AI Visibility, All Pages. Link Explorer (progressive drill-down graph) + Full Graph (WebGL), directory tree, anchor cloud. Template-based filtering with filtered stats and CSV export. |
+| **Results** | Overview with crawl coverage (exclusion reasons with example URLs) and priority issues, plus tabs for Issues, Performance, Content, Links, Signals, AI Visibility, All Pages. Link Explorer (progressive drill-down graph), Universe (3D link-structure map with page thumbnails), Full Graph (WebGL), directory tree and treemap that load one folder at a time, anchor cloud. Template-based filtering with filtered stats and CSV export. |
 | **History** | Crawl history with side-by-side diff comparison, active crawls sidebar, status filters |
 | **Diff** | Side-by-side comparison with visibility, segments, lifecycle tracking, topic evolution, and cannibalization detection |
 | **Logs** | Server log analysis — parallel multi-file processing with per-file aggregation, 6 formats (Apache, Nginx, CloudFront, Cloudflare, ALB/ELB, W3C/IIS), zero-alloc bot detection (100+ signatures), crawl budget/waste analysis, AI bot trends, heatmaps, log-to-crawl merge with 7-segment classification, per-phase timing |

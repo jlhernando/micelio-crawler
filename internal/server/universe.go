@@ -669,6 +669,81 @@ func registerUniverseRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlMa
 		})
 	})
 
+	// Page search by title or URL, best PageRank first.
+	mux.HandleFunc("GET /api/crawl/{id}/universe/search", func(w http.ResponseWriter, r *http.Request) {
+		withUniverse(manager, w, r, func(results *CrawlResults, l *universeLayout) {
+			q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+			limit := intParam(r, "limit", 20, 1, 100)
+			rows := []universeCard{}
+			if q != "" {
+				for pos := 0; pos < len(l.order) && len(rows) < limit; pos++ {
+					p := results.Pages[l.order[pos]]
+					if strings.Contains(strings.ToLower(p.URL), q) || (p.Title != nil && strings.Contains(strings.ToLower(p.Title.Text), q)) {
+						rows = append(rows, universeCardFor(l, results.Pages, pos))
+					}
+				}
+			}
+			jsonOK(w, map[string]interface{}{"rows": rows})
+		})
+	})
+
+	// Per-page colour metric for the first n pages, one byte each in order:
+	// "UNM1" | count u32 | 8 bytes reserved | uint8*count. depth is the crawl
+	// depth (capped at 255); authority and hub are percentiles 1-255 among
+	// pages with a score, 0 for none.
+	mux.HandleFunc("GET /api/crawl/{id}/universe/metric", func(w http.ResponseWriter, r *http.Request) {
+		withUniverse(manager, w, r, func(results *CrawlResults, l *universeLayout) {
+			n := intParam(r, "n", len(l.order), 0, len(l.order))
+			name := r.URL.Query().Get("name")
+			val := func(p *types.PageData) float64 {
+				li := p.LinkIntelligence
+				switch name {
+				case "authority":
+					if li != nil {
+						return li.AuthorityScore
+					}
+				case "hub":
+					if li != nil {
+						return li.HubScore
+					}
+				default:
+					return float64(p.Depth)
+				}
+				return 0
+			}
+			if name != "depth" && name != "authority" && name != "hub" {
+				jsonError(w, "unknown metric", http.StatusBadRequest)
+				return
+			}
+			out := make([]byte, universeHeaderBytes+n)
+			copy(out, "UNM1")
+			binary.LittleEndian.PutUint32(out[4:], uint32(n))
+			if name == "depth" {
+				for k, pi := range l.order[:n] {
+					out[universeHeaderBytes+k] = byte(min(255, max(0, int(val(results.Pages[pi])))))
+				}
+			} else {
+				// HITS scores are very skewed (a few hubs, a long tail near
+				// zero), so colour by percentile among pages with a score.
+				vals := make([]float64, n)
+				ranked := make([]int, 0, n)
+				for k, pi := range l.order[:n] {
+					vals[k] = val(results.Pages[pi])
+					if vals[k] > 0 {
+						ranked = append(ranked, k)
+					}
+				}
+				sort.Slice(ranked, func(a, b int) bool { return vals[ranked[a]] < vals[ranked[b]] })
+				for r, k := range ranked {
+					out[universeHeaderBytes+k] = byte(1 + math.Round(254*float64(r)/math.Max(1, float64(len(ranked)-1))))
+				}
+			}
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Content-Length", strconv.Itoa(len(out)))
+			_, _ = w.Write(out)
+		})
+	})
+
 	mux.HandleFunc("GET /api/crawl/{id}/universe/node-links", func(w http.ResponseWriter, r *http.Request) {
 		withUniverse(manager, w, r, func(results *CrawlResults, l *universeLayout) {
 			i := intParam(r, "i", -1, -1, len(l.order)-1)

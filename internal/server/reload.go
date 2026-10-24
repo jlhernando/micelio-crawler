@@ -46,6 +46,10 @@ func prepareLoadedPages(crawlID string, pages []*types.PageData, stats map[strin
 		log.Printf("backfill: recomputed flat PageRank for crawl %s from link graph", crawlID)
 	}
 
+	if restoreHits(pages, agg.graph) {
+		log.Printf("backfill: recomputed authority/hub scores for crawl %s from link graph", crawlID)
+	}
+
 	agg.inlinkIdx = newInlinkIndex(agg.graph, pages)
 	assignInlinks(pages, agg.inlinkIdx)
 
@@ -186,4 +190,37 @@ func toJSONValue(v interface{}) interface{} {
 		return nil
 	}
 	return out
+}
+
+// restoreHits recomputes HITS authority and hub scores. They are computed
+// after pages are written to the crawl DB, so pages reloaded from it have
+// none and every authority/hub view showed 0. Same limits as the crawl:
+// skipped above 200K pages, 30 iterations above 100K. Returns true when
+// scores were assigned.
+func restoreHits(pages []*types.PageData, g *analysis.AdjacencyGraph) bool {
+	if g == nil || g.N != len(pages) || g.N == 0 || g.N > 200_000 {
+		return false
+	}
+	for _, p := range pages {
+		if li := p.LinkIntelligence; li != nil && (li.AuthorityScore > 0 || li.HubScore > 0) {
+			return false // already present
+		}
+	}
+	iter := 100
+	if g.N > 100_000 {
+		iter = 30
+	}
+	scores := analysis.ComputeHits(iter, 1e-6, g)
+	for i, p := range pages {
+		s, ok := scores[g.URLs[i]]
+		if !ok {
+			continue
+		}
+		if p.LinkIntelligence == nil {
+			p.LinkIntelligence = &types.LinkIntelligenceData{}
+		}
+		p.LinkIntelligence.AuthorityScore = s.AuthorityScore
+		p.LinkIntelligence.HubScore = s.HubScore
+	}
+	return len(scores) > 0
 }

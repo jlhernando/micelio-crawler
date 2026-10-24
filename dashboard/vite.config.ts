@@ -15,7 +15,6 @@ export default defineConfig({
         // Vite 8 (Rolldown) only accepts the function form.
         manualChunks(id) {
           if (/[\\/]node_modules[\\/](sigma|graphology|graphology-layout-forceatlas2)[\\/]/.test(id)) return 'sigma';
-          if (/[\\/]node_modules[\\/]@cosmos\.gl[\\/]graph[\\/]/.test(id)) return 'cosmos';
         },
       },
     },

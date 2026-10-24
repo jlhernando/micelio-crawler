@@ -2,6 +2,23 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.3.1] - 2026-10-24
+
+### Added
+
+- **Universe page search.** Find a page by title or URL and fly to it.
+- **Metric colours in Universe:** Depth, PageRank, Authority and Hub, with a legend. Authority and hub use percentiles because a few pages hold most of the score.
+- **Open in Explorer** on a selected page switches to Graph Explorer with that page open.
+
+### Removed
+
+- **Full Graph.** Universe covers the whole-site view for any crawl size. This drops the Cosmos.gl dependency and three web workers.
+
+### Fixed
+
+- Graph Explorer search left the view empty: the camera jumped to graph coordinates instead of screen coordinates.
+- Authority and hub scores were 0 for every crawl opened after a restart, because they were never stored with the pages. They are now recomputed from the link graph when a crawl loads (crawls up to 200,000 pages, the same limit as during a crawl).
+
 ## [1.3.0] - 2026-10-24
 
 A 3D map of your site's internal links, and directory views that stay fast on 1M-page crawls.
@@ -78,6 +95,7 @@ A redesigned dashboard, clearer crawl results, and security fixes.
 
 First public release: spider, list, sitemap, HEAD-only and scheduled crawls; embedded web dashboard; SEO, content and link analysis; server log analysis; PSI, CrUX, GSC, GA4, Plausible and AI integrations; JS rendering; robots.txt testing; and an in-app updater.
 
+[1.3.1]: https://github.com/jlhernando/micelio-crawler/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/jlhernando/micelio-crawler/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/jlhernando/micelio-crawler/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/jlhernando/micelio-crawler/compare/v1.0.0...v1.1.0

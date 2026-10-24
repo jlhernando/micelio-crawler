@@ -304,3 +304,43 @@ func TestUniverseNodeLinksOrphan(t *testing.T) {
 		t.Errorf("/lonely = level %v orphan %v", b["level"], b["orphan"])
 	}
 }
+
+func TestUniverseSearchAndMetric(t *testing.T) {
+	api, _, m := newTestAPI(t)
+	pages := universePages(30)
+	for i, p := range pages {
+		p.Depth = i % 4
+		p.LinkIntelligence = &types.LinkIntelligenceData{AuthorityScore: float64(i)}
+	}
+	pages[7].Title.Text = "Unique Needle"
+	m.mu.Lock()
+	m.results["sm"] = &CrawlResults{Pages: pages, PagesReady: true}
+	m.mu.Unlock()
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest("GET", "/api/crawl/sm/universe/search?q=needle", nil))
+	var s struct {
+		Rows []universeCard `json:"rows"`
+	}
+	json.NewDecoder(rec.Body).Decode(&s)
+	if len(s.Rows) != 1 || s.Rows[0].Title != "Unique Needle" {
+		t.Fatalf("search = %+v", s.Rows)
+	}
+	rec = httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest("GET", "/api/crawl/sm/universe/metric?name=depth&n=5", nil))
+	b := rec.Body.Bytes()
+	if string(b[:4]) != "UNM1" || len(b) != universeHeaderBytes+5 {
+		t.Fatalf("metric %q len %d", b[:4], len(b))
+	}
+	// order is PageRank desc = page index asc here, so depth = pos % 4
+	for k := 0; k < 5; k++ {
+		if b[universeHeaderBytes+k] != byte(k%4) {
+			t.Errorf("depth[%d] = %d", k, b[universeHeaderBytes+k])
+		}
+	}
+	rec = httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest("GET", "/api/crawl/sm/universe/metric?name=authority", nil))
+	b = rec.Body.Bytes()
+	if b[universeHeaderBytes+29] != 255 || b[universeHeaderBytes] != 0 || b[universeHeaderBytes+1] != 1 {
+		t.Errorf("authority ends = %d %d", b[universeHeaderBytes], b[universeHeaderBytes+29])
+	}
+}

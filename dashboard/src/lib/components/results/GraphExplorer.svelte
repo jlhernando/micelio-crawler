@@ -9,7 +9,8 @@
   import type { GraphNode, GraphEdge, SubgraphMeta, GraphSearchResult } from '../../types/graph.js';
   import { buildRankMaps } from '../../utils/graph.js';
 
-  let { crawlId }: { crawlId: string } = $props();
+  // focusUrl: a page to open and select (set when Universe hands a page over).
+  let { crawlId, focusUrl = null }: { crawlId: string; focusUrl?: string | null } = $props();
 
   // State
   let visibleNodes = $state<GraphNode[]>([]);
@@ -462,6 +463,14 @@
     loadInitialGraph();
   }
 
+  // Sigma's camera works in normalised display coordinates, not graph x/y, so
+  // read the node's display position (animating to raw x/y left the view empty).
+  function focusCamera(id: string) {
+    const pos = sigmaRenderer?.getNodeDisplayData(id);
+    if (!pos) return;
+    sigmaRenderer!.getCamera().animate({ x: pos.x, y: pos.y, ratio: 0.3 }, { duration: 400 });
+  }
+
   async function goToSearchResult(result: GraphSearchResult) {
     searchQuery = '';
     searchResults = [];
@@ -469,11 +478,7 @@
     const existing = nodeIndex.get(result.id);
     if (existing && sigmaRenderer && graphInstance?.hasNode(result.id)) {
       selectedNode = existing;
-      const cam = sigmaRenderer.getCamera();
-      cam.animate(
-        { x: graphInstance.getNodeAttribute(result.id, 'x') as number, y: graphInstance.getNodeAttribute(result.id, 'y') as number, ratio: 0.3 },
-        { duration: 400 }
-      );
+      focusCamera(result.id);
       return;
     }
     // Otherwise, load it as a new root expansion
@@ -516,11 +521,7 @@
       setTimeout(() => {
         if (sigmaRenderer && graphInstance?.hasNode(result.id)) {
           selectedNode = nodeIndex.get(result.id) ?? null;
-          const cam = sigmaRenderer.getCamera();
-          cam.animate(
-            { x: graphInstance.getNodeAttribute(result.id, 'x') as number, y: graphInstance.getNodeAttribute(result.id, 'y') as number, ratio: 0.3 },
-            { duration: 400 }
-          );
+          focusCamera(result.id);
         }
       }, 2500);
     } catch (err: any) {
@@ -541,6 +542,17 @@
     breadcrumbs = breadcrumbs.slice(0, index + 1);
     reloadFromExpandedSet();
   }
+
+  let focusedFor: string | null = null;
+  $effect(() => {
+    const url = focusUrl;
+    if (!url || url === focusedFor) return;
+    focusedFor = url;
+    (async () => {
+      if (!graphLoaded) await loadInitialGraph();
+      if (!destroyed && !analysisPending) await goToSearchResult({ id: url, title: '', depth: 0, pageRank: 0 });
+    })();
+  });
 
   onMount(() => {
     const ws = createWsClient((msg) => {

@@ -163,7 +163,6 @@ metrics and suggestions.
   Authority, Hub, and PageRank color modes are available.
 - **Universe** draws the whole site as a 3D map of its internal links. See
   [Universe](#universe) below.
-- **Full Graph** provides a WebGL whole-site overview for smaller graph slices.
 - Other views include the directory tree, site treemap, anchor cloud, PageRank
   distribution, dead ends, nofollow usage, links to non-indexable pages, orphan
   pages, and semantic link suggestions.
@@ -197,14 +196,19 @@ Controls:
 |---|---|
 | **Layout: Link structure / Grouped** | Link structure places pages by links (default). Grouped places each cluster around its own centre, with lines between clusters showing real link counts. |
 | **Colour: Section / Folder / Subfolder / Template** | Colours pages by group. Section finds the folder most of the site shares (for example `/en-US/docs/Web/`) and groups by the folder below it. |
+| **Metric: Depth / PageRank / Authority / Hub** | Colours pages by a metric instead. Depth uses one colour per click level; the others go from grey (low) to gold (high). Authority and hub are shown as percentiles, since a few pages hold most of the score. Click the active metric again to go back to group colours. |
+| **Search** | Find a page by title or URL. Press Enter or pick a result to fly to it and open its details. |
 | **Cross links** | Adds the links that are not part of the click-path tree. Off by default, since on large sites they hide the structure. |
 | **Menu, footer & section nav links** | Adds links to navigation pages: pages linked from 40%+ of the site or from half of their own section. Off by default. |
 | **Cluster table** | Click a row to fly to that cluster. The table switches to its pages, sortable by PR, inlinks and outlinks. |
 
+<img src="screenshot-universe-metrics.png" alt="Universe coloured by authority" width="720">
+
 Click a dot or a table row to select a page. The panel shows its status,
 PageRank, inlinks, outlinks and depth, how many clicks it takes to reach and
 through which page, and a thumbnail. Its inlinks are drawn in green and its
-outlinks in amber.
+outlinks in amber. **Open in Explorer** switches to Graph Explorer with that page
+open, to study its links one level at a time.
 
 <img src="screenshot-universe-page.png" alt="Selected page with inlinks, outlinks and thumbnail" width="720">
 

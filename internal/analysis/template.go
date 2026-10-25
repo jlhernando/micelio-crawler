@@ -29,19 +29,64 @@ var (
 	listingParamsRe = regexp.MustCompile(`(?i)[?&](sort|order|filter|price|brand|make|category)=`)
 	productURLRe    = regexp.MustCompile(`(?i)/products?/|/items?/|/p/|/pd/|/sku/|/goods/|/products/[^/]+$`)
 	adDetailURLRe   = regexp.MustCompile(`(?i)/(oferta|offer|annonce|anuncio|oglas|ilan|inserat)/[^/?]+|/d/oferta/|/marketplace/item/|/(itm|item|listing)/[^/]*-?\d{5,}|/classified/[^/?]+`)
-	articleURLRe = regexp.MustCompile(`(?i)/blog/|/articles?/|/posts?/|/news/|/stories/|/journal/|/magazine/|/editorial/|/\d{4}/\d{2}/`)
-	legalURLRe   = regexp.MustCompile(`(?i)/privacy|/terms|/tos|/legal|/disclaimer|/cookie|/gdpr|/imprint|/impressum|/agb|/datenschutz|/conditions|/compliance|/policy|/terms-of-service|/privacy-policy`)
-	contactURLRe = regexp.MustCompile(`(?i)/contacts?/|/contacto/|/kontakt|/get-in-touch|/reach-us|/support|/help|/feedback`)
-	faqURLRe     = regexp.MustCompile(`(?i)/faqs?/|/frequently-asked|/help-center|/knowledge-base|/kb/|/questions`)
-	searchURLRe  = regexp.MustCompile(`(?i)/search|/results|\?q=|\?query=|\?search=|\?s=|\?keyword=`)
-	loginURLRe   = regexp.MustCompile(`(?i)/login|/signin|/sign-in|/log-in|/register|/signup|/sign-up|/auth|/authenticate|/account/login|/my-account`)
+	articleURLRe    = regexp.MustCompile(`(?i)/blog/|/articles?/|/posts?/|/news/|/stories/|/journal/|/magazine/|/editorial/|/\d{4}/\d{2}/`)
+	legalURLRe      = regexp.MustCompile(`(?i)/privacy|/terms|/tos|/legal|/disclaimer|/cookie|/gdpr|/imprint|/impressum|/agb|/datenschutz|/conditions|/compliance|/policy|/terms-of-service|/privacy-policy`)
+	contactURLRe    = regexp.MustCompile(`(?i)/contacts?/|/contacto/|/kontakt|/get-in-touch|/reach-us|/support|/help|/feedback`)
+	faqURLRe        = regexp.MustCompile(`(?i)/faqs?/|/frequently-asked|/help-center|/knowledge-base|/kb/|/questions`)
+	searchURLRe     = regexp.MustCompile(`(?i)/search|/results|\?q=|\?query=|\?search=|\?s=|\?keyword=`)
+	loginURLRe      = regexp.MustCompile(`(?i)/login|/signin|/sign-in|/log-in|/register|/signup|/sign-up|/auth|/authenticate|/account/login|/my-account`)
 
-	h1FAQRe     = regexp.MustCompile(`(?i)\b(faq|frequently\s+asked|questions)\b`)
-	h1ContactRe = regexp.MustCompile(`(?i)\b(contact|get\s+in\s+touch|reach\s+us)\b`)
+	// H1 patterns cover the common European shop languages, not only English.
+	h1FAQRe     = regexp.MustCompile(`(?i)\b(faq|frequently\s+asked|questions|preguntas\s+frecuentes|perguntas\s+frequentes|questions\s+fr[ée]quentes|domande\s+frequenti|h[äa]ufige\s+fragen|najcz[ęe][śs]ciej\s+zadawane|veelgestelde\s+vragen|ntreb[ăa]ri\s+frecvente)`)
+	h1ContactRe = regexp.MustCompile(`(?i)\b(contact|cont[áa]ct|contato|contatti|kontakt|get\s+in\s+touch|reach\s+us|fale\s+conosco|customer\s+service|atenci[óo]n\s+al\s+cliente|servicio\s+al\s+cliente|apoio\s+ao\s+cliente|service\s+client|servizio\s+clienti|kundenservice|obs[łl]uga\s+klienta|help\s+cent|centro\s+de\s+ayuda)`)
 	h1LoginRe   = regexp.MustCompile(`(?i)\b(login|log\s+in|sign\s+in|register|sign\s+up|create\s+account)\b`)
 	h1SearchRe  = regexp.MustCompile(`(?i)\b(search\s+results?|results?\s+for)\b`)
-	h1LegalRe   = regexp.MustCompile(`(?i)\b(privacy|terms|legal|disclaimer|cookie)\b`)
+	h1LegalRe   = regexp.MustCompile(`(?i)\b(privacy|terms|legal|disclaimer|cookie|privacidad|privacidade|confidentialit|privacit|t[ée]rminos|termos|condiciones|condi[çc][õo]es|conditions\s+g[ée]n[ée]rales|condizioni|aviso\s+legal|mentions\s+l[ée]gales|note\s+legali|datenschutz|impressum|nutzungsbedingungen|regulamin|polityka\s+prywatno|confiden[țt]ialitate|termeni)`)
+
+	// Last path segment of utility pages, matched as whole hyphen-separated
+	// words: "privacy-security", "aviso-legal", "contact-us", "faq".
+	legalSegRe   = regexp.MustCompile(`(?i)(^|[-_])(privacy|privacidad|privacidade|confidentialite|privacita|terms|terminos|termos|conditions|condiciones|condicoes|condizioni|legal|legales|mentions-legales|note-legali|impressum|imprint|datenschutz|agb|cookies?|gdpr|rgpd|disclaimer|regulamin|polityka-prywatnosci|confidentialitate|termeni)($|[-_.])`)
+	contactSegRe = regexp.MustCompile(`(?i)(^|[-_])(contact|contacto|contactanos|contacta|contato|contatti|contactez-nous|nous-contacter|kontakt|kontakty|customer-service|atencion-al-cliente|servicio-al-cliente|apoio-ao-cliente|service-client|servizio-clienti|kundenservice|obsluga-klienta)($|[-_.])`)
+	faqSegRe     = regexp.MustCompile(`(?i)(^|[-_])(faqs?|preguntas-frecuentes|perguntas-frequentes|questions-frequentes|domande-frequenti|haufige-fragen|haeufige-fragen|czeste-pytania|veelgestelde-vragen|intrebari-frecvente)($|[-_.])`)
 )
+
+// utilityPageType names FAQ, contact and legal pages whose URL and H1 agree,
+// e.g. /customer-service/faq/ with H1 "Preguntas frecuentes". On shops these
+// pages carry the same mega-menu as listings, so link-count signals alone
+// call them listings. Pages with product signals are left to the scorer, so
+// a "Cookie jar" product at /p/cookie-jar stays a product.
+func utilityPageType(page *types.PageData, pageURL string) string {
+	if len(page.Headings.H1) == 0 || page.ProductSignals > 0 {
+		return ""
+	}
+	for _, sd := range page.StructuredData {
+		switch strings.ToLower(sd.Type) {
+		case "product", "offer", "aggregateoffer", "productgroup":
+			return ""
+		}
+	}
+	u, err := url.Parse(pageURL)
+	if err != nil {
+		return ""
+	}
+	seg := strings.Trim(u.Path, "/")
+	if i := strings.LastIndex(seg, "/"); i >= 0 {
+		seg = seg[i+1:]
+	}
+	if seg == "" {
+		return ""
+	}
+	h1 := page.Headings.H1[0]
+	switch {
+	case faqSegRe.MatchString(seg) && h1FAQRe.MatchString(h1):
+		return TemplateFAQ
+	case contactSegRe.MatchString(seg) && h1ContactRe.MatchString(h1):
+		return TemplateContact
+	case legalSegRe.MatchString(seg) && h1LegalRe.MatchString(h1):
+		return TemplateLegal
+	}
+	return ""
+}
 
 // templatePriority breaks score ties, most specific template first.
 var templatePriority = []string{
@@ -72,6 +117,10 @@ func DetectTemplateType(page *types.PageData, seedURL string) string {
 	// Homepage: exact root path on seed domain
 	if isHomepagePath(urlToCheck, seedURL) {
 		return TemplateHomepage
+	}
+
+	if t := utilityPageType(page, urlToCheck); t != "" {
+		return t
 	}
 
 	// URL patterns (weight 3)

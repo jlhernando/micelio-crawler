@@ -652,7 +652,7 @@ func extractAdDetailSignals(doc *goquery.Document) int {
 		if adDetailClassPatterns.MatchString(combined) {
 			adSignals++
 		}
-		if ecommerceClassPatterns.MatchString(combined) {
+		if ecommerceClassPatterns.MatchString(combined) && !inSiteChrome(s) {
 			ecomSignals++
 		}
 	})
@@ -666,7 +666,7 @@ func extractAdDetailSignals(doc *goquery.Document) int {
 			if adDetailClassPatterns.MatchString(val) {
 				adSignals++
 			}
-			if ecommerceClassPatterns.MatchString(val) {
+			if ecommerceClassPatterns.MatchString(val) && !inSiteChrome(s) {
 				ecomSignals++
 			}
 		}
@@ -681,6 +681,14 @@ func extractAdDetailSignals(doc *goquery.Document) int {
 	}
 
 	return adSignals - ecomSignals
+}
+
+// siteChrome matches the header, menu and footer every page shares. A cart
+// link there says the site is a shop, not that this page is a product.
+const siteChrome = "header, nav, footer, [role=banner], [role=navigation], [role=contentinfo]"
+
+func inSiteChrome(s *goquery.Selection) bool {
+	return s.Closest(siteChrome).Length() > 0
 }
 
 // buyButtonText matches add-to-cart style call-to-action text in common languages.

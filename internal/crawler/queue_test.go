@@ -157,6 +157,26 @@ func TestQueuePatternFilters(t *testing.T) {
 	}
 }
 
+// A folder filter with a trailing slash must accept the folder page itself,
+// whose slash NormalizeURL strips (the start URL in a folder crawl).
+func TestQueueIncludeMatchesFolderWithoutSlash(t *testing.T) {
+	q := NewCrawlQueue("https://example.com/es/es/", 5, 100, &QueueOptions{
+		IncludePatterns: []*regexp.Regexp{regexp.MustCompile(`^https://example\.com/es/es/`)},
+	})
+	if !q.Enqueue("https://example.com/es/es/", 0, nil) {
+		t.Error("folder start URL should match its own include filter")
+	}
+	if !q.Enqueue("https://example.com/es/es/sofas/", 1, nil) {
+		t.Error("page inside the folder should match")
+	}
+	if q.Enqueue("https://example.com/es/esx", 1, nil) {
+		t.Error("sibling path should still be rejected")
+	}
+	if q.Enqueue("https://example.com/es/es.pdf", 1, nil) {
+		t.Error("file next to the folder should still be rejected")
+	}
+}
+
 func TestQueueMarkVisited(t *testing.T) {
 	q := NewCrawlQueue("https://example.com", 5, 100, nil)
 

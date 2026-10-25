@@ -350,6 +350,15 @@ func pageOutDegree(p *types.PageData) int {
 	return 0
 }
 
+// pageStatusClass is statusClass for a page. URLs blocked by robots.txt were
+// never fetched, so they have no status code but are not errors.
+func pageStatusClass(p *types.PageData) byte {
+	if p.RobotsBlocked {
+		return 0
+	}
+	return statusClass(p.StatusCode)
+}
+
 func statusClass(code int) byte {
 	switch {
 	case code >= 200 && code < 300:
@@ -421,7 +430,7 @@ func buildUniverseLayout(results *CrawlResults, requested, layout string) *unive
 		c.PRSum += p.PageRank
 		c.InAvg += float64(l.inDeg[pi])
 		c.OutAvg += float64(pageOutDegree(p))
-		if statusClass(p.StatusCode) == 2 {
+		if pageStatusClass(p) == 2 {
 			c.Errors++
 			l.errors++
 		}
@@ -489,7 +498,7 @@ func buildUniverseLayout(results *CrawlResults, requested, layout string) *unive
 		if maxPR > 0 {
 			l.rank[pos] = byte(math.Round(255 * math.Sqrt(math.Max(0, p.PageRank)/maxPR)))
 		}
-		l.flags[pos] = statusClass(p.StatusCode)
+		l.flags[pos] = pageStatusClass(p)
 	}
 	return l
 }

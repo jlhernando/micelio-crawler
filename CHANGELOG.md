@@ -2,6 +2,12 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.3.7] - 2026-10-25
+
+### Fixed
+
+- **Rollback restores a working binary.** The updater saved its backup without the execute permission, so "Roll back" left a Micelio that would not start ("permission denied"). Backups now keep the binary's permissions, and rollback also repairs backups made by older versions.
+
 ## [1.3.6] - 2026-10-25
 
 ### Fixed

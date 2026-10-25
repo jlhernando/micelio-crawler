@@ -223,7 +223,7 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 	retries := 0
 
 	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
+		req, err := newRequest(ctx, http.MethodGet, currentURL)
 		if err != nil {
 			return types.FetchResult{
 				URL:            rawURL,
@@ -407,7 +407,7 @@ func FetchHead(ctx context.Context, rawURL string, opts FetchOptions) types.Head
 	retries := 0
 
 	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodHead, currentURL, nil)
+		req, err := newRequest(ctx, http.MethodHead, currentURL)
 		if err != nil {
 			return types.HeadResult{
 				URL:            rawURL,
@@ -551,7 +551,7 @@ func CheckExternalURL(ctx context.Context, rawURL string, userAgent string, skip
 		client = DefaultClient(externalTimeout, nil)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, rawURL, nil)
+	req, err := newRequest(ctx, http.MethodHead, rawURL)
 	if err != nil {
 		return 0, err
 	}
@@ -574,7 +574,7 @@ func CheckExternalURL(ctx context.Context, rawURL string, userAgent string, skip
 			if !skipSSRF && IsPrivateURL(resolved) {
 				return 0, fmt.Errorf("redirect to private address blocked: %s", resolved)
 			}
-			req, err = http.NewRequestWithContext(ctx, http.MethodHead, resolved, nil)
+			req, err = newRequest(ctx, http.MethodHead, resolved)
 			if err != nil {
 				return 0, err
 			}

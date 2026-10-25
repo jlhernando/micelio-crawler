@@ -211,7 +211,7 @@ func checkExternalStatus(ctx context.Context, client *http.Client, rawURL, userA
 }
 
 func doExternalRequest(ctx context.Context, client *http.Client, method, rawURL, userAgent string) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
+	req, err := newRequest(ctx, method, rawURL)
 	if err != nil {
 		return 0, err
 	}

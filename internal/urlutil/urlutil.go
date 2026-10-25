@@ -100,3 +100,35 @@ func SortedQuery(params url.Values) string {
 	}
 	return sb.String()
 }
+
+// EscapeQuery percent-encodes the bytes a raw query must not carry on the
+// wire (spaces, controls, non-ASCII, and "<>\"`{|}^\\"), the way browsers
+// do. Existing escapes and the &, = separators are kept. Go sends RawQuery
+// verbatim, so an href like "?q=a b" otherwise reaches the server with a
+// literal space and gets 400 Bad Request.
+func EscapeQuery(q string) string {
+	const hex = "0123456789ABCDEF"
+	needs := func(c byte) bool {
+		return c <= ' ' || c >= 0x7f || strings.IndexByte("\"<>`{|}^\\", c) >= 0
+	}
+	i := 0
+	for i < len(q) && !needs(q[i]) {
+		i++
+	}
+	if i == len(q) {
+		return q
+	}
+	var sb strings.Builder
+	sb.Grow(len(q) + 16)
+	sb.WriteString(q[:i])
+	for ; i < len(q); i++ {
+		if c := q[i]; needs(c) {
+			sb.WriteByte('%')
+			sb.WriteByte(hex[c>>4])
+			sb.WriteByte(hex[c&15])
+		} else {
+			sb.WriteByte(c)
+		}
+	}
+	return sb.String()
+}

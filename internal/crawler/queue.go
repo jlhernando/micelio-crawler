@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -497,16 +498,11 @@ func (q *CrawlQueue) closeSpill() {
 }
 
 func (q *CrawlQueue) matchesFilters(u string) bool {
-	matchTarget := u
-	if q.pathOnlyFilters {
-		if parsed, err := url.Parse(u); err == nil {
-			matchTarget = parsed.Path
-		}
-	}
+	targets := filterTargets(u, q.pathOnlyFilters)
 	if len(q.includePatterns) > 0 {
 		matched := false
 		for _, p := range q.includePatterns {
-			if p.MatchString(matchTarget) {
+			if matchAny(p, targets) {
 				matched = true
 				break
 			}
@@ -519,7 +515,7 @@ func (q *CrawlQueue) matchesFilters(u string) bool {
 	}
 	if len(q.excludePatterns) > 0 {
 		for i, p := range q.excludePatterns {
-			if p.MatchString(matchTarget) {
+			if matchAny(p, targets) {
 				q.excludedByPattern[i]++
 				q.recordExclusion("exclude_filter", p.String(), u)
 				return false
@@ -527,6 +523,41 @@ func (q *CrawlQueue) matchesFilters(u string) bool {
 		}
 	}
 	return true
+}
+
+// filterTargets returns what include/exclude patterns are tested against.
+// NormalizeURL strips the trailing slash, so "/es/es/" arrives as "/es/es";
+// the slashed form is tried too, otherwise a filter written as "/es/es/"
+// would reject the folder page itself (often the start URL).
+func filterTargets(u string, pathOnly bool) []string {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return []string{u}
+	}
+	target := u
+	if pathOnly {
+		target = parsed.Path
+	}
+	if parsed.Path == "" || strings.HasSuffix(parsed.Path, "/") || path.Ext(parsed.Path) != "" {
+		return []string{target}
+	}
+	if pathOnly {
+		return []string{target, target + "/"}
+	}
+	parsed.Path += "/"
+	if parsed.RawPath != "" {
+		parsed.RawPath += "/"
+	}
+	return []string{target, parsed.String()}
+}
+
+func matchAny(re *regexp.Regexp, targets []string) bool {
+	for _, t := range targets {
+		if re.MatchString(t) {
+			return true
+		}
+	}
+	return false
 }
 
 func (q *CrawlQueue) isInternal(u string) bool {

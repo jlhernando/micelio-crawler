@@ -2,6 +2,16 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.3.5] - 2026-10-25
+
+Three fixes found on a 10,000-page ecommerce test crawl.
+
+### Fixed
+
+- **Help pages are no longer classified as products.** A cart or checkout link in the site header, menu or footer counted as a product-page signal, so FAQ, terms and store pages on a shop showed up as products. Only signals in the page's own content count now. Real product pages are unchanged.
+- **Universe error count.** URLs blocked by robots.txt were counted and coloured as errors (166 shown where the crawl had 3). They now count as normal pages.
+- **Folder include filters accept the folder page.** A filter like `^https://example.com/shop/` rejected `https://example.com/shop` (Micelio removes the trailing slash), so a crawl started at that folder ended with 0 pages. Include and exclude filters now also try the URL with its trailing slash.
+
 ## [1.3.4] - 2026-10-25
 
 ### Fixed

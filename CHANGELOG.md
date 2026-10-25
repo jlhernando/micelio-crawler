@@ -2,6 +2,12 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.3.4] - 2026-10-25
+
+### Fixed
+
+- **Links with spaces or accents in the query no longer return 400.** A link like `?filter=Acero inoxidable` was sent with a raw space, and servers answered 400 Bad Request. Micelio now encodes the query the way a browser does (`%20`, `%C3%AD`). On a 3,000-page ecommerce test crawl this removed 172 false errors and raised indexable pages from 82.7% to 88.3%.
+
 ## [1.3.3] - 2026-10-25
 
 Scheduled crawls get the full crawl setup, show up in History, and can be limited to an allowed network.

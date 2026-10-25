@@ -224,6 +224,12 @@ func (u *Updater) Rollback() error {
 	if _, err := os.Stat(bakPath); err != nil {
 		return errors.New("no backup file found — nothing to roll back to")
 	}
+	// Backups made before v1.3.7 were saved without the execute bit.
+	if info, err := os.Stat(bakPath); err == nil && info.Mode().Perm()&0o111 == 0 {
+		if err := os.Chmod(bakPath, info.Mode().Perm()|0o755); err != nil {
+			return fmt.Errorf("rollback failed: %w", err)
+		}
+	}
 	if err := os.Rename(bakPath, u.binaryPath); err != nil {
 		return fmt.Errorf("rollback failed: %w", err)
 	}
@@ -410,18 +416,27 @@ func parseChecksumFor(r io.Reader, assetName string) (string, error) {
 }
 
 // copyFile copies src to dst, creating or truncating dst.
+// copyFile copies src to dst with src's permissions, so a backup of the
+// binary stays executable and Rollback restores a runnable file.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.Create(dst)
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm())
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	if err := out.Chmod(info.Mode().Perm()); err != nil {
 		return err
 	}
 	return out.Close()

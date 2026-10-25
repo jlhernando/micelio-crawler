@@ -397,6 +397,34 @@ func TestRollback(t *testing.T) {
 	}
 }
 
+// Backups made by older versions were 0644; Rollback must still restore a
+// runnable binary, and new backups keep the binary's permissions.
+func TestRollbackRestoresExecutable(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "micelio")
+	if err := os.WriteFile(bin, []byte("NEW"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin+".bak", []byte("OLD"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := New("test/repo", "2.0.0", bin, dir).Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if info, _ := os.Stat(bin); info.Mode().Perm()&0o100 == 0 {
+		t.Errorf("restored binary is not executable: %v", info.Mode())
+	}
+
+	if err := copyFile(bin, bin+".bak"); err != nil {
+		t.Fatal(err)
+	}
+	src, _ := os.Stat(bin)
+	bak, _ := os.Stat(bin + ".bak")
+	if bak.Mode().Perm() != src.Mode().Perm() {
+		t.Errorf("backup mode = %v, want %v", bak.Mode().Perm(), src.Mode().Perm())
+	}
+}
+
 func TestRollbackNoBackup(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "micelio")

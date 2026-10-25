@@ -307,13 +307,20 @@ func (s *Scheduler) runOnce() {
 	if res.Status == "" {
 		ctl := newRunControl()
 		runCtx, stopMonitor := context.WithCancel(s.ctx)
-		go s.monitorPrecheck(runCtx, ctl)
+		monitorDone := make(chan struct{})
+		go func() {
+			defer close(monitorDone)
+			s.monitorPrecheck(runCtx, ctl)
+		}()
 		runner := s.config.Runner
 		if runner == nil {
 			runner = directRunner{}
 		}
 		res = runner.Run(s.ctx, s.config, ctl)
 		stopMonitor()
+		// Wait for the monitor so it cannot save a stale paused state
+		// after the run has finished.
+		<-monitorDone
 	}
 
 	durationMs := time.Since(startTime).Milliseconds()

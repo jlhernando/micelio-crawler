@@ -7,6 +7,7 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 ### Fixed
 
 - **FAQ, contact and legal pages on shops get their own type.** Shops put the same large menu on these pages as on category pages, so link counts made them look like listings. When the last part of the URL and the H1 agree (for example `/customer-service/faq/` with "Preguntas frecuentes"), the page is now classified as FAQ, contact or legal. Works in English, Spanish, Portuguese, French, Italian, German, Polish, Dutch and Romanian. Pages with product signals are not affected.
+- **Scheduled runs** no longer risk saving a stale "paused" state after the run ends.
 
 ## [1.3.5] - 2026-10-25
 

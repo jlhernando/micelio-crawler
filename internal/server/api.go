@@ -60,6 +60,7 @@ var ValidSettings = map[string]string{
 	"alertEmailHost": "string", "alertEmailPort": "number", "alertEmailUser": "string",
 	"alertEmailPassword": "string", "alertEmailFrom": "string", "alertEmailTo": "string",
 	"alertEmailSecurity": "string", "alertEmailAlways": "boolean", "dashboardUrl": "string",
+	"alertTelegramToken": "string", "alertTelegramChatId": "string", "alertAlways": "boolean",
 }
 
 // envFallbacks maps setting keys to environment variable names.
@@ -69,6 +70,7 @@ var envFallbacks = map[string]string{
 	"cruxKey":            "MICELIO_CRUX_KEY",
 	"plausibleApiKey":    "MICELIO_PLAUSIBLE_KEY",
 	"alertEmailPassword": "MICELIO_SMTP_PASSWORD",
+	"alertTelegramToken": "MICELIO_TELEGRAM_TOKEN",
 }
 
 // CreateAPIHandler returns an http.Handler for all /api/* routes.
@@ -1612,7 +1614,7 @@ func validateSettings(input map[string]interface{}) (valid map[string]interface{
 // These are masked in GET responses but accepted as-is in PUT requests.
 var secretSettingKeys = map[string]bool{
 	"psiKey": true, "aiKey": true, "cruxKey": true, "plausibleApiKey": true,
-	"alertEmailPassword": true,
+	"alertEmailPassword": true, "alertTelegramToken": true,
 }
 
 // maskSecrets replaces secret values with a masked placeholder.

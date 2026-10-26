@@ -1096,6 +1096,7 @@ func scheduleCmd() *cobra.Command {
 		outputDir         string
 		webhookURL        string
 		emailTo           string
+		telegramChat      string
 		smtpHost          string
 		smtpPort          int
 		smtpUser          string
@@ -1251,22 +1252,33 @@ Example, only crawl from an allowed network:
 			if pc.Enabled() {
 				cfg.Precheck = pc
 			}
-			if emailTo != "" {
+			if emailTo != "" || telegramChat != "" {
 				email := alerts.EmailConfig{
 					Host: smtpHost, Port: smtpPort, Username: smtpUser, From: smtpFrom,
 					Password: os.Getenv("MICELIO_SMTP_PASSWORD"), To: alerts.ParseRecipients(emailTo), Security: smtpSecurity,
 				}
-				if !email.Enabled() {
+				if emailTo != "" && !email.Enabled() {
 					return fmt.Errorf("--email-to needs --smtp-host and --smtp-from (password in MICELIO_SMTP_PASSWORD)")
+				}
+				tgToken := os.Getenv("MICELIO_TELEGRAM_TOKEN")
+				if telegramChat != "" && tgToken == "" {
+					return fmt.Errorf("--telegram-chat needs the bot token in MICELIO_TELEGRAM_TOKEN")
 				}
 				cfg.OnRunDone = func(sc scheduler.Config, res scheduler.RunResult) {
 					info := alerts.RunInfo{Name: sc.Name, SeedURL: sc.URL, Status: res.Status, Reason: res.Reason, Pages: res.Pages}
 					if res.Status == "success" {
 						info.Status = "completed"
 					}
-					subject, text, html := alerts.RenderEmail(info)
-					if err := alerts.SendEmail(email, subject, text, html); err != nil {
-						fmt.Fprintf(os.Stderr, "  [email] %v\n", err)
+					if email.Enabled() {
+						subject, text, html := alerts.RenderEmail(info)
+						if err := alerts.SendEmail(email, subject, text, html); err != nil {
+							fmt.Fprintf(os.Stderr, "  [email] %v\n", err)
+						}
+					}
+					if telegramChat != "" {
+						if err := alerts.SendTelegram(tgToken, telegramChat, alerts.RenderTelegram(info)); err != nil {
+							fmt.Fprintf(os.Stderr, "  [telegram] %v\n", err)
+						}
 					}
 				}
 			}
@@ -1296,6 +1308,7 @@ Example, only crawl from an allowed network:
 	cmd.Flags().StringVar(&outputDir, "output-dir", "scheduled-crawls", "Output directory for crawl results")
 	cmd.Flags().StringVar(&webhookURL, "webhook", "", "Webhook URL for notifications")
 	cmd.Flags().StringVar(&emailTo, "email-to", "", "Email each run's result to these addresses (comma separated); password in MICELIO_SMTP_PASSWORD")
+	cmd.Flags().StringVar(&telegramChat, "telegram-chat", "", "Send each run's result to this Telegram chat ID; bot token in MICELIO_TELEGRAM_TOKEN")
 	cmd.Flags().StringVar(&smtpHost, "smtp-host", "", "SMTP server for --email-to")
 	cmd.Flags().IntVar(&smtpPort, "smtp-port", 0, "SMTP port (default 587, or 465 with --smtp-security tls)")
 	cmd.Flags().StringVar(&smtpUser, "smtp-user", "", "SMTP username")

@@ -20,6 +20,68 @@ import (
 // the same schedule (or, without one, the same start URL); see
 // alerts.ShouldEmail for when a message is sent.
 
+// reportChannels are the destinations of the crawl report.
+type reportChannels struct {
+	email         alerts.EmailConfig
+	telegramToken string
+	telegramChat  string
+	slackURL      string
+}
+
+func (c reportChannels) any() bool {
+	return c.email.Enabled() || (c.telegramToken != "" && c.telegramChat != "") || c.slackURL != ""
+}
+
+// channelSettings reads every report channel, the "every crawl" option and
+// the dashboard address used in links.
+func (m *CrawlManager) channelSettings() (ch reportChannels, always bool, dashboardURL string) {
+	settings, err := m.store.GetSettings()
+	if err != nil {
+		return
+	}
+	str := func(k string) string { s, _ := settings[k].(string); return strings.TrimSpace(s) }
+	ch.email, always, dashboardURL = m.emailSettings()
+	if a, ok := settings["alertAlways"].(bool); ok {
+		always = a
+	}
+	ch.telegramToken = str("alertTelegramToken")
+	if ch.telegramToken == "" {
+		ch.telegramToken = os.Getenv("MICELIO_TELEGRAM_TOKEN")
+	}
+	ch.telegramChat = str("alertTelegramChatId")
+	ch.slackURL = str("alertSlackUrl")
+	return
+}
+
+// sendReport delivers one report to every configured channel and returns
+// the channels that failed.
+func sendReport(ch reportChannels, info alerts.RunInfo) (sent []string, failed map[string]error) {
+	failed = map[string]error{}
+	if ch.email.Enabled() {
+		subject, text, html := alerts.RenderEmail(info)
+		if err := alerts.SendEmail(ch.email, subject, text, html); err != nil {
+			failed["email"] = err
+		} else {
+			sent = append(sent, "email")
+		}
+	}
+	if ch.telegramToken != "" && ch.telegramChat != "" {
+		if err := alerts.SendTelegram(ch.telegramToken, ch.telegramChat, alerts.RenderTelegram(info)); err != nil {
+			failed["telegram"] = err
+		} else {
+			sent = append(sent, "telegram")
+		}
+	}
+	if ch.slackURL != "" {
+		if err := alerts.SendSlack(ch.slackURL, alerts.RenderSlack(info)); err != nil {
+			failed["slack"] = err
+		} else {
+			sent = append(sent, "slack")
+		}
+	}
+	return sent, failed
+}
+
 // emailSettings reads the SMTP account and options from Settings.
 func (m *CrawlManager) emailSettings() (cfg alerts.EmailConfig, always bool, dashboardURL string) {
 	settings, err := m.store.GetSettings()
@@ -52,8 +114,8 @@ func (m *CrawlManager) emailSettings() (cfg alerts.EmailConfig, always bool, das
 // emailCrawlResult emails a finished crawl when it is worth reading. It runs
 // in the background and never fails the crawl.
 func (m *CrawlManager) emailCrawlResult(job *CrawlJob, stats types.CrawlStats, pages []*types.PageData) {
-	cfg, always, base := m.emailSettings()
-	if !cfg.Enabled() || job == nil {
+	ch, always, base := m.channelSettings()
+	if !ch.any() || job == nil {
 		return
 	}
 	urls := make([]string, len(pages))
@@ -86,13 +148,14 @@ func (m *CrawlManager) emailCrawlResult(job *CrawlJob, stats types.CrawlStats, p
 		if !alerts.ShouldEmail(info, always) {
 			return
 		}
-		subject, text, html := alerts.RenderEmail(info)
-		if err := alerts.SendEmail(cfg, subject, text, html); err != nil {
-			log.Printf("[alerts] email for crawl %s: %v", job.ID, err)
-			m.store.AddCrawlEvent(job.ID, "email_failed", err.Error())
-			return
+		sent, failed := sendReport(ch, info)
+		for name, err := range failed {
+			log.Printf("[alerts] %s report for crawl %s: %v", name, job.ID, err)
+			m.store.AddCrawlEvent(job.ID, "report_failed", name+": "+err.Error())
 		}
-		m.store.AddCrawlEvent(job.ID, "email_sent", strings.Join(cfg.To, ", "))
+		if len(sent) > 0 {
+			m.store.AddCrawlEvent(job.ID, "report_sent", strings.Join(sent, ", "))
+		}
 	}()
 }
 
@@ -102,14 +165,14 @@ func (m *CrawlManager) emailScheduleRun(sc scheduler.Config, res scheduler.RunRe
 	if res.Status != "skipped" && res.Status != "failed" {
 		return
 	}
-	cfg, _, base := m.emailSettings()
-	if !cfg.Enabled() {
+	ch, _, base := m.channelSettings()
+	if !ch.any() {
 		return
 	}
 	info := alerts.RunInfo{Name: sc.Name, SeedURL: sc.URL, Status: res.Status, Reason: res.Reason, Link: base + "/#/schedules"}
-	subject, text, html := alerts.RenderEmail(info)
-	if err := alerts.SendEmail(cfg, subject, text, html); err != nil {
-		log.Printf("[alerts] email for schedule %s: %v", sc.Name, err)
+	_, failed := sendReport(ch, info)
+	for name, err := range failed {
+		log.Printf("[alerts] %s report for schedule %s: %v", name, sc.Name, err)
 	}
 }
 
@@ -207,26 +270,61 @@ func errorResponses(codes map[int]int) int {
 // registerEmailRoutes adds POST /api/alerts/email/test, which sends a sample
 // email with the saved settings and reports the SMTP error, if any.
 func registerEmailRoutes(mux *http.ServeMux, manager *CrawlManager) {
-	mux.HandleFunc("POST /api/alerts/email/test", func(w http.ResponseWriter, r *http.Request) {
-		cfg, _, base := manager.emailSettings()
-		if !cfg.Enabled() {
-			jsonError(w, "set the SMTP host, sender and recipients first", http.StatusBadRequest)
-			return
-		}
-		info := alerts.RunInfo{
-			Name: "Test email", SeedURL: "https://example.com/", Status: "completed", Pages: 1200, Errors: 3,
+	sample := func(base string) alerts.RunInfo {
+		return alerts.RunInfo{
+			Name: "Test message", SeedURL: "https://example.com/", Status: "completed", Pages: 1200, Errors: 3,
 			DurationMs: int64(25 * time.Minute / time.Millisecond), Link: base, HasPrevious: true,
 			Alerts: &types.AlertSummary{Alerts: []types.AlertResult{{
 				ID: "soft-404-high", Name: "Soft-404 Candidates", Severity: "warning",
-				Message: "This is a sample alert: Micelio alert emails work.",
+				Message: "This is a sample alert: Micelio reports reach this channel",
 			}}},
 			Changes: []alerts.Change{{Label: "Indexable pages", Before: "91.0%", After: "88.5%", Important: true}},
 		}
-		subject, text, html := alerts.RenderEmail(info)
-		if err := alerts.SendEmail(cfg, subject, text, html); err != nil {
+	}
+	// Test Telegram or Slack with the saved settings.
+	mux.HandleFunc("POST /api/alerts/{channel}/test", func(w http.ResponseWriter, r *http.Request) {
+		ch, _, base := manager.channelSettings()
+		info := sample(base)
+		var err error
+		switch r.PathValue("channel") {
+		case "email":
+			if !ch.email.Enabled() {
+				jsonError(w, "set the SMTP host, sender and recipients first", http.StatusBadRequest)
+				return
+			}
+			subject, text, html := alerts.RenderEmail(info)
+			err = alerts.SendEmail(ch.email, subject, text, html)
+		case "telegram":
+			if ch.telegramToken == "" || ch.telegramChat == "" {
+				jsonError(w, "set the Telegram bot token and chat ID first", http.StatusBadRequest)
+				return
+			}
+			err = alerts.SendTelegram(ch.telegramToken, ch.telegramChat, alerts.RenderTelegram(info))
+		case "slack":
+			if ch.slackURL == "" {
+				jsonError(w, "set the Slack webhook URL first", http.StatusBadRequest)
+				return
+			}
+			err = alerts.SendSlack(ch.slackURL, alerts.RenderSlack(info))
+		default:
+			jsonError(w, "unknown channel", http.StatusNotFound)
+			return
+		}
+		if err != nil {
 			jsonError(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		jsonOK(w, map[string]interface{}{"sent": true, "to": cfg.To})
+		jsonOK(w, map[string]interface{}{"sent": true, "to": ch.email.To})
+	})
+
+	// Chats that recently wrote to the bot, to find the chat ID.
+	mux.HandleFunc("POST /api/alerts/telegram/chats", func(w http.ResponseWriter, r *http.Request) {
+		ch, _, _ := manager.channelSettings()
+		chats, err := alerts.TelegramChats(ch.telegramToken)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		jsonOK(w, map[string]interface{}{"chats": chats})
 	})
 }

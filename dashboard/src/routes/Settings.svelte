@@ -43,6 +43,18 @@
     defaultShowBlockedInternal: boolean;
     alertWebhookUrl: string;
     alertSlackUrl: string;
+    alertEmailHost: string;
+    alertEmailPort: number;
+    alertEmailUser: string;
+    alertEmailPassword: string;
+    alertEmailFrom: string;
+    alertEmailTo: string;
+    alertEmailSecurity: string;
+    alertEmailAlways: boolean;
+    dashboardUrl: string;
+    alertTelegramToken: string;
+    alertTelegramChatId: string;
+    alertAlways: boolean;
   }
 
   let loading = $state(true);
@@ -91,6 +103,18 @@
     defaultShowBlockedInternal: false,
     alertWebhookUrl: '',
     alertSlackUrl: '',
+    alertEmailHost: '',
+    alertEmailPort: 587,
+    alertEmailUser: '',
+    alertEmailPassword: '',
+    alertEmailFrom: '',
+    alertEmailTo: '',
+    alertEmailSecurity: 'starttls',
+    alertEmailAlways: false,
+    dashboardUrl: '',
+    alertTelegramToken: '',
+    alertTelegramChatId: '',
+    alertAlways: false,
   };
 
   let dirty = $derived(JSON.stringify(settings) !== savedSnapshot);
@@ -165,6 +189,46 @@
     window.addEventListener('hashchange', handler);
     return () => window.removeEventListener('hashchange', handler);
   });
+
+  let emailTesting = $state(false);
+  let emailTest = $state<{ ok: boolean; message: string } | null>(null);
+
+  async function testEmail() {
+    emailTesting = true;
+    emailTest = null;
+    try {
+      if (dirty) await save(); // the test uses the saved settings
+      const res = await api.testAlertChannel('email');
+      emailTest = { ok: true, message: `Sent to ${res.to.join(', ')}` };
+    } catch (e) {
+      emailTest = { ok: false, message: e instanceof Error ? e.message : String(e) };
+    } finally {
+      emailTesting = false;
+    }
+  }
+
+  let channelTest = $state<Record<string, { ok: boolean; message: string } | null>>({});
+  async function testChannel(channel: 'telegram' | 'slack') {
+    channelTest = { ...channelTest, [channel]: { ok: true, message: 'Sending…' } };
+    try {
+      if (dirty) await save();
+      await api.testAlertChannel(channel);
+      channelTest = { ...channelTest, [channel]: { ok: true, message: 'Sent' } };
+    } catch (e) {
+      channelTest = { ...channelTest, [channel]: { ok: false, message: e instanceof Error ? e.message : String(e) } };
+    }
+  }
+
+  let telegramChats = $state<{ id: number; title: string; type: string }[] | null>(null);
+  async function findTelegramChats() {
+    try {
+      if (dirty) await save();
+      telegramChats = (await api.telegramChats()).chats;
+      if (telegramChats.length === 0) channelTest = { ...channelTest, telegram: { ok: false, message: 'No chats yet: send the bot a message (or add it to a group) and try again' } };
+    } catch (e) {
+      channelTest = { ...channelTest, telegram: { ok: false, message: e instanceof Error ? e.message : String(e) } };
+    }
+  }
 
   async function save() {
     if (saving) return; // Guard against concurrent saves (#10)
@@ -699,9 +763,38 @@
             oninput={(e) => set('alertSlackUrl', (e.target as HTMLInputElement).value)}
             class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent"
           />
-          <span class="text-[10px] text-fg-2 mt-1 block">Slack incoming webhook for alert notifications</span>
+          <span class="text-[10px] text-fg-2 mt-1 block">Slack incoming webhook: gets the same crawl report as email (key points, alerts, changes)</span>
+        </label>
+        <div class="flex items-center gap-3">
+          <button type="button" class="px-3 py-1.5 rounded-md border border-border bg-surface-2 text-sm hover:bg-surface-3 cursor-pointer" onclick={() => testChannel('slack')}>Send test to Slack</button>
+          {#if channelTest.slack}<span class="text-xs {channelTest.slack.ok ? 'text-success' : 'text-danger'}">{channelTest.slack.message}</span>{/if}
+        </div>
+      </div>
+
+      <h3 class="text-sm font-medium text-fg mt-6 mb-1">Telegram</h3>
+      <p class="text-xs text-fg-2 mb-3">Create a bot with <a class="underline" href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> (/newbot), paste its token, send the bot any message (or add it to a group or channel), then pick the chat.</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <label class="block">
+          <span class="text-xs text-fg-2">Bot token</span>
+          <input type="password" autocomplete="off" value={str('alertTelegramToken')} placeholder="123456:ABC…" oninput={(e) => set('alertTelegramToken', (e.target as HTMLInputElement).value)} class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+        </label>
+        <label class="block">
+          <span class="text-xs text-fg-2">Chat ID</span>
+          <input type="text" value={str('alertTelegramChatId')} placeholder="-1001234567890" oninput={(e) => set('alertTelegramChatId', (e.target as HTMLInputElement).value)} class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
         </label>
       </div>
+      <div class="flex flex-wrap items-center gap-3 mt-3">
+        <button type="button" class="px-3 py-1.5 rounded-md border border-border bg-surface-2 text-sm hover:bg-surface-3 cursor-pointer" onclick={findTelegramChats}>Find my chat</button>
+        <button type="button" class="px-3 py-1.5 rounded-md border border-border bg-surface-2 text-sm hover:bg-surface-3 cursor-pointer" onclick={() => testChannel('telegram')}>Send test to Telegram</button>
+        {#if channelTest.telegram}<span class="text-xs {channelTest.telegram.ok ? 'text-success' : 'text-danger'}">{channelTest.telegram.message}</span>{/if}
+      </div>
+      {#if telegramChats && telegramChats.length > 0}
+        <div class="mt-2 flex flex-wrap gap-2">
+          {#each telegramChats as c (c.id)}
+            <button type="button" class="px-2 py-1 rounded border border-border text-xs hover:bg-surface-3 cursor-pointer" onclick={() => set('alertTelegramChatId', String(c.id))}>{c.title} · {c.type}</button>
+          {/each}
+        </div>
+      {/if}
 
       <h3 class="text-sm font-medium text-fg mt-6 mb-1">Email</h3>
       <p class="text-xs text-fg-2 mb-3">After each crawl, an email with its alerts and what changed since the previous crawl of the same site or schedule (pages, errors, indexable share, new soft-404 candidates, URLs no longer found). Scheduled runs that are skipped or fail are emailed too. Works with any SMTP account (Gmail or Outlook with an app password, SendGrid, Resend, your company relay).</p>
@@ -742,10 +835,7 @@
           <span class="text-xs text-fg-2">Dashboard address for links</span>
           <input type="url" value={str('dashboardUrl')} placeholder="http://127.0.0.1:3100" oninput={(e) => set('dashboardUrl', (e.target as HTMLInputElement).value)} class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
         </label>
-        <label class="flex items-center gap-2 text-sm md:col-span-3">
-          <input type="checkbox" checked={bool('alertEmailAlways')} onchange={(e) => set('alertEmailAlways', (e.target as HTMLInputElement).checked)} class="w-4 h-4 accent-accent" />
-          Email every crawl, even when nothing changed
-        </label>
+
       </div>
       <div class="flex items-center gap-3 mt-3">
         <button type="button" class="px-3 py-1.5 rounded-md border border-border bg-surface-2 text-sm hover:bg-surface-3 cursor-pointer disabled:opacity-50" disabled={emailTesting} onclick={testEmail}>
@@ -754,6 +844,12 @@
         {#if emailTest}<span class="text-xs {emailTest.ok ? 'text-success' : 'text-danger'}">{emailTest.message}</span>{/if}
       </div>
       <p class="text-[10px] text-fg-2 mt-2">The password stays on this computer and is never shown again. Emails include page URLs: use your company's mail server if that matters.</p>
+
+      <label class="flex items-center gap-2 text-sm mt-6">
+        <input type="checkbox" checked={bool('alertAlways') || bool('alertEmailAlways')} onchange={(e) => { const v = (e.target as HTMLInputElement).checked; set('alertAlways', v); set('alertEmailAlways', v); }} class="w-4 h-4 accent-accent" />
+        Send a report after every crawl, even when nothing changed
+      </label>
+      <p class="text-[10px] text-fg-2 mt-1">Otherwise email, Telegram and Slack get a report only for critical or new alerts, important changes, or a scheduled run that was skipped or failed. Passwords and tokens stay on this computer and are never shown again.</p>
     </CollapsibleSection>
 
     <!-- Bottom save bar -->

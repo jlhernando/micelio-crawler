@@ -264,7 +264,8 @@ export const api = {
   deleteSchedule: (id: string) =>
     request<{ deleted: boolean }>('DELETE', `/api/schedules/${id}`),
 
-  testAlertEmail: () => request<{ sent: boolean; to: string[] }>('POST', '/api/alerts/email/test'),
+  testAlertChannel: (channel: 'email' | 'telegram' | 'slack') => request<{ sent: boolean; to: string[] }>('POST', `/api/alerts/${channel}/test`),
+  telegramChats: () => request<{ chats: { id: number; title: string; type: string }[] }>('POST', '/api/alerts/telegram/chats'),
 
   // Import a crawl made elsewhere (crawl .db or JSONL, optionally .gz/.zst).
   // XHR instead of fetch to report upload progress.

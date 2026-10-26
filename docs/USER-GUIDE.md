@@ -335,16 +335,21 @@ when read back by the API. Configure only the services needed for a crawl:
 | AI analysis | Prompt-based per-page analysis | Provider, model, key, and prompt; Ollama can run locally |
 | Embeddings | Similarity and link opportunities | OpenAI key or a local Ollama model |
 | Webhooks/Slack | Crawl alerts | Destination webhook URL |
-| Email | Crawl alerts and changes since the previous crawl | SMTP host, port, user, password, sender, recipients |
+| Email | Crawl report: alerts and changes since the previous crawl | SMTP host, port, user, password, sender, recipients |
+| Telegram | The same crawl report | Bot token (@BotFather) and chat ID |
 
-**Alert emails** (Settings → Alert Notifications → Email) arrive after a crawl
+**Crawl reports** go to email, Telegram and Slack (Settings → Alert
+Notifications). Each starts with up to five key points, then the alerts and the
+changes. Telegram needs a bot from @BotFather: paste its token, message the bot
+(or add it to a group or channel) and use "Find my chat". Reports arrive after a crawl
 when it has critical or new alerts or an important change since the previous
 crawl of the same schedule or site: pages crawled, 4xx/5xx responses, indexable
 share, new soft-404 candidates, URLs no longer found. Each change lists up to 10
 example URLs. Scheduled runs that are skipped or fail are emailed too. Tick "Email
-every crawl" for a message after every run. "Send test email" checks the account.
+a report after every crawl" for one after every run. Each channel has a test button.
 From the CLI, `micelio schedule --email-to ... --smtp-host ... --smtp-from ...`
-emails each run, with the password in `MICELIO_SMTP_PASSWORD`.
+(password in `MICELIO_SMTP_PASSWORD`) and `--telegram-chat ...` (token in
+`MICELIO_TELEGRAM_TOKEN`) report each run.
 
 Settings also define default crawl limits, robots behavior, user agent, content
 analysis, link intelligence, output, and alerts. A selected New Crawl preset can

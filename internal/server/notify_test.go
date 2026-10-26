@@ -72,3 +72,29 @@ func TestPreviousCrawlBySchedule(t *testing.T) {
 		t.Errorf("previous of scheduled crawl = %+v, want %s", prev, a1.ID)
 	}
 }
+
+func TestTelegramTokenMasked(t *testing.T) {
+	s := newTestStore(t)
+	m := newTestManager(t, s)
+	handler := CreateAPIHandler(s, m, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/alerts/telegram/test", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("test without settings: %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/settings",
+		strings.NewReader(`{"alertTelegramToken":"123:SECRET","alertTelegramChatId":"42","alertAlways":true}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	if strings.Contains(rec.Body.String(), "SECRET") {
+		t.Fatal("GET /api/settings exposes the Telegram token")
+	}
+	ch, always, _ := m.channelSettings()
+	if ch.telegramToken != "123:SECRET" || ch.telegramChat != "42" || !always || !ch.any() {
+		t.Errorf("channels = %+v always=%v", ch, always)
+	}
+}

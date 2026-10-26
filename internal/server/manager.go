@@ -728,6 +728,7 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 			len(crawlStats.AlertSummary.Alerts), crawlStats.AlertSummary.Critical, crawlStats.AlertSummary.Warnings)
 		// Send notifications if configured
 		notifyCfg := m.getAlertNotifyConfig()
+		notifyCfg.SlackURL = "" // Slack gets the full crawl report (notify.go)
 		if !r.skipNotify && (notifyCfg.WebhookURL != "" || notifyCfg.SlackURL != "") {
 			go alerts.Notify(notifyCfg, crawlStats.AlertSummary, crawlConfig.SeedURL)
 		}

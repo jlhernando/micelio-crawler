@@ -196,6 +196,16 @@ func RenderEmail(r RunInfo) (subject, text, htmlBody string) {
 		fmt.Fprintf(&h, `<p style="color:#9a6700"><b>%s</b></p>`, esc(line))
 	}
 
+	if ins := Insights(r); len(ins) > 0 {
+		t.WriteString("\nKey points\n")
+		h.WriteString(`<h3 style="font-size:16px;margin:20px 0 8px">Key points</h3><ul style="padding-left:18px;margin:0">`)
+		for _, s := range ins {
+			fmt.Fprintf(&t, "- %s\n", s)
+			fmt.Fprintf(&h, "<li>%s</li>", esc(s))
+		}
+		h.WriteString("</ul>")
+	}
+
 	if r.Alerts != nil && len(r.Alerts.Alerts) > 0 {
 		t.WriteString("\nAlerts\n")
 		h.WriteString(`<h3 style="font-size:16px;margin:20px 0 8px">Alerts</h3><ul style="padding-left:18px;margin:0">`)

@@ -2,6 +2,26 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.7.0] - 2026-10-26
+
+Crawl reports on Telegram and Slack, with key points.
+
+### Added
+
+- **Telegram reports.** Create a bot with @BotFather, paste its token in Settings → Alert Notifications, message the bot (or add it to a group or channel) and click "Find my chat". The token stays local and is never shown again (or set `MICELIO_TELEGRAM_TOKEN`).
+- **Key points**: every report starts with up to five one-line takeaways, such as new soft-404 candidates, a drop in indexable pages or more errors.
+- Test buttons for email, Telegram and Slack.
+- `micelio schedule --telegram-chat <id>` (token in `MICELIO_TELEGRAM_TOKEN`).
+
+### Changed
+
+- **Slack** now gets the full crawl report (key points, alerts, changes since the previous crawl with example URLs, link to the crawl) instead of only the alert list, and only when there is something to report.
+- One option, "Send a report after every crawl", applies to all channels.
+
+### Fixed
+
+- The Alert Notifications section of Settings failed to open in 1.6.0, so email could not be set up from the dashboard.
+
 ## [1.6.0] - 2026-10-26
 
 Alert emails that say what changed.

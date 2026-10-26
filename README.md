@@ -348,6 +348,20 @@ List all active scheduled crawls and their status.
 micelio schedules
 ```
 
+### import
+
+Open a crawl made elsewhere (for example on a small cloud server) in the dashboard. Takes the crawl database or JSONL output (`.jsonl`, `.gz`, `.zst`) and runs the dashboard's analysis on this computer. See [Crawl in the cloud](docs/CLOUD-CRAWLS.md).
+
+```bash
+# On the server: crawl only, one output file
+micelio crawl https://example.com --max-pages 50000 --no-analysis --db-only --db example.db
+
+# On your computer
+scp server:example.db . && micelio import example.db --link-intelligence
+```
+
+You can also use **History → Import crawl…** in the dashboard.
+
 ### ui
 
 Launch the web dashboard.

@@ -238,6 +238,11 @@ func (s *CrawlStore) GetConfig() (*types.CrawlConfig, error) {
 func (s *CrawlStore) SetStatus(status string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if status == "complete" {
+		if err := s.saveMeta("completedAt", time.Now().UTC().Format(time.RFC3339)); err != nil {
+			return err
+		}
+	}
 	return s.saveMeta("status", status)
 }
 

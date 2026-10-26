@@ -2,6 +2,21 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.4.0] - 2026-10-26
+
+Crawl on a small cloud server, analyse on your computer.
+
+### Added
+
+- **Import crawls.** `micelio import <file>` and **History → Import crawl…** add a crawl made elsewhere to History and run the dashboard's full analysis on this computer: stats, issues, PageRank, Universe and the directory tree. They take the crawl database or the JSONL output (`.jsonl`, `.gz`, `.zst`). The CLI sends the file to a running dashboard, or imports it straight into `~/.micelio`.
+- **Lean crawls.** `micelio crawl --no-analysis` only crawls and saves; `--db-only` writes just the crawl database. A 1,136-page crawl used 63 MB of memory on one CPU core.
+- **[Crawl in the cloud](docs/CLOUD-CRAWLS.md)** guide: server size, moving the files, importing, and what an import cannot rebuild.
+
+### Changed
+
+- Dashboard crawls and imports share the same post-crawl analysis code.
+- The crawl database records when the crawl finished, so imports show the real duration.
+
 ## [1.3.7] - 2026-10-25
 
 ### Fixed

@@ -802,6 +802,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 	})
 
 	registerScheduleRoutes(mux, store, manager)
+	registerImportRoutes(mux, store, manager)
 
 	mux.HandleFunc("DELETE /api/schedules/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")

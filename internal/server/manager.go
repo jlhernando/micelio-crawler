@@ -660,142 +660,11 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		if stopping {
 			analysisCtx = m.ctx
 		}
-		crawlStats, coreGraph := analysis.RunCoreAnalysisWithGraph(analysisCtx, pages, postCfg)
-		applyExternalCheckSummary(&crawlStats, extSummary)
-		// Link intelligence reuses the reporter's graph instead of re-reading
-		// every edge from disk.
-		postCfg.Graph = coreGraph
-
-		// The reporter already stored PageRank on each page (stats keep only
-		// a histogram, plus the URL map for small crawls).
-
-		// Inlink counts feed segment stats and the /pages API, so compute them
-		// before stats are serialized. Pages no longer carry InternalLinks, so
-		// read inlinks from the link graph.
-		inlinkIdx := newInlinkIndex(coreGraph, pages)
-		assignInlinks(pages, inlinkIdx)
-		refreshAutoSegmentStats(pages, &crawlStats)
-
-		// Evaluate alert rules against crawl stats
-		crawlStats.AlertSummary = alerts.Evaluate(&crawlStats)
-		if crawlStats.AlertSummary != nil {
-			log.Printf("[alerts] %d alerts triggered (%d critical, %d warnings)",
-				len(crawlStats.AlertSummary.Alerts), crawlStats.AlertSummary.Critical, crawlStats.AlertSummary.Warnings)
-			// Send notifications if configured
-			notifyCfg := m.getAlertNotifyConfig()
-			if notifyCfg.WebhookURL != "" || notifyCfg.SlackURL != "" {
-				go alerts.Notify(notifyCfg, crawlStats.AlertSummary, crawlConfig.SeedURL)
-			}
-		}
-
-		// Convert CrawlStats to map for JSON serialization
-		statsData, _ := json.Marshal(crawlStats)
-		var statsMap map[string]interface{}
-		json.Unmarshal(statsData, &statsMap)
-
-		// Persist stats to UI DB (survives server restarts)
-		if persistErr := m.store.SaveCrawlStats(crawlID, statsData); persistErr != nil {
-			log.Printf("store: persist stats for crawl %s: %v", crawlID, persistErr)
-		}
-
-		// Determine DB path for lazy page loading
-		dbPath := ""
-		if job != nil {
-			dbPath = job.DBPath
-		}
-
-		// Check if deferred analysis (link intelligence, embeddings) is needed
-		needsDeferred := crawlConfig.LinkIntelligence || (crawlConfig.Embeddings && crawlConfig.EmbeddingKey != "")
-
-		// Link graph + PageRank go to the crawl DB so reloads skip rebuilding
-		// them. Scores are copied now; the write happens in the background.
-		var coreSnap *analysisSnapshot
-		if dbPath != "" {
-			coreSnap = snapshotAnalysis(pages, coreGraph, true)
-		}
-
-		// Pre-compute aggregations before stripping (Anchors, InternalLinks, etc.)
-		anchorStats := anchorCloudToMap(crawlStats.AnchorCloud)
-		if anchorStats == nil {
-			anchorStats = buildAnchorStats(pages)
-		}
-		dirTree := buildDirectoryTree(pages)
-		tmplTypes := collectTemplateTypes(pages)
-
-		// Build page_index for instant merge lookups (before stripping)
-		if crawlStore != nil {
-			if idxErr := crawlStore.BuildPageIndex(pages); idxErr != nil {
-				log.Printf("crawl %s: build page index: %v", crawlID, idxErr)
-			} else {
-				fmt.Fprintf(os.Stderr, "  [page-index] Built index with %d entries for instant merge\n", len(pages))
-			}
-		}
-
-		// Don't strip pages yet if deferred analysis needs them
-		if !needsDeferred {
-			stripPagesForCache(pages)
-		}
-
-		newResult := &CrawlResults{
-			Pages:           pages,
-			Stats:           statsMap,
-			AnchorStats:     anchorStats,
-			DirTree:         dirTree,
-			TemplateTypes:   tmplTypes,
-			InlinkIndex:     inlinkIdx,
-			Graph:           coreGraph,
-			DBPath:          dbPath,
-			PageCount:       pageCount,
-			AnalysisPending: needsDeferred,
-			PagesReady:      true,
-		}
-		newResult.loadingProgress.Store(100)
-
-		m.mu.Lock()
-		// Replaces (and cancels the background load of) any older entry.
-		m.cacheResultLocked(crawlID, newResult, pageCount)
-		m.mu.Unlock()
-
-		// Clear active before emitting complete so listeners see no active crawl.
-		clearActive()
-
-		m.emit(ProgressEvent{
-			CrawlID: crawlID, Type: "complete",
-			Data: map[string]interface{}{
-				"crawlId":         crawlID,
-				"totalPages":      pageCount,
-				"durationMs":      elapsed,
-				"analysisPending": needsDeferred,
-			},
+		m.analyzeAndCache(analysisRun{
+			ctx: analysisCtx, crawlID: crawlID, job: job, config: crawlConfig,
+			pages: pages, postCfg: postCfg, crawlStore: crawlStore, extSummary: extSummary,
+			closeLinks: intLinksClose, elapsed: elapsed, beforeComplete: clearActive,
 		})
-
-		// Launch deferred analysis (link intelligence, embeddings) in background.
-		// Pass crawlStats directly to avoid JSON round-trip precision loss.
-		if needsDeferred {
-			m.background.Add(1)
-			go func() {
-				defer m.background.Done()
-				defer func() {
-					if intLinksClose != nil {
-						intLinksClose()
-					}
-				}()
-				coreSnap.save(dbPath)
-				m.runDeferredAnalysis(crawlID, pages, postCfg, crawlStats, dbPath)
-			}()
-		} else {
-			if intLinksClose != nil {
-				intLinksClose()
-			}
-			if coreSnap != nil {
-				m.background.Add(1)
-				go func() {
-					defer m.background.Done()
-					coreSnap.save(dbPath)
-				}()
-			}
-		}
-
 		return
 	}
 
@@ -806,6 +675,171 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		CrawlID: crawlID, Type: "complete",
 		Data: map[string]interface{}{"crawlId": crawlID, "totalPages": pageCount, "durationMs": elapsed},
 	})
+}
+
+// analysisRun is the input of the post-crawl analysis shared by finished
+// crawls and imported crawl files.
+type analysisRun struct {
+	ctx            context.Context
+	crawlID        string
+	job            *CrawlJob
+	config         types.CrawlConfig
+	pages          []*types.PageData
+	postCfg        analysis.PostProcessConfig
+	crawlStore     *storage.CrawlStore // for the page index; may be nil
+	extSummary     *crawler.ExternalCheckSummary
+	closeLinks     func() // releases InternalLinksIter; may be nil
+	elapsed        int64
+	beforeComplete func() // runs before the "complete" event; may be nil
+	skipNotify     bool   // imports evaluate alerts but send no webhooks
+}
+
+// analyzeAndCache runs core analysis, persists stats, caches the results and
+// starts deferred analysis (link intelligence, embeddings) when configured.
+func (m *CrawlManager) analyzeAndCache(r analysisRun) {
+	analysisCtx, crawlID, job, crawlConfig := r.ctx, r.crawlID, r.job, r.config
+	pages, postCfg, crawlStore, extSummary := r.pages, r.postCfg, r.crawlStore, r.extSummary
+	intLinksClose, elapsed, pageCount := r.closeLinks, r.elapsed, len(r.pages)
+	clearActive := r.beforeComplete
+	if clearActive == nil {
+		clearActive = func() {}
+	}
+	crawlStats, coreGraph := analysis.RunCoreAnalysisWithGraph(analysisCtx, pages, postCfg)
+	applyExternalCheckSummary(&crawlStats, extSummary)
+	// Link intelligence reuses the reporter's graph instead of re-reading
+	// every edge from disk.
+	postCfg.Graph = coreGraph
+
+	// The reporter already stored PageRank on each page (stats keep only
+	// a histogram, plus the URL map for small crawls).
+
+	// Inlink counts feed segment stats and the /pages API, so compute them
+	// before stats are serialized. Pages no longer carry InternalLinks, so
+	// read inlinks from the link graph.
+	inlinkIdx := newInlinkIndex(coreGraph, pages)
+	assignInlinks(pages, inlinkIdx)
+	refreshAutoSegmentStats(pages, &crawlStats)
+
+	// Evaluate alert rules against crawl stats
+	crawlStats.AlertSummary = alerts.Evaluate(&crawlStats)
+	if crawlStats.AlertSummary != nil {
+		log.Printf("[alerts] %d alerts triggered (%d critical, %d warnings)",
+			len(crawlStats.AlertSummary.Alerts), crawlStats.AlertSummary.Critical, crawlStats.AlertSummary.Warnings)
+		// Send notifications if configured
+		notifyCfg := m.getAlertNotifyConfig()
+		if !r.skipNotify && (notifyCfg.WebhookURL != "" || notifyCfg.SlackURL != "") {
+			go alerts.Notify(notifyCfg, crawlStats.AlertSummary, crawlConfig.SeedURL)
+		}
+	}
+
+	// Convert CrawlStats to map for JSON serialization
+	statsData, _ := json.Marshal(crawlStats)
+	var statsMap map[string]interface{}
+	json.Unmarshal(statsData, &statsMap)
+
+	// Persist stats to UI DB (survives server restarts)
+	if persistErr := m.store.SaveCrawlStats(crawlID, statsData); persistErr != nil {
+		log.Printf("store: persist stats for crawl %s: %v", crawlID, persistErr)
+	}
+
+	// Determine DB path for lazy page loading
+	dbPath := ""
+	if job != nil {
+		dbPath = job.DBPath
+	}
+
+	// Check if deferred analysis (link intelligence, embeddings) is needed
+	needsDeferred := crawlConfig.LinkIntelligence || (crawlConfig.Embeddings && crawlConfig.EmbeddingKey != "")
+
+	// Link graph + PageRank go to the crawl DB so reloads skip rebuilding
+	// them. Scores are copied now; the write happens in the background.
+	var coreSnap *analysisSnapshot
+	if dbPath != "" {
+		coreSnap = snapshotAnalysis(pages, coreGraph, true)
+	}
+
+	// Pre-compute aggregations before stripping (Anchors, InternalLinks, etc.)
+	anchorStats := anchorCloudToMap(crawlStats.AnchorCloud)
+	if anchorStats == nil {
+		anchorStats = buildAnchorStats(pages)
+	}
+	dirTree := buildDirectoryTree(pages)
+	tmplTypes := collectTemplateTypes(pages)
+
+	// Build page_index for instant merge lookups (before stripping)
+	if crawlStore != nil {
+		if idxErr := crawlStore.BuildPageIndex(pages); idxErr != nil {
+			log.Printf("crawl %s: build page index: %v", crawlID, idxErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "  [page-index] Built index with %d entries for instant merge\n", len(pages))
+		}
+	}
+
+	// Don't strip pages yet if deferred analysis needs them
+	if !needsDeferred {
+		stripPagesForCache(pages)
+	}
+
+	newResult := &CrawlResults{
+		Pages:           pages,
+		Stats:           statsMap,
+		AnchorStats:     anchorStats,
+		DirTree:         dirTree,
+		TemplateTypes:   tmplTypes,
+		InlinkIndex:     inlinkIdx,
+		Graph:           coreGraph,
+		DBPath:          dbPath,
+		PageCount:       pageCount,
+		AnalysisPending: needsDeferred,
+		PagesReady:      true,
+	}
+	newResult.loadingProgress.Store(100)
+
+	m.mu.Lock()
+	// Replaces (and cancels the background load of) any older entry.
+	m.cacheResultLocked(crawlID, newResult, pageCount)
+	m.mu.Unlock()
+
+	// Clear active before emitting complete so listeners see no active crawl.
+	clearActive()
+
+	m.emit(ProgressEvent{
+		CrawlID: crawlID, Type: "complete",
+		Data: map[string]interface{}{
+			"crawlId":         crawlID,
+			"totalPages":      pageCount,
+			"durationMs":      elapsed,
+			"analysisPending": needsDeferred,
+		},
+	})
+
+	// Launch deferred analysis (link intelligence, embeddings) in background.
+	// Pass crawlStats directly to avoid JSON round-trip precision loss.
+	if needsDeferred {
+		m.background.Add(1)
+		go func() {
+			defer m.background.Done()
+			defer func() {
+				if intLinksClose != nil {
+					intLinksClose()
+				}
+			}()
+			coreSnap.save(dbPath)
+			m.runDeferredAnalysis(crawlID, pages, postCfg, crawlStats, dbPath)
+		}()
+	} else {
+		if intLinksClose != nil {
+			intLinksClose()
+		}
+		if coreSnap != nil {
+			m.background.Add(1)
+			go func() {
+				defer m.background.Done()
+				coreSnap.save(dbPath)
+			}()
+		}
+	}
+
 }
 
 // runDeferredAnalysis runs link intelligence and embeddings in the background.

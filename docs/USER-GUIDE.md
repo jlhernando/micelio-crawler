@@ -274,6 +274,15 @@ same JSON format the dashboard sends. Add `--precheck-egress <CIDR>` or
 `--precheck-cmd "<command>"` for checks, and `--check-only` to test them once.
 `micelio schedules` lists schedules.
 
+### Import a crawl made elsewhere
+
+**History → Import crawl…** (or `micelio import <file>`) adds a crawl made with
+`micelio crawl` to History and runs the dashboard's analysis on this computer:
+stats, issues, PageRank, Universe and the directory tree. It takes the crawl
+database (`--db`) or the JSONL output (`.jsonl`, `.gz`, `.zst`). This lets a small
+cloud server crawl with `--no-analysis --db-only` while your computer does the
+heavy work. See [Crawl in the cloud](CLOUD-CRAWLS.md).
+
 ## 5. Analyze server logs
 
 Open **Log Analysis** to upload one or more files. Micelio processes files in

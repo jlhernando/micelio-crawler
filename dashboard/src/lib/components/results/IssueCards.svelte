@@ -271,12 +271,46 @@
       });
     }
 
-    const soft404s = (stats.soft404Pages as string[]) || [];
-    if (soft404s.length > 0) {
+    // Soft-404 candidates: confidence + reasons (older crawls only have a URL list).
+    const soft = stats.soft404Stats as {
+      total: number;
+      candidates?: { url: string; confidence: string; reasons: string[] }[];
+      probes?: { url: string; statusCode: number; finalUrl?: string; error?: string }[];
+    } | undefined;
+    const soft404Reason: Record<string, string> = {
+      'matches-error-page': "looks like the site's 404 page",
+      'empty-listing': 'listing with no products/ads in the HTML (check it is not loaded with JavaScript)',
+      'error-text': '"not found" wording',
+      'error-text-thin-body': '"not found" wording, little text',
+      'redirects-to-home': 'redirects to the home page',
+      'mass-redirect': 'many URLs redirect here',
+      'thin-for-template': 'very little text for its type',
+    };
+    if (soft && soft.total > 0) {
+      const probe = soft.probes?.find(pr => pr.statusCode === 200);
       cards.push({
-        id: 'soft-404', label: 'Soft 404s', count: soft404s.length, severity: 'warning',
-        details: soft404s.slice(0, 50).map(url => ({ url })),
+        id: 'soft-404', label: 'Soft-404 candidates', count: soft.total, severity: 'warning',
+        details: [
+          ...(probe ? [{
+            url: probe.url,
+            info: probe.finalUrl && probe.finalUrl !== probe.url
+              ? `the site redirects a page that does not exist to ${probe.finalUrl}`
+              : 'the site answers 200 for a page that does not exist',
+          }] : []),
+          ...(soft.candidates ?? []).slice(0, 50).map(c => ({
+            url: c.url,
+            info: `${c.confidence} · ${c.reasons.map(r => soft404Reason[r] ?? r).join(', ')}`,
+          })),
+        ],
       });
+    } else {
+      const soft404s = (stats.soft404Pages as string[]) || [];
+      if (soft404s.length > 0) {
+        cards.push({
+          id: 'soft-404', label: 'Soft 404s', count: soft404s.length, severity: 'warning',
+          details: soft404s.slice(0, 50).map(url => ({ url })),
+        });
+      }
     }
 
     // Sort: critical first, then warning, then info; by count within severity

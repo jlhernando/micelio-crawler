@@ -26,6 +26,8 @@ type ReportConfig struct {
 	// AnchorAggregator holds anchor stats collected during the crawl. Used when
 	// pages no longer carry Anchors (they are dropped before storage).
 	AnchorAggregator *AnchorAggregator
+	// Soft404Probes are the crawl-time "URL that cannot exist" requests.
+	Soft404Probes []types.Soft404Probe
 }
 
 // SitemapExtCounts holds sitemap extension type counts.
@@ -51,6 +53,9 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 		CustomSearchSummary: make(map[string]types.SearchStat),
 		CrawlDurationMs:     durationMs,
 	}
+
+	// Soft-404 candidates first: the main loop reads IsSoft404.
+	stats.Soft404Stats = DetectSoft404(pages, cfg.Soft404Probes, cfg.SeedURL)
 
 	if cfg.GscDays == 0 {
 		cfg.GscDays = 90

@@ -116,7 +116,11 @@ type PageData struct {
 	OriginalityScore   int                     `json:"originalityScore,omitempty"`  // 0-127, Micelio originality heuristic
 	TruncatedElements  []string                `json:"truncatedElements,omitempty"` // SEO elements beyond Googlebot's 2MB cutoff
 	BodySize           int64                   `json:"bodySize,omitempty"`          // uncompressed HTML body size in bytes
-	IsSoft404          bool                    `json:"isSoft404,omitempty"`
+	IsSoft404          bool                    `json:"isSoft404,omitempty"`         // high/medium soft-404 candidate
+	Soft404            *Soft404Signal          `json:"soft404,omitempty"`           // confidence and reasons
+	Soft404Text        string                  `json:"soft404Text,omitempty"`       // where error wording was found: title, h1 or body
+	ItemLinks          int                     `json:"itemLinks,omitempty"`         // internal links to product/ad pages
+	ProductCards       int                     `json:"productCards,omitempty"`      // product cards in a grid
 	RobotsBlocked      bool                    `json:"robotsBlocked,omitempty"`
 	URLClassification  string                  `json:"urlClassification,omitempty"`
 	ETag               string                  `json:"etag,omitempty"`

@@ -18,6 +18,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/micelio/micelio/internal/analysis"
+	"github.com/micelio/micelio/internal/crawler"
 	"github.com/micelio/micelio/internal/storage"
 	"github.com/micelio/micelio/internal/types"
 	"zombiezen.com/go/sqlite"
@@ -203,6 +204,9 @@ func (m *CrawlManager) runImport(ctx context.Context, p *pendingImport) error {
 		postCfg.AnchorAggregator = anchors
 	}
 	postCfg.InternalLinksIter = cs.IterateInternalLinks
+	if raw, _ := cs.GetMeta(crawler.Soft404ProbeMetaKey); raw != "" {
+		json.Unmarshal([]byte(raw), &postCfg.Soft404Probes)
+	}
 	m.analyzeAndCache(analysisRun{
 		ctx: ctx, crawlID: job.ID, job: job, config: *p.cfg, pages: pages,
 		postCfg: postCfg, crawlStore: cs, closeLinks: func() { cs.Close() },

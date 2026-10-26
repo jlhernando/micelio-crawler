@@ -161,24 +161,51 @@ func detectURLIssues(rawURL string) []string {
 
 // --- Soft 404 ---
 
-var soft404Patterns = regexp.MustCompile(`(?i)(page not found|404 not found|not found|page doesn.t exist|no longer available|nothing found|does not exist)`)
+// soft404Patterns matches "not found" and "no results" wording in the
+// languages Micelio's users crawl most: English, Spanish, Portuguese,
+// French, Italian, German, Polish and Romanian.
+var soft404Patterns = regexp.MustCompile(`(?i)(page not found|404 not found|not found|page doesn.t exist|no longer available|nothing found|does not exist|no results found|` +
+	`página no encontrada|no se ha encontrado|no hemos encontrado|no hay resultados|sin resultados|ya no está disponible|` +
+	`página não encontrada|não encontr(amos|ámos|ado)|nenhum resultado|sem resultados|já não está disponível|` +
+	`page introuvable|page non trouvée|aucun résultat|n.existe plus|` +
+	`pagina non trovata|nessun risultato|non è più disponibile|` +
+	`seite nicht gefunden|keine ergebnisse|nicht mehr verfügbar|existiert nicht|` +
+	`nie znaleziono|strona nie istnieje|brak wyników|brak ogłoszeń|nie ma ogłoszeń|ogłoszenie (jest )?nieaktualne|` +
+	`pagina nu a fost găsită|nu am găsit|niciun rezultat|nu există rezultate|anunțul nu mai este)`)
 
-func detectSoft404(doc *goquery.Document, bodyText string) bool {
-	// Check title
-	title := doc.Find("title").Text()
-	if soft404Patterns.MatchString(title) {
-		return true
+// zeroResultsRe matches a "0 results" count ("0 ogłoszeń", "0 anúncios").
+var zeroResultsRe = regexp.MustCompile(`(?i)(^|[^0-9.,])0\s+(results?|resultados|résultats|risultati|ergebnisse|treffer|wyników|ogłosze|ofert|rezultate|anun[țt]uri|anúncios|anuncios|produ(cts|ctos|its|kte|kty))`)
+
+// detectSoft404Text returns where "not found" wording appears: "title",
+// "h1" or "body" (only in pages with very little text), or "".
+func detectSoft404Text(doc *goquery.Document, bodyText string) string {
+	matches := func(t string) bool { return soft404Patterns.MatchString(t) || zeroResultsRe.MatchString(t) }
+	if matches(doc.Find("title").Text()) {
+		return "title"
 	}
-	// Check h1
-	h1 := doc.Find("h1").First().Text()
-	if soft404Patterns.MatchString(h1) {
-		return true
+	if matches(doc.Find("h1").First().Text()) {
+		return "h1"
 	}
-	// Very thin content with 404-like language
-	if len(bodyText) < 500 && soft404Patterns.MatchString(bodyText) {
-		return true
+	if len(bodyText) < 500 && matches(bodyText) {
+		return "body"
 	}
-	return false
+	return ""
+}
+
+// itemURLRe matches links to product or classified-ad detail pages, used to
+// tell an empty listing from a full one. Same families as analysis'
+// productURLRe and adDetailURLRe.
+var itemURLRe = regexp.MustCompile(`(?i)/products?/[^/?#]+|/items?/[^/?#]+|/p/[^/?#]+|/pd/[^/?#]+|/sku/|/dp/[^/?#]+|` +
+	`/(oferta|offer|annonce|anuncio|anunt|oglas|ilan|inserat)/[^/?#]+|/d/oferta/|/marketplace/item/|/(itm|item|listing)/[^/]*-?\d{5,}|[-_]ID[0-9A-Za-z]{4,}\.html`)
+
+func countItemLinks(links []string) int {
+	n := 0
+	for _, l := range links {
+		if itemURLRe.MatchString(l) {
+			n++
+		}
+	}
+	return n
 }
 
 // --- Readability (Flesch-Kincaid) ---

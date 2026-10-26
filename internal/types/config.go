@@ -108,6 +108,7 @@ type CrawlConfig struct {
 	FullAnchors         bool                   `json:"fullAnchors"`
 	FullPageWeight      bool                   `json:"fullPageWeight"`
 	SaveHTML            bool                   `json:"saveHtml"`
+	NoSoft404Probe      bool                   `json:"noSoft404Probe,omitempty"` // skip the "page that cannot exist" request
 	SaveRendered        bool                   `json:"saveRendered"`
 	RenderBlockRes      bool                   `json:"renderBlockResources"`
 	RenderTimeoutSec    int                    `json:"renderTimeoutSec"`

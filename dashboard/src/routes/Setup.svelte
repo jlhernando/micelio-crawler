@@ -57,6 +57,7 @@
   // Robots.txt & Sitemaps
   let respectRobots = $state(true);
   let showBlockedInternal = $state(false);
+  let soft404Probe = $state(true);
   let discoverSitemaps = $state(false);
 
   // JavaScript
@@ -265,6 +266,7 @@
     if (c.checkExternal !== undefined) checkExternal = c.checkExternal as boolean;
     if (c.respectRobots !== undefined) respectRobots = c.respectRobots as boolean;
     if (c.showBlockedInternal !== undefined) showBlockedInternal = c.showBlockedInternal as boolean;
+    if (c.noSoft404Probe !== undefined) soft404Probe = !(c.noSoft404Probe as boolean);
     if (c.discoverSitemaps !== undefined) discoverSitemaps = c.discoverSitemaps as boolean;
     if (c.jsRendering !== undefined) jsRendering = c.jsRendering as boolean;
     if (c.renderBlockResources !== undefined) renderBlockResources = c.renderBlockResources as boolean;
@@ -353,6 +355,7 @@
     config.checkExternal = checkExternal;
     config.respectRobots = respectRobots;
     config.showBlockedInternal = showBlockedInternal;
+    if (!soft404Probe) config.noSoft404Probe = true;
     config.discoverSitemaps = discoverSitemaps;
     config.adaptiveRate = adaptiveRate;
     if (adaptiveRate && delayFactor > 0) config.delayFactor = delayFactor;
@@ -647,6 +650,11 @@
           Discover sitemaps
         </label>
         <p class="text-xs text-fg-2 pl-6">Parse XML sitemaps (from robots.txt or /sitemap.xml) to find and crawl orphan pages not reachable via internal links.</p>
+        <label class="flex items-center gap-2 text-sm cursor-pointer">
+          <input type="checkbox" bind:checked={soft404Probe} class="rounded accent-accent" />
+          Check how the site answers missing pages
+        </label>
+        <p class="text-xs text-fg-2 pl-6">One request for a URL that cannot exist. If the site answers 200, pages that look like its "not found" page are flagged as soft-404 candidates.</p>
       </div>
     </CollapsibleSection>
 

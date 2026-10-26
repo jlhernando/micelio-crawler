@@ -626,6 +626,7 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		if len(result.DiscoveredSitemapURLs) > 0 {
 			postCfg.SitemapEntries = result.DiscoveredSitemapURLs
 		}
+		postCfg.Soft404Probes = result.Soft404Probes
 		intLinksClose := result.InternalLinksClose
 		// Compute page weight before releasing CrawlResult
 		if crawlConfig.PageWeight && len(result.ResourceRefs) > 0 {

@@ -2,6 +2,20 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.5.0] - 2026-10-26
+
+Automatic soft-404 detection.
+
+### Added
+
+- **Soft-404 candidates with confidence and reasons.** Pages that answer 200 (or redirect) but show no real content are flagged with five signals instead of an English phrase list:
+  - At the start of a crawl Micelio requests one URL that cannot exist. If the site answers 200, pages that look like that "not found" page are high-confidence candidates. Turn it off with `--no-soft404-probe` or on New Crawl.
+  - "Not found" and "0 results" wording in English, Spanish, Portuguese, French, Italian, German, Polish and Romanian.
+  - Listings with no product or ad links while similar listings have them (low alone, since some sites load products with JavaScript; high with "no results" wording).
+  - Deep URLs redirected to the home page, and many URLs redirected to one page.
+  - Pages with far less text than others of the same template.
+- The Issues tab lists candidates with their confidence and reasons. They are candidates to review; Search Console's page indexing report confirms.
+
 ## [1.4.0] - 2026-10-26
 
 Crawl on a small cloud server, analyse on your computer.

@@ -1746,6 +1746,8 @@ func pageMatchesIssue(p *types.PageData, issue string, dupSet map[string]bool) b
 		return p.Depth > 4
 	case "missing-canonical":
 		return p.Canonical == nil
+	case "soft-404":
+		return p.Soft404 != nil
 	case "duplicate-titles", "duplicate-descriptions":
 		return dupSet[p.URL]
 	default:

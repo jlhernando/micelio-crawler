@@ -221,7 +221,7 @@ func TestCompareAndShouldEmail(t *testing.T) {
 	}
 
 	// Skipped runs always email; a persisting warning alone does not.
-	if !ShouldEmail(RunInfo{Status: "skipped", Reason: "VPN off"}, false) {
+	if !ShouldEmail(RunInfo{Status: "skipped", Reason: "network check failed"}, false) {
 		t.Error("skipped run should email")
 	}
 	persisting := RunInfo{Status: "completed", HasPrevious: true, PrevAlerts: map[string]bool{"duplicate-titles": true},

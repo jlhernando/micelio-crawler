@@ -702,6 +702,58 @@
           <span class="text-[10px] text-fg-2 mt-1 block">Slack incoming webhook for alert notifications</span>
         </label>
       </div>
+
+      <h3 class="text-sm font-medium text-fg mt-6 mb-1">Email</h3>
+      <p class="text-xs text-fg-2 mb-3">After each crawl, an email with its alerts and what changed since the previous crawl of the same site or schedule (pages, errors, indexable share, new soft-404 candidates, URLs no longer found). Scheduled runs that are skipped or fail are emailed too. Works with any SMTP account (Gmail or Outlook with an app password, SendGrid, Resend, your company relay).</p>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <label class="block md:col-span-2">
+          <span class="text-xs text-fg-2">SMTP host</span>
+          <input type="text" value={str('alertEmailHost')} placeholder="smtp.gmail.com" oninput={(e) => set('alertEmailHost', (e.target as HTMLInputElement).value)} class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+        </label>
+        <label class="block">
+          <span class="text-xs text-fg-2">Port</span>
+          <input type="number" value={num('alertEmailPort')} oninput={(e) => setNum('alertEmailPort', (e.target as HTMLInputElement).value)} class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+        </label>
+        <label class="block">
+          <span class="text-xs text-fg-2">Username</span>
+          <input type="text" autocomplete="off" value={str('alertEmailUser')} oninput={(e) => set('alertEmailUser', (e.target as HTMLInputElement).value)} class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+        </label>
+        <label class="block">
+          <span class="text-xs text-fg-2">Password</span>
+          <input type="password" autocomplete="new-password" value={str('alertEmailPassword')} oninput={(e) => set('alertEmailPassword', (e.target as HTMLInputElement).value)} class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+        </label>
+        <label class="block">
+          <span class="text-xs text-fg-2">Security</span>
+          <select value={str('alertEmailSecurity')} onchange={(e) => set('alertEmailSecurity', (e.target as HTMLSelectElement).value)} class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent">
+            <option value="starttls">STARTTLS (port 587)</option>
+            <option value="tls">TLS (port 465)</option>
+            <option value="none">None (local relay only)</option>
+          </select>
+        </label>
+        <label class="block">
+          <span class="text-xs text-fg-2">From</span>
+          <input type="email" value={str('alertEmailFrom')} placeholder="micelio@yourdomain.com" oninput={(e) => set('alertEmailFrom', (e.target as HTMLInputElement).value)} class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+        </label>
+        <label class="block md:col-span-2">
+          <span class="text-xs text-fg-2">To (comma separated)</span>
+          <input type="text" value={str('alertEmailTo')} placeholder="you@yourdomain.com, team@yourdomain.com" oninput={(e) => set('alertEmailTo', (e.target as HTMLInputElement).value)} class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+        </label>
+        <label class="block md:col-span-2">
+          <span class="text-xs text-fg-2">Dashboard address for links</span>
+          <input type="url" value={str('dashboardUrl')} placeholder="http://127.0.0.1:3100" oninput={(e) => set('dashboardUrl', (e.target as HTMLInputElement).value)} class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+        </label>
+        <label class="flex items-center gap-2 text-sm md:col-span-3">
+          <input type="checkbox" checked={bool('alertEmailAlways')} onchange={(e) => set('alertEmailAlways', (e.target as HTMLInputElement).checked)} class="w-4 h-4 accent-accent" />
+          Email every crawl, even when nothing changed
+        </label>
+      </div>
+      <div class="flex items-center gap-3 mt-3">
+        <button type="button" class="px-3 py-1.5 rounded-md border border-border bg-surface-2 text-sm hover:bg-surface-3 cursor-pointer disabled:opacity-50" disabled={emailTesting} onclick={testEmail}>
+          {emailTesting ? 'Sending…' : 'Send test email'}
+        </button>
+        {#if emailTest}<span class="text-xs {emailTest.ok ? 'text-success' : 'text-danger'}">{emailTest.message}</span>{/if}
+      </div>
+      <p class="text-[10px] text-fg-2 mt-2">The password stays on this computer and is never shown again. Emails include page URLs: use your company's mail server if that matters.</p>
     </CollapsibleSection>
 
     <!-- Bottom save bar -->

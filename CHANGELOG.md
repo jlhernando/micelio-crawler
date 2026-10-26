@@ -2,6 +2,18 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.6.0] - 2026-10-26
+
+Alert emails that say what changed.
+
+### Added
+
+- **Email alerts** (Settings → Alert Notifications → Email). Any SMTP account works: Gmail or Outlook with an app password, SendGrid, Resend or a company relay. STARTTLS by default; "Send test email" checks the account. The password stays local and is never shown again (or set `MICELIO_SMTP_PASSWORD`).
+- **Changes since the previous crawl** of the same schedule or site: pages crawled, 4xx/5xx and 5xx responses, indexable share, new and resolved soft-404 candidates, and URLs no longer found, each with up to 10 example URLs and a link to the crawl.
+- Emails go out only when there is something to read: critical or new alerts, an important change, or a scheduled run that was skipped or failed. Tick "Email every crawl" to get one after every run.
+- New alert rule for high-confidence soft-404 candidates (1% of pages or 10 pages), also sent to webhooks and Slack.
+- `micelio schedule --email-to ... --smtp-host ... --smtp-from ...` emails each CLI scheduled run.
+
 ## [1.5.0] - 2026-10-26
 
 Automatic soft-404 detection.

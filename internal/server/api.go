@@ -56,15 +56,19 @@ var ValidSettings = map[string]string{
 	"defaultHtmlReport": "boolean", "defaultCheckExternal": "boolean",
 	"defaultJsRendering": "boolean", "defaultRespectRobots": "boolean",
 	"defaultShowBlockedInternal": "boolean",
-	"alertWebhookUrl": "string", "alertSlackUrl": "string",
+	"alertWebhookUrl":            "string", "alertSlackUrl": "string",
+	"alertEmailHost": "string", "alertEmailPort": "number", "alertEmailUser": "string",
+	"alertEmailPassword": "string", "alertEmailFrom": "string", "alertEmailTo": "string",
+	"alertEmailSecurity": "string", "alertEmailAlways": "boolean", "dashboardUrl": "string",
 }
 
 // envFallbacks maps setting keys to environment variable names.
 var envFallbacks = map[string]string{
-	"psiKey":          "MICELIO_PSI_KEY",
-	"aiKey":           "MICELIO_AI_KEY",
-	"cruxKey":         "MICELIO_CRUX_KEY",
-	"plausibleApiKey": "MICELIO_PLAUSIBLE_KEY",
+	"psiKey":             "MICELIO_PSI_KEY",
+	"aiKey":              "MICELIO_AI_KEY",
+	"cruxKey":            "MICELIO_CRUX_KEY",
+	"plausibleApiKey":    "MICELIO_PLAUSIBLE_KEY",
+	"alertEmailPassword": "MICELIO_SMTP_PASSWORD",
 }
 
 // CreateAPIHandler returns an http.Handler for all /api/* routes.
@@ -803,6 +807,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 
 	registerScheduleRoutes(mux, store, manager)
 	registerImportRoutes(mux, store, manager)
+	registerEmailRoutes(mux, manager)
 
 	mux.HandleFunc("DELETE /api/schedules/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -925,13 +930,13 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 							manager.emit(ProgressEvent{
 								Type: "log_upload_progress",
 								Data: map[string]interface{}{
-									"jobId":           job.ID,
-									"fileIndex":       fileIdx,
-									"filename":        filename,
-									"bytesReceived":   fileBytes,
-									"fileSize":        contentLength,
-									"totalBytes":      totalBytesWritten,
-									"totalExpected":   contentLength,
+									"jobId":         job.ID,
+									"fileIndex":     fileIdx,
+									"filename":      filename,
+									"bytesReceived": fileBytes,
+									"fileSize":      contentLength,
+									"totalBytes":    totalBytesWritten,
+									"totalExpected": contentLength,
 								},
 							})
 						}
@@ -1607,6 +1612,7 @@ func validateSettings(input map[string]interface{}) (valid map[string]interface{
 // These are masked in GET responses but accepted as-is in PUT requests.
 var secretSettingKeys = map[string]bool{
 	"psiKey": true, "aiKey": true, "cruxKey": true, "plausibleApiKey": true,
+	"alertEmailPassword": true,
 }
 
 // maskSecrets replaces secret values with a masked placeholder.
@@ -1887,10 +1893,10 @@ func buildSubgraphPayload(results *CrawlResults, rootURL string, depth, maxNodes
 		"nodes": nodes,
 		"edges": edges,
 		"meta": map[string]interface{}{
-			"rootURL":         graph.URLs[rootIdx],
-			"hops":            depth,
+			"rootURL":           graph.URLs[rootIdx],
+			"hops":              depth,
 			"totalNodesInGraph": graph.N,
-			"nodesInView":     len(nodes),
+			"nodesInView":       len(nodes),
 		},
 	}
 }
@@ -2174,15 +2180,15 @@ func anchorStatsFor(statsMap map[string]interface{}, pages []*types.PageData) ma
 // ── Directory Tree ──
 
 type dirNode struct {
-	Name             string             `json:"name"`
-	Path             string             `json:"path"`
-	Pages            int                `json:"pages"`
-	Children         []*dirNode         `json:"children,omitempty"`
-	StatusCodes      map[int]int        `json:"statusCodes"`
-	AvgResponseTime  int                `json:"avgResponseTime"`
-	TotalRespTime    int64              `json:"-"`
-	Depth            int                `json:"depth"`
-	IsPage           bool               `json:"isPage"`
+	Name            string      `json:"name"`
+	Path            string      `json:"path"`
+	Pages           int         `json:"pages"`
+	Children        []*dirNode  `json:"children,omitempty"`
+	StatusCodes     map[int]int `json:"statusCodes"`
+	AvgResponseTime int         `json:"avgResponseTime"`
+	TotalRespTime   int64       `json:"-"`
+	Depth           int         `json:"depth"`
+	IsPage          bool        `json:"isPage"`
 
 	// SEO metrics (aggregated from child pages)
 	TotalPageRank      float64 `json:"totalPageRank"`

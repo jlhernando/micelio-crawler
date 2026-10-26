@@ -264,6 +264,8 @@ export const api = {
   deleteSchedule: (id: string) =>
     request<{ deleted: boolean }>('DELETE', `/api/schedules/${id}`),
 
+  testAlertEmail: () => request<{ sent: boolean; to: string[] }>('POST', '/api/alerts/email/test'),
+
   // Import a crawl made elsewhere (crawl .db or JSONL, optionally .gz/.zst).
   // XHR instead of fetch to report upload progress.
   importCrawl: (file: File, linkIntelligence: boolean, onProgress?: (pct: number) => void) =>

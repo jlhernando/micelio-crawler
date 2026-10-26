@@ -2,7 +2,8 @@
   import { formatDateTime, formatDuration } from '../lib/format';
   import HistoryOverview from '../lib/components/results/HistoryOverview.svelte';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
-  import { onMount } from 'svelte';
+  import ImportCrawl from '../lib/components/history/ImportCrawl.svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api';
   import { navigate } from '../lib/router';
   import SignalsView from '../lib/components/results/SignalsView.svelte';
@@ -71,6 +72,23 @@
   onMount(() => {
     loadCrawls();
   });
+
+  // After an import, refresh until the crawl's analysis is done.
+  let importPoll: ReturnType<typeof setInterval> | null = null;
+  function watchImport(id: string) {
+    loadCrawls();
+    if (importPoll) clearInterval(importPoll);
+    let tries = 0;
+    importPoll = setInterval(async () => {
+      await loadCrawls();
+      const job = crawls.find((c) => c.id === id);
+      if (++tries > 300 || (job && job.status !== 'pending')) {
+        clearInterval(importPoll!);
+        importPoll = null;
+      }
+    }, 2000);
+  }
+  onDestroy(() => { if (importPoll) clearInterval(importPoll); });
 
   async function loadCrawls() {
     try {
@@ -185,6 +203,7 @@
 
 <div class="max-w-7xl mx-auto space-y-4">
   <PageHeading title="Crawl history" description="Track completed audits and compare two crawls from the same site." section="Workspace" />
+  <ImportCrawl onImported={watchImport} />
   {#if loading}
     <div class="rounded-xl border border-border bg-surface-2 p-12 text-center">
       <div class="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>

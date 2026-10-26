@@ -264,6 +264,26 @@ export const api = {
   deleteSchedule: (id: string) =>
     request<{ deleted: boolean }>('DELETE', `/api/schedules/${id}`),
 
+  // Import a crawl made elsewhere (crawl .db or JSONL, optionally .gz/.zst).
+  // XHR instead of fetch to report upload progress.
+  importCrawl: (file: File, linkIntelligence: boolean, onProgress?: (pct: number) => void) =>
+    new Promise<{ id: string; seedUrl: string; status: string }>((resolve, reject) => {
+      const q = new URLSearchParams({ name: file.name });
+      if (linkIntelligence) q.set('linkIntelligence', '1');
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${BASE}/api/crawls/import?${q}`);
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100)); };
+      xhr.onload = () => {
+        let body: { error?: string | { message?: string } } & Record<string, unknown> = {};
+        try { body = JSON.parse(xhr.responseText); } catch { /* not JSON */ }
+        if (xhr.status >= 200 && xhr.status < 300) resolve(body as unknown as { id: string; seedUrl: string; status: string });
+        else reject(new Error((typeof body.error === 'string' ? body.error : body.error?.message) || `Import failed: ${xhr.status}`));
+      };
+      xhr.onerror = () => reject(new Error('Import failed: network error'));
+      xhr.send(file);
+    }),
+
   // Log Analysis — one or more files merged into a single unified analysis job.
   uploadLogs: async (files: File[], format?: string) => {
     const form = new FormData();

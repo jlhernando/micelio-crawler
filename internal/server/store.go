@@ -68,6 +68,18 @@ type UiStore struct {
 
 // NewUiStore opens or creates the UI database at ~/.micelio/ui/.
 func NewUiStore() (*UiStore, error) {
+	s, err := OpenUiStore()
+	if err != nil {
+		return nil, err
+	}
+	s.recoverStaleJobs()
+	return s, nil
+}
+
+// OpenUiStore opens the dashboard database without recovering stale jobs, for
+// tools (like `micelio import`) that may run next to a live dashboard whose
+// crawls are really running.
+func OpenUiStore() (*UiStore, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("get home dir: %w", err)
@@ -119,7 +131,6 @@ func NewUiStore() (*UiStore, error) {
 		urlConn.Close()
 		return nil, fmt.Errorf("seed presets: %w", err)
 	}
-	s.recoverStaleJobs()
 	return s, nil
 }
 
@@ -435,7 +446,7 @@ func (s *UiStore) UpdateCrawlJob(id string, updates map[string]interface{}) erro
 	validCols := map[string]string{
 		"status": "status", "completedAt": "completed_at",
 		"pageCount": "page_count", "errorCount": "error_count",
-		"durationMs": "duration_ms",
+		"durationMs": "duration_ms", "startedAt": "started_at",
 	}
 
 	var setClauses []string

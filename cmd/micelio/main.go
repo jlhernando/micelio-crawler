@@ -91,6 +91,7 @@ func main() {
 		gscAuthCmd(),
 		logsCmd(),
 		buildCmd(),
+		importCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -102,6 +103,8 @@ func main() {
 
 func crawlCmd() *cobra.Command {
 	var (
+		noAnalysis          bool
+		dbOnly              bool
 		concurrency         int
 		maxPages            int
 		maxDepth            int
@@ -302,6 +305,14 @@ func crawlCmd() *cobra.Command {
 				TorRotateEvery:      torRotateEvery,
 			}
 
+			if dbOnly {
+				if config.NoDB {
+					return fmt.Errorf("--db-only is incompatible with --no-db")
+				}
+				config.DBPath = defaultDBPath(config) // named after -o, before it is cleared
+				config.OutputPath = ""
+			}
+
 			// Validate --resume requires a DB (explicit or auto-derived)
 			if config.Resume && config.NoDB {
 				return fmt.Errorf("--resume is incompatible with --no-db")
@@ -323,6 +334,15 @@ func crawlCmd() *cobra.Command {
 				defer crawlStore.Close()
 			}
 
+			// --no-analysis: crawl and store only; `micelio import` analyses
+			// the database on another machine.
+			if noAnalysis {
+				if config.HTMLReport || config.SitemapOut {
+					fmt.Fprintf(os.Stderr, "  [warn] --no-analysis skips the HTML report and sitemap\n")
+					config.HTMLReport, config.HTMLOpen, config.SitemapOut = false, false, false
+				}
+				return runCrawlWithProgress(config, nil, crawlStore)
+			}
 			// Fix #5: Derive PostProcessConfig from CrawlConfig (no field duplication)
 			ppCfg := analysis.PostProcessConfigFromCrawl(config)
 			return runCrawlWithProgress(config, &ppCfg, crawlStore)
@@ -392,6 +412,8 @@ func crawlCmd() *cobra.Command {
 	// SQLite persistence
 	cmd.Flags().StringVar(&dbPath, "db", "", "SQLite database path for crawl persistence (auto-derived if not set)")
 	cmd.Flags().BoolVar(&noDb, "no-db", false, "Disable automatic crawl database creation")
+	cmd.Flags().BoolVar(&noAnalysis, "no-analysis", false, "Only crawl and save; skip post-crawl analysis (run it later with micelio import)")
+	cmd.Flags().BoolVar(&dbOnly, "db-only", false, "Write only the crawl database, no JSONL/CSV output")
 	cmd.Flags().BoolVar(&resumeCrawl, "resume", false, "Resume an interrupted crawl (requires --db)")
 	// Performance
 	cmd.Flags().BoolVar(&adaptiveRate, "adaptive-rate", false, "Dynamically adjust request rate based on server feedback")

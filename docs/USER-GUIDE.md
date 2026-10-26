@@ -152,6 +152,18 @@ structured data, Open Graph/Twitter tags, security headers, redirects, soft 404s
 duplicate content, URL structure, image metadata, and Googlebot's 2 MB HTML
 truncation risk.
 
+**Soft-404 candidates** are pages that answer 200 (or redirect) but show no real
+content. At the start of a crawl Micelio requests one URL that cannot exist: if
+the site answers 200, pages that look like that "not found" page are flagged.
+It also flags listings with no product or ad links while similar listings have
+them (low confidence alone, since some sites load products with JavaScript; high
+with "no results" wording), "not found" or "0 results" wording in eight languages, deep URLs redirected
+to the home page, many URLs redirected to one page, and pages with far less text
+than their template. Each candidate has a confidence (high, medium, low) and its
+reasons. They are candidates to review: Search Console's page indexing report
+confirms. Turn the one extra request off with "Check how the site answers missing
+pages" on New Crawl or `--no-soft404-probe`.
+
 ### Link Intelligence
 
 Enable Link Intelligence before the crawl to compute the complete set of graph

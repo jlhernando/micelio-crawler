@@ -32,6 +32,8 @@ type crawlSession struct {
 	queue   *CrawlQueue
 	seedURL string
 
+	soft404Probes []types.Soft404Probe
+
 	// Storage
 	writer *storage.ResultWriter
 	sink   *pageSink // single writer for writer + crawlDB while workers run
@@ -138,6 +140,7 @@ func newCrawlSession(ctx context.Context, config types.CrawlConfig, onProgress O
 	s.anchorAgg = analysis.NewAnchorAggregator()
 	s.setupRobotsAndDelay(ctx)
 	s.setupSitemapDiscovery(ctx)
+	s.setupSoft404Probe(ctx)
 	if err := s.seedSitemapMode(ctx); err != nil {
 		return nil, err
 	}

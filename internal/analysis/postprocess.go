@@ -34,6 +34,7 @@ type PostProcessConfig struct {
 	LIMaxPages          int // Skip heavy LI phases if page count exceeds this (0 = no limit)
 	SimilarityThreshold float64
 	SitemapEntries      []string
+	Soft404Probes       []types.Soft404Probe
 	// ExternalLinkResults are post-crawl external link check results; broken
 	// ones surface as CrawlStats.BrokenExternalLinks.
 	ExternalLinkResults []types.ExternalLinkResult
@@ -74,6 +75,7 @@ func RunCoreAnalysisWithGraph(ctx context.Context, pages []*types.PageData, cfg 
 		SitemapEntries:    cfg.SitemapEntries,
 		TotalSitemapURLs:  len(cfg.SitemapEntries),
 		AnchorAggregator:  cfg.AnchorAggregator,
+		Soft404Probes:     cfg.Soft404Probes,
 	}
 	reportCfg.ExternalLinkResults = cfg.ExternalLinkResults
 	stats, graph := GenerateReportWithGraph(pages, cfg.CrawlDurationMs, reportCfg)

@@ -42,6 +42,7 @@ type CrawlResult struct {
 	Pages                 []*types.PageData
 	DeadLetterQueue       []types.DeadLetterEntry
 	DiscoveredSitemapURLs []string
+	Soft404Probes         []types.Soft404Probe
 	// ResourceSizer HEAD-fetches resource sizes for page weight using the
 	// crawl's HTTP client (proxy/Tor/SSRF guard) and per-host rate limiter.
 	ResourceSizer analysis.ResourceSizer
@@ -257,6 +258,7 @@ func CrawlWithOptions(ctx context.Context, config types.CrawlConfig, onProgress 
 		AnchorAggregator:      s.anchorAgg,
 		DeadLetterQueue:       dlqEntries,
 		DiscoveredSitemapURLs: s.discoveredSitemapURLs,
+		Soft404Probes:         s.soft404Probes,
 		ChangedPages:          changedPages,
 		UnchangedPages:        unchangedPages,
 		ResourceSizer:         s.resourceSizer(),

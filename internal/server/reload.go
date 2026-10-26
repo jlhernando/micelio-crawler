@@ -7,6 +7,7 @@ import (
 
 	"github.com/micelio/micelio/internal/alerts"
 	"github.com/micelio/micelio/internal/analysis"
+	"github.com/micelio/micelio/internal/crawler"
 	"github.com/micelio/micelio/internal/storage"
 	"github.com/micelio/micelio/internal/types"
 )
@@ -36,6 +37,12 @@ func prepareLoadedPages(crawlID string, pages []*types.PageData, stats map[strin
 	set := func(k string, v interface{}) {
 		merged[k] = v
 		agg.statsUpdates[k] = v
+	}
+
+	// Soft-404 assessments live on pages, not in the crawl DB: rebuild them
+	// (cheap, one pass) so the All Pages "soft-404" filter keeps working.
+	if merged["soft404Stats"] != nil {
+		analysis.DetectSoft404(pages, storedSoft404Probes(dbPath), seedURL)
 	}
 
 	// Crawls analysed by this version stored the link graph and per-page
@@ -286,4 +293,22 @@ func restoreHits(pages []*types.PageData, g *analysis.AdjacencyGraph) bool {
 		p.LinkIntelligence.HubScore = s.HubScore
 	}
 	return len(scores) > 0
+}
+
+// storedSoft404Probes reads the crawl-time soft-404 probes from the crawl DB.
+func storedSoft404Probes(dbPath string) []types.Soft404Probe {
+	if dbPath == "" {
+		return nil
+	}
+	cs, err := storage.NewCrawlStore(dbPath)
+	if err != nil {
+		return nil
+	}
+	defer cs.Close()
+	raw, _ := cs.GetMeta(crawler.Soft404ProbeMetaKey)
+	var probes []types.Soft404Probe
+	if raw != "" {
+		json.Unmarshal([]byte(raw), &probes)
+	}
+	return probes
 }

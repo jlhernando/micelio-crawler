@@ -139,9 +139,10 @@ func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
 	// URL issues
 	page.URLIssues = detectURLIssues(opts.FinalURL)
 
-	// Soft 404
+	// Soft 404 wording (analysis combines it with other signals)
 	if opts.StatusCode == 200 {
-		page.IsSoft404 = detectSoft404(doc, bodyText)
+		page.Soft404Text = detectSoft404Text(doc, bodyText)
+		page.IsSoft404 = page.Soft404Text != ""
 	}
 
 	// Readability (Flesch-Kincaid)
@@ -166,6 +167,8 @@ func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
 	// Prices and buy buttons are only counted outside product cards, so a
 	// product page with a "related products" strip still reads as a product.
 	buy, items, prices := extractCommerceSignals(doc)
+	page.ProductCards = items
+	page.ItemLinks = countItemLinks(page.InternalLinks)
 	switch {
 	case buy >= 3 || (items >= 3 && buy == 0 && prices == 0):
 		page.ListingSignals = min(page.ListingSignals+2, 5)

@@ -187,6 +187,7 @@ type CrawlStats struct {
 	SegmentStats              []SegmentStat          `json:"segmentStats"`
 	HreflangIssues            []HreflangIssue        `json:"hreflangIssues"`
 	Soft404Pages              []string               `json:"soft404Pages"`
+	Soft404Stats              *Soft404Stats          `json:"soft404Stats,omitempty"`
 	OrphanPages               []string               `json:"orphanPages"` // capped at StatsListCap; see TotalOrphanPages
 	TotalOrphanPages          int                    `json:"totalOrphanPages,omitempty"`
 	OrphanMethodology         string                 `json:"orphanMethodology,omitempty"` // "reporter" (basic) or "graph" (redirect-aware via link intelligence)

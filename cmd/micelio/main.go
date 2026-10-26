@@ -104,6 +104,7 @@ func main() {
 func crawlCmd() *cobra.Command {
 	var (
 		noAnalysis          bool
+		noSoft404Probe      bool
 		dbOnly              bool
 		concurrency         int
 		maxPages            int
@@ -296,6 +297,7 @@ func crawlCmd() *cobra.Command {
 				DBPath:              dbPath,
 				NoDB:                noDb,
 				Resume:              resumeCrawl,
+				NoSoft404Probe:      noSoft404Probe,
 				AdaptiveRate:        adaptiveRate,
 				DelayFactor:         delayFactor,
 				Stealth:             stealth,
@@ -414,6 +416,7 @@ func crawlCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noDb, "no-db", false, "Disable automatic crawl database creation")
 	cmd.Flags().BoolVar(&noAnalysis, "no-analysis", false, "Only crawl and save; skip post-crawl analysis (run it later with micelio import)")
 	cmd.Flags().BoolVar(&dbOnly, "db-only", false, "Write only the crawl database, no JSONL/CSV output")
+	cmd.Flags().BoolVar(&noSoft404Probe, "no-soft404-probe", false, "Skip the one request for a page that cannot exist (soft-404 check)")
 	cmd.Flags().BoolVar(&resumeCrawl, "resume", false, "Resume an interrupted crawl (requires --db)")
 	// Performance
 	cmd.Flags().BoolVar(&adaptiveRate, "adaptive-rate", false, "Dynamically adjust request rate based on server feedback")
@@ -1735,6 +1738,7 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 		if len(result.DiscoveredSitemapURLs) > 0 {
 			ppCfg.SitemapEntries = result.DiscoveredSitemapURLs
 		}
+		ppCfg.Soft404Probes = result.Soft404Probes
 		if result.InternalLinksIter != nil {
 			ppCfg.InternalLinksIter = result.InternalLinksIter
 		}

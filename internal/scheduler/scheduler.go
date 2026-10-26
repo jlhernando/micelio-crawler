@@ -51,7 +51,10 @@ type State struct {
 
 // Config defines a scheduled crawl.
 type Config struct {
-	Webhook     *webhook.Options
+	Webhook *webhook.Options
+	// OnRunDone, if set, is called after each run (also skipped ones), e.g.
+	// to email a skipped or failed run.
+	OnRunDone   func(cfg Config, res RunResult)
 	URL         string
 	CronExpr    string
 	OutputDir   string
@@ -374,6 +377,10 @@ func (s *Scheduler) runOnce() {
 				NextRun:   nextRun.UTC().Format(time.RFC3339),
 			},
 		})
+	}
+
+	if s.config.OnRunDone != nil {
+		s.config.OnRunDone(s.config, res)
 	}
 
 	// Check max runs after completion

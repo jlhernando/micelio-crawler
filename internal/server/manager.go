@@ -732,6 +732,9 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 			go alerts.Notify(notifyCfg, crawlStats.AlertSummary, crawlConfig.SeedURL)
 		}
 	}
+	if !r.skipNotify {
+		m.emailCrawlResult(job, crawlStats, pages)
+	}
 
 	// Convert CrawlStats to map for JSON serialization
 	statsData, _ := json.Marshal(crawlStats)

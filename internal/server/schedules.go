@@ -178,6 +178,7 @@ func (m *CrawlManager) newUISchedule(store *UiStore, req scheduleRequest) (*sche
 		CrawlMap:  config,
 		Precheck:  req.Precheck,
 		Runner:    jobRunner{store: store, manager: m},
+		OnRunDone: m.emailScheduleRun,
 	}
 	if req.Webhook != "" {
 		if err := webhook.ValidateURL(req.Webhook); err != nil {

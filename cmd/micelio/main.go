@@ -24,6 +24,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/micelio/micelio/internal/alerts"
 	"github.com/micelio/micelio/internal/analysis"
 	"github.com/micelio/micelio/internal/crawler"
 	"github.com/micelio/micelio/internal/extract"
@@ -1094,6 +1095,12 @@ func scheduleCmd() *cobra.Command {
 		maxRuns           int
 		outputDir         string
 		webhookURL        string
+		emailTo           string
+		smtpHost          string
+		smtpPort          int
+		smtpUser          string
+		smtpFrom          string
+		smtpSecurity      string
 		concurrency       int
 		maxPages          int
 		maxDepth          int
@@ -1244,6 +1251,25 @@ Example, only crawl from an allowed network:
 			if pc.Enabled() {
 				cfg.Precheck = pc
 			}
+			if emailTo != "" {
+				email := alerts.EmailConfig{
+					Host: smtpHost, Port: smtpPort, Username: smtpUser, From: smtpFrom,
+					Password: os.Getenv("MICELIO_SMTP_PASSWORD"), To: alerts.ParseRecipients(emailTo), Security: smtpSecurity,
+				}
+				if !email.Enabled() {
+					return fmt.Errorf("--email-to needs --smtp-host and --smtp-from (password in MICELIO_SMTP_PASSWORD)")
+				}
+				cfg.OnRunDone = func(sc scheduler.Config, res scheduler.RunResult) {
+					info := alerts.RunInfo{Name: sc.Name, SeedURL: sc.URL, Status: res.Status, Reason: res.Reason, Pages: res.Pages}
+					if res.Status == "success" {
+						info.Status = "completed"
+					}
+					subject, text, html := alerts.RenderEmail(info)
+					if err := alerts.SendEmail(email, subject, text, html); err != nil {
+						fmt.Fprintf(os.Stderr, "  [email] %v\n", err)
+					}
+				}
+			}
 			if webhookURL != "" {
 				cfg.Webhook = &webhook.Options{URL: webhookURL}
 			}
@@ -1269,6 +1295,12 @@ Example, only crawl from an allowed network:
 	cmd.Flags().IntVar(&maxRuns, "max-runs", 0, "Maximum runs (0 = unlimited)")
 	cmd.Flags().StringVar(&outputDir, "output-dir", "scheduled-crawls", "Output directory for crawl results")
 	cmd.Flags().StringVar(&webhookURL, "webhook", "", "Webhook URL for notifications")
+	cmd.Flags().StringVar(&emailTo, "email-to", "", "Email each run's result to these addresses (comma separated); password in MICELIO_SMTP_PASSWORD")
+	cmd.Flags().StringVar(&smtpHost, "smtp-host", "", "SMTP server for --email-to")
+	cmd.Flags().IntVar(&smtpPort, "smtp-port", 0, "SMTP port (default 587, or 465 with --smtp-security tls)")
+	cmd.Flags().StringVar(&smtpUser, "smtp-user", "", "SMTP username")
+	cmd.Flags().StringVar(&smtpFrom, "smtp-from", "", "Sender address")
+	cmd.Flags().StringVar(&smtpSecurity, "smtp-security", "starttls", "starttls, tls or none (local relay only)")
 	cmd.Flags().IntVarP(&concurrency, "concurrency", "c", 5, "Concurrent requests")
 	cmd.Flags().IntVar(&maxPages, "max-pages", 1000, "Maximum pages per crawl")
 	cmd.Flags().IntVarP(&maxDepth, "depth", "d", 10, "Maximum crawl depth")

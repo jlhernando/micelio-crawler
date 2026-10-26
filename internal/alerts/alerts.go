@@ -66,6 +66,25 @@ var builtinRules = []ruleFunc{
 	checkMissingDescriptions,
 	checkOrphanPages,
 	checkLowActiveRate,
+	checkSoft404High,
+}
+
+// checkSoft404High fires when high-confidence soft-404 candidates reach 1% of
+// the crawl or 10 pages.
+func checkSoft404High(stats *types.CrawlStats) *types.AlertResult {
+	if stats.Soft404Stats == nil || stats.TotalPages == 0 {
+		return nil
+	}
+	high := stats.Soft404Stats.ByConfidence[types.Soft404High]
+	rate := float64(high) / float64(stats.TotalPages) * 100
+	if high == 0 || (rate < 1 && high < 10) {
+		return nil
+	}
+	return &types.AlertResult{
+		ID: "soft-404-high", Name: "Soft-404 Candidates", Severity: "warning",
+		Metric: "soft404HighRate", Value: rate,
+		Message: fmt.Sprintf("%d pages (%.1f%%) look like soft 404s with high confidence; confirm in Search Console", high, rate),
+	}
 }
 
 func checkHighErrorRate(stats *types.CrawlStats) *types.AlertResult {

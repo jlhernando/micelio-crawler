@@ -412,7 +412,9 @@ func (s *Scheduler) monitorPrecheck(ctx context.Context, ctl *RunControl) {
 			return
 		}
 		s.recordCheck(check)
-		if ctl.set(!check.OK, check.Reason) {
+		// Record the new state before flipping ctl: the runner reacts to the
+		// flip at once, and anyone it notifies must already see it.
+		if paused, _ := ctl.Paused(); paused != !check.OK {
 			s.mu.Lock()
 			s.state.Paused = !check.OK
 			if !check.OK {
@@ -426,6 +428,7 @@ func (s *Scheduler) monitorPrecheck(ctx context.Context, ctl *RunControl) {
 				fmt.Fprintf(os.Stderr, "\nCheck failed (%s), pausing crawl\n", check.Reason)
 			}
 		}
+		ctl.set(!check.OK, check.Reason)
 	}
 }
 

@@ -98,3 +98,33 @@ func TestTelegramTokenMasked(t *testing.T) {
 		t.Errorf("channels = %+v always=%v", ch, always)
 	}
 }
+
+// Channels can come from the environment (~/.micelio/micelio.env) so tokens
+// and chat IDs never need to be saved in a file inside a repository. Saved
+// dashboard values win; blank saved values fall back to the environment.
+func TestChannelsFromEnvironment(t *testing.T) {
+	s := newTestStore(t)
+	m := newTestManager(t, s)
+	t.Setenv("MICELIO_TELEGRAM_TOKEN", "999:ENVTOKEN")
+	t.Setenv("MICELIO_TELEGRAM_CHAT", "777")
+	t.Setenv("MICELIO_SMTP_HOST", "smtp.example.com")
+	t.Setenv("MICELIO_SMTP_PORT", "465")
+	t.Setenv("MICELIO_SMTP_FROM", "m@example.com")
+	t.Setenv("MICELIO_EMAIL_TO", "a@example.com")
+	s.UpdateSettings(map[string]interface{}{"alertTelegramChatId": "", "alertEmailFrom": "saved@example.com"})
+
+	ch, _, _ := m.channelSettings()
+	if ch.telegramToken != "999:ENVTOKEN" || ch.telegramChat != "777" {
+		t.Errorf("telegram from env = %q/%q", ch.telegramToken, ch.telegramChat)
+	}
+	if ch.email.Host != "smtp.example.com" || ch.email.Port != 465 || ch.email.From != "saved@example.com" {
+		t.Errorf("email = %+v (saved From should win)", ch.email)
+	}
+
+	handler := CreateAPIHandler(s, m, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	if strings.Contains(rec.Body.String(), "ENVTOKEN") {
+		t.Error("GET /api/settings exposes a token from the environment")
+	}
+}

@@ -11,6 +11,8 @@ output.*
 !dashboard/index.html
 !cmd/micelio/dashboard/dist/index.html
 .env
+.env.*
+*.env
 .claude/
 .mcp.json
 .playwright-mcp/

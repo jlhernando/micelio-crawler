@@ -65,12 +65,24 @@ var ValidSettings = map[string]string{
 
 // envFallbacks maps setting keys to environment variable names.
 var envFallbacks = map[string]string{
-	"psiKey":             "MICELIO_PSI_KEY",
-	"aiKey":              "MICELIO_AI_KEY",
-	"cruxKey":            "MICELIO_CRUX_KEY",
-	"plausibleApiKey":    "MICELIO_PLAUSIBLE_KEY",
-	"alertEmailPassword": "MICELIO_SMTP_PASSWORD",
-	"alertTelegramToken": "MICELIO_TELEGRAM_TOKEN",
+	"psiKey":          "MICELIO_PSI_KEY",
+	"aiKey":           "MICELIO_AI_KEY",
+	"cruxKey":         "MICELIO_CRUX_KEY",
+	"plausibleApiKey": "MICELIO_PLAUSIBLE_KEY",
+	// Alert channels can live in the environment or ~/.micelio/micelio.env
+	// instead of the dashboard (values saved in the dashboard win).
+	"alertEmailHost":      "MICELIO_SMTP_HOST",
+	"alertEmailPort":      "MICELIO_SMTP_PORT",
+	"alertEmailUser":      "MICELIO_SMTP_USER",
+	"alertEmailPassword":  "MICELIO_SMTP_PASSWORD",
+	"alertEmailFrom":      "MICELIO_SMTP_FROM",
+	"alertEmailTo":        "MICELIO_EMAIL_TO",
+	"alertEmailSecurity":  "MICELIO_SMTP_SECURITY",
+	"alertTelegramToken":  "MICELIO_TELEGRAM_TOKEN",
+	"alertTelegramChatId": "MICELIO_TELEGRAM_CHAT",
+	"alertSlackUrl":       "MICELIO_SLACK_WEBHOOK",
+	"alertWebhookUrl":     "MICELIO_ALERT_WEBHOOK",
+	"dashboardUrl":        "MICELIO_DASHBOARD_URL",
 }
 
 // CreateAPIHandler returns an http.Handler for all /api/* routes.
@@ -1633,7 +1645,8 @@ func maskSecrets(settings map[string]interface{}) {
 
 func applyEnvFallbacks(settings map[string]interface{}) {
 	for key, envVar := range envFallbacks {
-		if _, exists := settings[key]; !exists {
+		// Unset or saved empty (the dashboard saves blank fields as "").
+		if v, exists := settings[key]; !exists || v == "" || v == nil {
 			if val := os.Getenv(envVar); val != "" {
 				settings[key] = val
 			}

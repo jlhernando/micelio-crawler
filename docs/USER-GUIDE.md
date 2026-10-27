@@ -351,6 +351,27 @@ From the CLI, `micelio schedule --email-to ... --smtp-host ... --smtp-from ...`
 (password in `MICELIO_SMTP_PASSWORD`) and `--telegram-chat ...` (token in
 `MICELIO_TELEGRAM_TOKEN`) report each run.
 
+**Keep tokens and IDs out of git.** Values typed in Settings are stored in
+`~/.micelio/ui/micelio-ui.db`, outside any repository. You can also put them in
+`~/.micelio/micelio.env` (or the file named by `MICELIO_ENV_FILE`), which the
+dashboard and the CLI read at start. Values saved in Settings win; blank fields
+fall back to the file. Protect it with `chmod 600 ~/.micelio/micelio.env`.
+
+```bash
+# ~/.micelio/micelio.env
+MICELIO_TELEGRAM_TOKEN=123456:ABC...
+MICELIO_TELEGRAM_CHAT=123456789
+MICELIO_SMTP_HOST=smtp.example.com
+MICELIO_SMTP_PORT=587
+MICELIO_SMTP_USER=alerts@example.com
+MICELIO_SMTP_PASSWORD=app-password
+MICELIO_SMTP_FROM=alerts@example.com
+MICELIO_EMAIL_TO=you@example.com
+MICELIO_SLACK_WEBHOOK=https://hooks.slack.com/services/...
+MICELIO_ALERT_WEBHOOK=https://example.com/hook
+MICELIO_DASHBOARD_URL=http://127.0.0.1:3100
+```
+
 Settings also define default crawl limits, robots behavior, user agent, content
 analysis, link intelligence, output, and alerts. A selected New Crawl preset can
 override those form defaults.

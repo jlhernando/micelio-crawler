@@ -2,6 +2,18 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.7.1] - 2026-10-27
+
+### Added
+
+- **Keep tokens and IDs out of git.** Micelio reads `~/.micelio/micelio.env` (or the file in `MICELIO_ENV_FILE`) at start. Every alert channel setting can live there: SMTP account, Telegram bot token and chat ID, Slack and webhook URLs, dashboard address. Values saved in Settings win; blank fields fall back to the file. Micelio warns if other users can read it.
+- CI fails if a Telegram bot token or a Slack/Discord webhook URL is committed.
+
+### Fixed
+
+- Saving the Settings page with blank alert fields no longer hides values set in the environment.
+- A scheduled crawl paused by a failing check now shows as paused at the same moment the crawl pauses.
+
 ## [1.7.0] - 2026-10-26
 
 Crawl reports on Telegram and Slack, with key points.

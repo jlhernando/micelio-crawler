@@ -178,6 +178,7 @@ func (m *CrawlManager) getAlertNotifyConfig() alerts.NotifyConfig {
 	if err != nil {
 		return alerts.NotifyConfig{}
 	}
+	applyEnvFallbacks(settings)
 	cfg := alerts.NotifyConfig{}
 	if v, ok := settings["alertWebhookUrl"].(string); ok {
 		cfg.WebhookURL = v

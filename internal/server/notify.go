@@ -2,10 +2,10 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -39,15 +39,13 @@ func (m *CrawlManager) channelSettings() (ch reportChannels, always bool, dashbo
 	if err != nil {
 		return
 	}
+	applyEnvFallbacks(settings)
 	str := func(k string) string { s, _ := settings[k].(string); return strings.TrimSpace(s) }
 	ch.email, always, dashboardURL = m.emailSettings()
 	if a, ok := settings["alertAlways"].(bool); ok {
 		always = a
 	}
 	ch.telegramToken = str("alertTelegramToken")
-	if ch.telegramToken == "" {
-		ch.telegramToken = os.Getenv("MICELIO_TELEGRAM_TOKEN")
-	}
 	ch.telegramChat = str("alertTelegramChatId")
 	ch.slackURL = str("alertSlackUrl")
 	return
@@ -88,6 +86,7 @@ func (m *CrawlManager) emailSettings() (cfg alerts.EmailConfig, always bool, das
 	if err != nil {
 		return
 	}
+	applyEnvFallbacks(settings)
 	str := func(k string) string { s, _ := settings[k].(string); return strings.TrimSpace(s) }
 	cfg = alerts.EmailConfig{
 		Host:     str("alertEmailHost"),
@@ -97,11 +96,11 @@ func (m *CrawlManager) emailSettings() (cfg alerts.EmailConfig, always bool, das
 		To:       alerts.ParseRecipients(str("alertEmailTo")),
 		Security: str("alertEmailSecurity"),
 	}
-	if cfg.Password == "" {
-		cfg.Password = os.Getenv("MICELIO_SMTP_PASSWORD")
-	}
-	if p, ok := settings["alertEmailPort"].(float64); ok {
+	switch p := settings["alertEmailPort"].(type) {
+	case float64:
 		cfg.Port = int(p)
+	case string: // from the environment
+		fmt.Sscan(p, &cfg.Port)
 	}
 	always, _ = settings["alertEmailAlways"].(bool)
 	dashboardURL = strings.TrimRight(str("dashboardUrl"), "/")

@@ -27,6 +27,7 @@ import (
 	"github.com/micelio/micelio/internal/alerts"
 	"github.com/micelio/micelio/internal/analysis"
 	"github.com/micelio/micelio/internal/crawler"
+	"github.com/micelio/micelio/internal/envfile"
 	"github.com/micelio/micelio/internal/extract"
 	"github.com/micelio/micelio/internal/integration"
 	"github.com/micelio/micelio/internal/logs"
@@ -65,6 +66,16 @@ func main() {
 		Short:   "Micelio SEO Crawler (Go)",
 		Version: version,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			// Local settings and tokens, kept outside any git repository.
+			envPath := os.Getenv("MICELIO_ENV_FILE")
+			if envPath == "" {
+				envPath = envfile.DefaultPath()
+			}
+			if _, warning, err := envfile.Load(envPath); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+			} else if warning != "" {
+				fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+			}
 			if memLimit != "" {
 				if limit, err := parseMemLimit(memLimit); err == nil {
 					debug.SetMemoryLimit(limit)
@@ -1251,6 +1262,22 @@ Example, only crawl from an allowed network:
 			cfg.Name = name
 			if pc.Enabled() {
 				cfg.Precheck = pc
+			}
+			envDefault := func(v *string, key string) {
+				if *v == "" {
+					*v = os.Getenv(key)
+				}
+			}
+			envDefault(&emailTo, "MICELIO_EMAIL_TO")
+			envDefault(&telegramChat, "MICELIO_TELEGRAM_CHAT")
+			envDefault(&smtpHost, "MICELIO_SMTP_HOST")
+			envDefault(&smtpUser, "MICELIO_SMTP_USER")
+			envDefault(&smtpFrom, "MICELIO_SMTP_FROM")
+			if smtpPort == 0 {
+				fmt.Sscan(os.Getenv("MICELIO_SMTP_PORT"), &smtpPort)
+			}
+			if !cmd.Flags().Changed("smtp-security") && os.Getenv("MICELIO_SMTP_SECURITY") != "" {
+				smtpSecurity = os.Getenv("MICELIO_SMTP_SECURITY")
 			}
 			if emailTo != "" || telegramChat != "" {
 				email := alerts.EmailConfig{

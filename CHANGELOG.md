@@ -2,7 +2,7 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
-## [Unreleased]
+## [1.8.1] - 2026-10-27
 
 ### Changed
 

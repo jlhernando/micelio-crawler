@@ -103,7 +103,53 @@
   let autoRedirectTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ── Derived ──
-  let progressPct = $derived(total > 0 ? Math.round(((completed + failed) / total) * 100) : 0);
+  // Against the URLs really known (done + queued) when the page limit is far
+  // above the site, so a 1M limit on a 300-page site does not sit at 0%.
+  let progressPct = $derived.by(() => {
+    const done = completed + failed;
+    const known = done + pending;
+    const denom = total > 0 && known > 0 ? Math.min(total, known) : total;
+    return denom > 0 ? Math.min(100, Math.round((done / denom) * 100)) : 0;
+  });
+
+  // ── Live tuning ──
+  let tuneOpen = $state(false);
+  let tuneDelay = $state(0);
+  let tuneConcurrency = $state(0);
+  let tuneLimit = $state(0);
+  let tuneBusy = $state(false);
+  let tuneMsg = $state<{ ok: boolean; text: string } | null>(null);
+
+  async function openTune() {
+    tuneOpen = !tuneOpen;
+    if (!tuneOpen) return;
+    tuneMsg = null;
+    try {
+      const t = await api.getCrawlTuning(id);
+      tuneDelay = t.delay; tuneConcurrency = t.concurrency; tuneLimit = t.limit;
+    } catch (e) {
+      tuneMsg = { ok: false, text: (e as Error).message };
+    }
+  }
+
+  async function applyTune() {
+    tuneBusy = true;
+    tuneMsg = null;
+    try {
+      const t = await api.tuneCrawl(id, {
+        delay: tuneDelay === 0 ? -1 : tuneDelay,
+        concurrency: tuneConcurrency,
+        limit: tuneLimit,
+      });
+      tuneDelay = t.delay; tuneConcurrency = t.concurrency; tuneLimit = t.limit;
+      total = t.limit;
+      tuneMsg = { ok: true, text: 'Applied. robots.txt Crawl-delay and adaptive rate still apply.' };
+    } catch (e) {
+      tuneMsg = { ok: false, text: (e as Error).message };
+    } finally {
+      tuneBusy = false;
+    }
+  }
   let pagesPerSecond = $derived(elapsedMs > 1000 ? ((completed + failed) / (elapsedMs / 1000)).toFixed(1) : '—');
   let estimatedRemaining = $derived.by(() => {
     if (elapsedMs < 2000 || completed + failed === 0 || pending === 0) return '—';
@@ -140,6 +186,13 @@
       excludedStats = (msg.data.excludedStats as typeof excludedStats) || [];
       total = (msg.data.total as number) || 0;
       elapsedMs = (msg.data.elapsedMs as number) || (Date.now() - startedAt);
+    } else if (msg.type === 'tuned') {
+      total = (msg.data.limit as number) || total;
+      if (!tuneBusy) {
+        tuneDelay = msg.data.delay as number;
+        tuneConcurrency = msg.data.concurrency as number;
+        tuneLimit = msg.data.limit as number;
+      }
     } else if (msg.type === 'page' || msg.type === 'error') {
       const url = msg.data.url as string;
       const statusCode = (msg.data.statusCode as number) || 0;
@@ -436,12 +489,51 @@
           {/if}
           <button
             type="button"
+            class="px-4 py-1.5 rounded-lg text-sm font-medium bg-surface-3 text-fg-1 hover:bg-surface-3/70 transition-colors cursor-pointer"
+            onclick={openTune}
+            aria-expanded={tuneOpen}
+            title="Change delay, concurrency or page limit without stopping the crawl"
+          >Adjust</button>
+          <button
+            type="button"
             class="px-4 py-1.5 rounded-lg text-sm font-medium bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors cursor-pointer"
             onclick={cancelCrawl}
           >Cancel</button>
         </div>
       {/if}
     </div>
+
+    {#if tuneOpen && (status === 'running' || status === 'paused')}
+      <form
+        class="mb-4 rounded-md border border-border bg-surface-1 p-3 flex flex-wrap items-end gap-3"
+        onsubmit={(e) => { e.preventDefault(); applyTune(); }}
+      >
+        <label class="text-xs text-fg-2 flex flex-col gap-1">
+          Delay (ms)
+          <input type="number" min="0" max="60000" step="50" bind:value={tuneDelay}
+            class="w-28 rounded border border-border bg-surface-2 px-2 py-1 text-sm text-fg" />
+        </label>
+        <label class="text-xs text-fg-2 flex flex-col gap-1">
+          Concurrency
+          <input type="number" min="1" max="100" bind:value={tuneConcurrency}
+            class="w-24 rounded border border-border bg-surface-2 px-2 py-1 text-sm text-fg" />
+        </label>
+        <label class="text-xs text-fg-2 flex flex-col gap-1">
+          Page limit
+          <input type="number" min="1" bind:value={tuneLimit}
+            class="w-32 rounded border border-border bg-surface-2 px-2 py-1 text-sm text-fg" />
+        </label>
+        <button type="submit" disabled={tuneBusy}
+          class="px-4 py-1.5 rounded-lg text-sm font-medium bg-accent/20 text-accent hover:bg-accent/30 transition-colors cursor-pointer disabled:opacity-50"
+        >{tuneBusy ? 'Applying…' : 'Apply'}</button>
+        <p class="basis-full text-[11px] text-fg-2">
+          Filters, depth, robots and JS rendering stay fixed so the analysis stays consistent. Changes are kept if the crawl is resumed.
+        </p>
+        {#if tuneMsg}
+          <p class="basis-full text-xs {tuneMsg.ok ? 'text-green-400' : 'text-red-400'}">{tuneMsg.text}</p>
+        {/if}
+      </form>
+    {/if}
 
     <!-- Bar -->
     <div class="h-3 rounded-full bg-surface-3 overflow-hidden">

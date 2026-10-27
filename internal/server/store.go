@@ -1717,3 +1717,15 @@ func (s *UiStore) QueryMergePages(logID, crawlID string, opts MergeQueryOpts) ([
 	})
 	return rows, total, err
 }
+
+// UpdateCrawlJobConfig replaces a crawl's stored config (live tuning keeps
+// the new delay, concurrency and limit for a later resume).
+func (s *UiStore) UpdateCrawlJobConfig(id string, config map[string]interface{}) error {
+	data, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return sqlitex.Execute(s.conn, `UPDATE crawl_jobs SET config = ? WHERE id = ?`, &sqlitex.ExecOptions{Args: []interface{}{string(data), id}})
+}

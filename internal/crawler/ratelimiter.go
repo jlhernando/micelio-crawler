@@ -166,6 +166,30 @@ func (h *hostRateLimiter) SetInterval(rawURL string, d time.Duration) {
 	b.SetInterval(d)
 }
 
+// SetBase changes the configured delay for every host (live tuning). Each
+// host restarts at its new floor, never below its robots.txt Crawl-delay;
+// the adaptive limiter raises it again if the server slows down.
+func (h *hostRateLimiter) SetBase(d time.Duration) {
+	h.mu.Lock()
+	h.base = d
+	type hostBucket struct {
+		host  string
+		b     *tokenBucket
+		floor time.Duration
+	}
+	var all []hostBucket
+	for host, b := range h.buckets {
+		all = append(all, hostBucket{host, b, h.floorLocked(host)})
+	}
+	h.mu.Unlock()
+	for _, hb := range all {
+		if h.adaptive != nil {
+			h.adaptive.ResetDomainFloor(hb.host, hb.floor)
+		}
+		hb.b.SetInterval(hb.floor)
+	}
+}
+
 // Interval returns the current interval for rawURL's host.
 func (h *hostRateLimiter) Interval(rawURL string) time.Duration {
 	return h.bucket(extractDomain(rawURL)).Interval()
@@ -258,6 +282,26 @@ func (rl *AdaptiveRateLimiter) SetDomainMinDelay(domain string, d time.Duration)
 	}
 	if ds.currentDelay < ds.minDelay {
 		ds.currentDelay = ds.minDelay
+	}
+}
+
+// SetBase changes the delay new domains start from (live tuning).
+func (rl *AdaptiveRateLimiter) SetBase(d time.Duration) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	rl.baseRate = max(d, adaptiveMinDelay)
+}
+
+// ResetDomainFloor sets a domain's floor, up or down, and restarts its delay
+// there (live tuning).
+func (rl *AdaptiveRateLimiter) ResetDomainFloor(domain string, d time.Duration) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	ds := rl.domainStateLocked(strings.ToLower(domain))
+	ds.minDelay = max(d, adaptiveMinDelay)
+	ds.currentDelay = ds.minDelay
+	if ds.maxDelay < ds.minDelay {
+		ds.maxDelay = ds.minDelay
 	}
 }
 

@@ -19,6 +19,13 @@ const (
 	// DefaultExternalCheckMaxURLs caps how many unique external URLs are
 	// checked after a crawl. The most-referenced URLs are checked first.
 	DefaultExternalCheckMaxURLs = 50000
+	// DefaultExternalCheckConcurrency checks this many external URLs at once.
+	// They are on many different sites and each host gets at most
+	// defaultExternalPerHost, so this is independent of the crawl's
+	// concurrency (which is about one site).
+	DefaultExternalCheckConcurrency = 20
+	// DefaultExternalCheckTimeout is the wait per external URL.
+	DefaultExternalCheckTimeout = 6 * time.Second
 	// DefaultExternalCheckMaxFoundOn caps the source pages kept per broken URL.
 	DefaultExternalCheckMaxFoundOn = 10
 	defaultExternalPerHost         = 2

@@ -113,6 +113,12 @@ func Crawl(ctx context.Context, config types.CrawlConfig, onProgress OnProgress,
 
 // CrawlWithOptions runs a crawl with the given configuration and options.
 func CrawlWithOptions(ctx context.Context, config types.CrawlConfig, onProgress OnProgress, store []CrawlStore, pauseFn PauseFunc, phaseFn PhaseFunc) (*CrawlResult, error) {
+	return CrawlWithTuner(ctx, config, onProgress, store, pauseFn, phaseFn, nil)
+}
+
+// CrawlWithTuner is CrawlWithOptions that hands onTuner (if set) a Tuner
+// for changing delay, concurrency and the page limit while the crawl runs.
+func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress OnProgress, store []CrawlStore, pauseFn PauseFunc, phaseFn PhaseFunc, onTuner func(*Tuner)) (*CrawlResult, error) {
 	if config.SeedURL == "" && len(config.URLs) == 0 && len(config.SitemapURLs) == 0 {
 		return nil, fmt.Errorf("no seed URL, URL list, or sitemap provided")
 	}
@@ -129,8 +135,13 @@ func CrawlWithOptions(ctx context.Context, config types.CrawlConfig, onProgress 
 	defer s.cleanup()
 	s.sink = newPageSink(s.writer, s.crawlDB, &s.errorCount)
 
-	// Main crawl loop
-	sem := make(chan struct{}, s.config.Concurrency)
+	// Main crawl loop. The worker limit and the page limit can change while
+	// it runs (Tuner).
+	s.sem = newDynSem(s.config.Concurrency)
+	tuner := &Tuner{s: s, t: Tuning{DelayMs: s.config.DelayMs, Concurrency: s.config.Concurrency, MaxPages: s.config.MaxPages}}
+	if onTuner != nil {
+		onTuner(tuner)
+	}
 	var wg sync.WaitGroup
 	cancelled := false
 	lastScavenge := time.Now()
@@ -150,6 +161,11 @@ func CrawlWithOptions(ctx context.Context, config types.CrawlConfig, onProgress 
 				cancelled = true
 				continue
 			}
+		}
+
+		// A page limit lowered below the pages already admitted stops here.
+		if lim := tuner.Get().MaxPages; lim > 0 && int(s.crawled.Load()) >= lim {
+			break
 		}
 
 		entry := s.queue.Dequeue()
@@ -176,12 +192,15 @@ func CrawlWithOptions(ctx context.Context, config types.CrawlConfig, onProgress 
 			debug.FreeOSMemory()
 		}
 
-		sem <- struct{}{}
+		if !s.sem.acquire(ctx) {
+			cancelled = true
+			continue
+		}
 		wg.Add(1)
 
 		go func(e types.QueueEntry) {
 			defer func() {
-				<-sem
+				s.sem.release()
 				wg.Done()
 			}()
 			s.processEntry(ctx, e)

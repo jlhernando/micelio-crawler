@@ -182,6 +182,31 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		jsonOK(w, map[string]interface{}{"id": newID, "status": "running"})
 	})
 
+	// Live tuning: {delay, concurrency, limit}; omitted or 0 = unchanged,
+	// delay -1 = no delay. Also GET for the current values.
+	mux.HandleFunc("POST /api/crawl/{id}/tune", func(w http.ResponseWriter, r *http.Request) {
+		var t crawler.Tuning
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&t); err != nil {
+			jsonError(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		got, err := manager.TuneCrawl(r.PathValue("id"), t)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		jsonOK(w, got)
+	})
+
+	mux.HandleFunc("GET /api/crawl/{id}/tune", func(w http.ResponseWriter, r *http.Request) {
+		got, err := manager.CrawlTuning(r.PathValue("id"))
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		jsonOK(w, got)
+	})
+
 	mux.HandleFunc("POST /api/crawl/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
 		if err := manager.StopCrawl(r.PathValue("id")); err != nil {
 			jsonError(w, err.Error(), http.StatusBadRequest)
@@ -433,6 +458,9 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			"analysisPending": results.AnalysisPending,
 			"pagesReady":      results.PagesReady,
 			"loadingProgress": int(results.loadingProgress.Load()),
+		}
+		if total := results.externalTotal.Load(); total > 0 {
+			resp["externalCheck"] = map[string]int64{"loaded": results.externalChecked.Load(), "total": total}
 		}
 		results.mu.RUnlock()
 		jsonOK(w, resp)

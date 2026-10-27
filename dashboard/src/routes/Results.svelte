@@ -45,6 +45,8 @@
   let crawlJob = $state<Record<string, unknown> | null>(null);
   let scopeUnavailable = $state(false);
   let analysisPending = $state(false);
+  // Background external link check after the crawl (null = not running).
+  let externalCheck = $state<{ loaded: number; total: number } | null>(null);
   let pagesReady = $state(false);
   let loadingProgress = $state(0);
 
@@ -147,6 +149,7 @@
       stats = data.stats as Record<string, unknown>;
       pageCount = data.pageCount as number;
       analysisPending = (data.analysisPending as boolean) || false;
+      externalCheck = (data.externalCheck as { loaded: number; total: number } | undefined) ?? null;
       // Preserve original template distribution for pills
       const s = data.stats as Record<string, unknown>;
       if (s?.templateTypeDistribution) {
@@ -162,7 +165,18 @@
 
     // Listen for analysis_complete to refresh stats when deferred analysis finishes
     const ws = createWsClient((msg) => {
+      if (msg.type === 'analysis_progress' && msg.data?.crawlId === id) {
+        if (msg.data.phase === 'external_check') {
+          externalCheck = { loaded: (msg.data.loaded as number) || 0, total: (msg.data.total as number) || 0 };
+        } else if (msg.data.phase === 'external_done') {
+          externalCheck = null;
+          api.getCrawlStats(id).then((data: Record<string, unknown>) => {
+            stats = data.stats as Record<string, unknown>;
+          });
+        }
+      }
       if (msg.type === 'analysis_complete' && msg.data?.crawlId === id) {
+        externalCheck = null;
         analysisPending = false;
         // Re-fetch stats with link intelligence data
         api.getCrawlStats(id).then((data: Record<string, unknown>) => {
@@ -243,6 +257,14 @@
     {/if}
 
     <!-- Tab Navigation -->
+    {#if externalCheck && externalCheck.total > 0}
+      <div class="rounded-md border border-accent/30 bg-accent/5 px-4 py-2 flex items-center gap-3 text-sm" role="status">
+        <div class="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0"></div>
+        <span class="text-fg-1">Checking external links {externalCheck.loaded.toLocaleString()} / {externalCheck.total.toLocaleString()}…</span>
+        <span class="text-xs text-fg-2">Broken external links appear in Issues when done.</span>
+      </div>
+    {/if}
+
     <div class="section-tabs">
       {#each [
         { key: 'overview', label: 'Overview' },

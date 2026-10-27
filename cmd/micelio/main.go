@@ -1757,7 +1757,8 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 		fmt.Fprintf(os.Stderr, "\n  Checking %d external links...\n", len(result.ExternalLinks))
 		extSummary := crawler.CheckExternalLinks(ctx, result.ExternalLinks, crawler.ExternalCheckOptions{
 			UserAgent:   config.UserAgent,
-			Concurrency: config.Concurrency,
+			Concurrency: crawler.DefaultExternalCheckConcurrency,
+			Timeout:     crawler.DefaultExternalCheckTimeout,
 			SkipSSRF:    config.SkipSSRF,
 			OnProgress: func(n, total int) {
 				if n%10 == 0 {

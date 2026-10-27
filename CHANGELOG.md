@@ -2,6 +2,25 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.8.0] - 2026-10-27
+
+Change a running crawl, and get results right after Stop & Analyze.
+
+### Added
+
+- **Adjust a running crawl.** Monitor → Adjust changes the delay, concurrency and page limit without stopping the crawl (also `POST /api/crawl/{id}/tune`). The delay never goes below the robots.txt Crawl-delay, and adaptive rate still slows down when the server struggles. The change is kept if the crawl is resumed and shows as a "tuned" event. Filters, depth, robots and JS rendering stay fixed so the analysis stays consistent.
+
+### Changed
+
+- **Stop & Analyze shows results in seconds.** External links are checked after the results are shown, not before. The Results page shows "Checking external links n / total" and adds the broken ones when done. In a test with 1,895 external URLs, the wait after Stop & Analyze went from 226 s to 0.4 s, with the same broken links found.
+- External links are checked 20 at a time (still at most 2 per site) and wait up to 6 s per URL, instead of the crawl's concurrency and 10 s.
+- Monitor: "Pending" shows the URLs really waiting in the queue, and the % is based on the URLs found so far when the page limit is far above the site's size.
+- The server log has a `[timing]` line with how long each post-crawl step took.
+
+### Fixed
+
+- Raising the page limit of a running crawl a lot no longer makes new URLs look already crawled.
+
 ## [1.7.2] - 2026-10-27
 
 ### Changed

@@ -140,6 +140,13 @@ export const api = {
   stopCrawl: (id: string) =>
     request<{ status: string }>('POST', `/api/crawl/${id}/stop`),
 
+  // Live tuning of a running crawl. 0/omitted = unchanged, delay -1 = no delay.
+  getCrawlTuning: (id: string) =>
+    request<{ delay: number; concurrency: number; limit: number }>('GET', `/api/crawl/${id}/tune`),
+
+  tuneCrawl: (id: string, t: { delay?: number; concurrency?: number; limit?: number }) =>
+    request<{ delay: number; concurrency: number; limit: number }>('POST', `/api/crawl/${id}/tune`, t),
+
   cancelCrawl: (id: string) =>
     request<{ status: string }>('POST', `/api/crawl/${id}/cancel`),
 
@@ -177,7 +184,7 @@ export const api = {
     ),
 
   getCrawlStats: (id: string) =>
-    request<{ stats: Record<string, unknown>; pageCount: number; analysisPending?: boolean; pagesReady?: boolean; loadingProgress?: number }>('GET', `/api/crawl/${id}/stats`),
+    request<{ stats: Record<string, unknown>; pageCount: number; analysisPending?: boolean; pagesReady?: boolean; loadingProgress?: number; externalCheck?: { loaded: number; total: number } }>('GET', `/api/crawl/${id}/stats`),
 
   getFilteredStats: (id: string, template: string) =>
     request<{ stats: Record<string, unknown>; pageCount: number; scopedKeys?: string[]; template?: string }>('GET', `/api/crawl/${id}/stats/filtered?template=${encodeURIComponent(template)}`),

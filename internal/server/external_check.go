@@ -20,14 +20,23 @@ func (m *CrawlManager) checkExternalLinks(ctx context.Context, crawlID string, c
 		checkCtx = m.ctx
 	}
 	start := time.Now()
+	// Runs after the results are shown, so progress goes to the Results page
+	// (analysis_progress) and to /stats for a page opened mid-check.
 	emitPhase := func(loaded, total int) {
+		m.mu.RLock()
+		res := m.results[crawlID]
+		m.mu.RUnlock()
+		if res != nil {
+			res.externalChecked.Store(int64(loaded))
+			res.externalTotal.Store(int64(total))
+		}
 		m.emit(ProgressEvent{
-			CrawlID: crawlID, Type: "progress",
+			CrawlID: crawlID, Type: "analysis_progress",
 			Data: map[string]interface{}{
+				"crawlId": crawlID,
 				"phase":   "external_check",
 				"loaded":  loaded,
 				"total":   total,
-				"crawled": 0,
 			},
 		})
 	}
@@ -39,7 +48,8 @@ func (m *CrawlManager) checkExternalLinks(ctx context.Context, crawlID string, c
 	)
 	summary := crawler.CheckExternalLinks(checkCtx, links, crawler.ExternalCheckOptions{
 		UserAgent:   cfg.UserAgent,
-		Concurrency: cfg.Concurrency,
+		Concurrency: crawler.DefaultExternalCheckConcurrency,
+		Timeout:     crawler.DefaultExternalCheckTimeout,
 		SkipSSRF:    cfg.SkipSSRF,
 		OnProgress: func(n, total int) {
 			// Throttle WebSocket events for large link sets.

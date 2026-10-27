@@ -67,6 +67,8 @@ type ExcludedStats struct {
 type CrawlQueue struct {
 	exclusions        map[string]*types.ExclusionReason
 	visited           *bloom.BloomFilter
+	visitedFull       []*bloom.BloomFilter // filled filters kept after a limit raise
+	visitedCap        int                  // URLs visited was sized for
 	visitedCount      int
 	excludedByPattern []int // per-pattern counts (same order as excludePatterns)
 	excludedByInclude int   // URLs rejected for not matching any include pattern
@@ -110,6 +112,7 @@ func NewCrawlQueue(seedURL string, maxDepth, maxPages int, opts *QueueOptions) *
 		seedDomain:      domain,
 		maxDepth:        maxDepth,
 		maxPages:        maxPages,
+		visitedCap:      maxPages,
 		enforceInternal: true,
 	}
 
@@ -125,6 +128,34 @@ func NewCrawlQueue(seedURL string, maxDepth, maxPages int, opts *QueueOptions) *
 	return q
 }
 
+// SetMaxPages changes the page limit of a running crawl. A bloom filter
+// sized for 1K URLs would match almost every URL after 100K, so a raise
+// past its size starts a new filter and keeps the old one for lookups.
+func (q *CrawlQueue) SetMaxPages(n int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.maxPages = n
+	if n > q.visitedCap {
+		q.visitedFull = append(q.visitedFull, q.visited)
+		q.visited = bloom.NewWithEstimates(uint(n), 0.0001)
+		q.visitedCap = n
+	}
+}
+
+// seenLocked reports whether normalized is in any dedup filter. Caller must
+// hold mu.
+func (q *CrawlQueue) seenLocked(normalized string) bool {
+	if q.visited.TestString(normalized) {
+		return true
+	}
+	for _, f := range q.visitedFull {
+		if f.TestString(normalized) {
+			return true
+		}
+	}
+	return false
+}
+
 // Enqueue adds a URL to the queue if it passes all filters.
 // Returns true if the URL was added, false if filtered or already seen.
 func (q *CrawlQueue) Enqueue(rawURL string, depth int, referrer *string) bool {
@@ -137,7 +168,7 @@ func (q *CrawlQueue) Enqueue(rawURL string, depth int, referrer *string) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if q.visited.TestString(normalized) {
+	if q.seenLocked(normalized) {
 		return false
 	}
 	if depth > q.maxDepth {
@@ -177,7 +208,7 @@ func (q *CrawlQueue) EnqueueEntry(entry types.QueueEntry) bool {
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.visited.TestString(normalized) {
+	if q.seenLocked(normalized) {
 		return false
 	}
 	if entry.Depth > q.maxDepth {
@@ -255,7 +286,7 @@ func (q *CrawlQueue) Has(rawURL string) bool {
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.visited.TestString(normalized)
+	return q.seenLocked(normalized)
 }
 
 // Size returns the number of pending URLs in the queue (in-memory + disk).
@@ -302,7 +333,7 @@ func (q *CrawlQueue) MarkVisited(rawURL string) {
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if !q.visited.TestString(normalized) {
+	if !q.seenLocked(normalized) {
 		q.visited.AddString(normalized)
 		q.visitedCount++
 	}

@@ -33,6 +33,7 @@ type crawlSession struct {
 	seedURL string
 
 	soft404Probes []types.Soft404Probe
+	sem           *dynSem // worker slots; resizable (Tuner)
 
 	// Storage
 	writer *storage.ResultWriter

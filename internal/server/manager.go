@@ -44,13 +44,20 @@ type CrawlResults struct {
 	AnalysisPending bool                     `json:"analysisPending"` // true while deferred analysis (link intel, embeddings) is running
 	PagesReady      bool                     `json:"pagesReady"`      // false while pages are loading from DB in background
 	loadingProgress atomic.Int32             // 0-100 progress of background page loading (lock-free)
-	loadCancel      context.CancelFunc       // cancels background page loading goroutine
-	mu              sync.RWMutex             // protects Pages during deferred analysis
-	views           pageViewCache            // /pages filter+sort results (pages_view.go)
+	// Background external link check: URLs done / total (total 0 = not running).
+	externalChecked atomic.Int64
+	externalTotal   atomic.Int64
+	loadCancel      context.CancelFunc // cancels background page loading goroutine
+	mu              sync.RWMutex       // protects Pages during deferred analysis
+	views           pageViewCache      // /pages filter+sort results (pages_view.go)
 }
 
 // ActiveCrawl tracks a running crawl job.
 type ActiveCrawl struct {
+	// Tuner changes delay, concurrency and the page limit while it runs
+	// (nil until the crawl session is set up).
+	Tuner       *crawler.Tuner
+	stopAt      time.Time // when Stop & Analyze was pressed
 	StartedAt   time.Time
 	Config      map[string]interface{}
 	Cancel      context.CancelFunc
@@ -372,6 +379,7 @@ func (m *CrawlManager) StopCrawl(crawlID string) error {
 		return fmt.Errorf("no active crawl with id %s", crawlID)
 	}
 	m.active.Stopping = true
+	m.active.stopAt = time.Now()
 	active := m.active
 	// Don't clear m.active — runCrawl will handle completion
 	m.mu.Unlock()
@@ -472,12 +480,16 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 	if crawlStore != nil {
 		storeArg = []crawler.CrawlStore{crawlStore}
 	}
-	result, err := crawler.CrawlWithOptions(ctx, crawlConfig, func(p crawler.CrawlProgress) {
+	var tuner *crawler.Tuner
+	result, err := crawler.CrawlWithTuner(ctx, crawlConfig, func(p crawler.CrawlProgress) {
 		completed := p.Crawled - p.Errors
 		failed := p.Errors
-		pending := maxPages - p.Crawled
-		if pending < 0 {
-			pending = p.Queued
+		// URLs really waiting in the queue (not "limit minus crawled", which
+		// reads as 999,683 pending on a 1M-limit crawl of a small site).
+		pending := p.Queued
+		total := maxPages
+		if tuner != nil {
+			total = tuner.Get().MaxPages // may change mid-crawl
 		}
 		elapsed := time.Since(startTime).Milliseconds()
 
@@ -529,7 +541,7 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 				"completed":     completed,
 				"failed":        failed,
 				"pending":       pending,
-				"total":         maxPages,
+				"total":         total,
 				"elapsedMs":     elapsed,
 				"crawled":       p.Crawled,
 				"queued":        p.Queued,
@@ -564,6 +576,13 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 				"crawled": 0,
 			},
 		})
+	}, func(t *crawler.Tuner) {
+		tuner = t
+		m.mu.Lock()
+		if m.active != nil && m.active.ID == crawlID {
+			m.active.Tuner = t
+		}
+		m.mu.Unlock()
 	})
 
 	// Persist before cancellation handling: final decisions also matter when no
@@ -575,12 +594,17 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 	}
 	elapsed := time.Since(startTime).Milliseconds()
 	now := time.Now().UTC().Format(time.RFC3339)
+	timer := newPhaseTimer(crawlID)
 
 	// Check if the crawl was stopped (graceful) or cancelled (hard).
 	// StopCrawl sets Stopping=true — we still run analysis on partial results.
 	// CancelCrawl clears m.active — bail out entirely.
 	m.mu.RLock()
 	stopping := m.active != nil && m.active.Stopping
+	if stopping {
+		// Time for in-flight requests to finish and pages to load back.
+		timer.parts = append(timer.parts, fmt.Sprintf("stop→crawl end %s", time.Since(m.active.stopAt).Round(time.Millisecond)))
+	}
 	m.mu.RUnlock()
 
 	if ctx.Err() == context.Canceled && !stopping {
@@ -636,23 +660,13 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 			// Even without full page weight mode, populate from available data
 			analysis.AssignPageWeightFromRefs(pages, result.ResourceRefs, result.TransferSizes)
 		}
-		// Check external links (dashboard "Check External") before releasing them.
-		var extSummary *crawler.ExternalCheckSummary
+		timer.mark("page weight")
+		// External links are checked after the results are shown (background,
+		// with the deferred analysis), so Stop & Analyze does not wait for
+		// hundreds of HEAD requests to other sites.
+		var externalLinks map[string][]string
 		if crawlConfig.CheckExternal && len(result.ExternalLinks) > 0 {
-			extSummary = m.checkExternalLinks(ctx, crawlID, crawlConfig, result.ExternalLinks, stopping)
-			postCfg.ExternalLinkResults = extSummary.Broken
-			// Stop & Analyze may arrive during the check: re-read the flag so a
-			// graceful stop still runs analysis on the partial results.
-			m.mu.RLock()
-			stopping = stopping || (m.active != nil && m.active.Stopping)
-			m.mu.RUnlock()
-			if ctx.Err() == context.Canceled && !stopping {
-				log.Printf("crawl %s cancelled during external link check", crawlID)
-				if intLinksClose != nil {
-					intLinksClose()
-				}
-				return
-			}
+			externalLinks = result.ExternalLinks
 		}
 		// Release CrawlResult (external links, resource refs, transfer sizes)
 		// before post-crawl analysis to reduce peak RSS overlap.
@@ -664,8 +678,9 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		}
 		m.analyzeAndCache(analysisRun{
 			ctx: analysisCtx, crawlID: crawlID, job: job, config: crawlConfig,
-			pages: pages, postCfg: postCfg, crawlStore: crawlStore, extSummary: extSummary,
+			pages: pages, postCfg: postCfg, crawlStore: crawlStore, externalLinks: externalLinks,
 			closeLinks: intLinksClose, elapsed: elapsed, beforeComplete: clearActive,
+			timer: timer,
 		})
 		return
 	}
@@ -689,25 +704,30 @@ type analysisRun struct {
 	pages          []*types.PageData
 	postCfg        analysis.PostProcessConfig
 	crawlStore     *storage.CrawlStore // for the page index; may be nil
-	extSummary     *crawler.ExternalCheckSummary
-	closeLinks     func() // releases InternalLinksIter; may be nil
+	externalLinks  map[string][]string // checked in the background after core analysis
+	closeLinks     func()              // releases InternalLinksIter; may be nil
 	elapsed        int64
-	beforeComplete func() // runs before the "complete" event; may be nil
-	skipNotify     bool   // imports evaluate alerts but send no webhooks
+	beforeComplete func()      // runs before the "complete" event; may be nil
+	skipNotify     bool        // imports evaluate alerts but send no webhooks
+	timer          *phaseTimer // may be nil
 }
 
 // analyzeAndCache runs core analysis, persists stats, caches the results and
 // starts deferred analysis (link intelligence, embeddings) when configured.
 func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 	analysisCtx, crawlID, job, crawlConfig := r.ctx, r.crawlID, r.job, r.config
-	pages, postCfg, crawlStore, extSummary := r.pages, r.postCfg, r.crawlStore, r.extSummary
+	pages, postCfg, crawlStore := r.pages, r.postCfg, r.crawlStore
 	intLinksClose, elapsed, pageCount := r.closeLinks, r.elapsed, len(r.pages)
 	clearActive := r.beforeComplete
 	if clearActive == nil {
 		clearActive = func() {}
 	}
+	timer := r.timer
+	if timer == nil {
+		timer = newPhaseTimer(crawlID)
+	}
 	crawlStats, coreGraph := analysis.RunCoreAnalysisWithGraph(analysisCtx, pages, postCfg)
-	applyExternalCheckSummary(&crawlStats, extSummary)
+	timer.mark("report")
 	// Link intelligence reuses the reporter's graph instead of re-reading
 	// every edge from disk.
 	postCfg.Graph = coreGraph
@@ -721,6 +741,7 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 	inlinkIdx := newInlinkIndex(coreGraph, pages)
 	assignInlinks(pages, inlinkIdx)
 	refreshAutoSegmentStats(pages, &crawlStats)
+	timer.mark("inlinks+segments")
 
 	// Evaluate alert rules against crawl stats
 	crawlStats.AlertSummary = alerts.Evaluate(&crawlStats)
@@ -747,6 +768,7 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 	if persistErr := m.store.SaveCrawlStats(crawlID, statsData); persistErr != nil {
 		log.Printf("store: persist stats for crawl %s: %v", crawlID, persistErr)
 	}
+	timer.mark("alerts+save stats")
 
 	// Determine DB path for lazy page loading
 	dbPath := ""
@@ -755,7 +777,14 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 	}
 
 	// Check if deferred analysis (link intelligence, embeddings) is needed
-	needsDeferred := crawlConfig.LinkIntelligence || (crawlConfig.Embeddings && crawlConfig.EmbeddingKey != "")
+	needsDeferred := crawlConfig.LinkIntelligence || (crawlConfig.Embeddings && crawlConfig.EmbeddingKey != "") || len(r.externalLinks) > 0
+	var checkExternal func() *crawler.ExternalCheckSummary
+	if len(r.externalLinks) > 0 {
+		links := r.externalLinks
+		checkExternal = func() *crawler.ExternalCheckSummary {
+			return m.checkExternalLinks(m.ctx, crawlID, crawlConfig, links, true)
+		}
+	}
 
 	// Link graph + PageRank go to the crawl DB so reloads skip rebuilding
 	// them. Scores are copied now; the write happens in the background.
@@ -771,6 +800,7 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 	}
 	dirTree := buildDirectoryTree(pages)
 	tmplTypes := collectTemplateTypes(pages)
+	timer.mark("anchors+dir tree")
 
 	// Build page_index for instant merge lookups (before stripping)
 	if crawlStore != nil {
@@ -780,6 +810,8 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 			fmt.Fprintf(os.Stderr, "  [page-index] Built index with %d entries for instant merge\n", len(pages))
 		}
 	}
+
+	timer.mark("page index")
 
 	// Don't strip pages yet if deferred analysis needs them
 	if !needsDeferred {
@@ -808,6 +840,8 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 
 	// Clear active before emitting complete so listeners see no active crawl.
 	clearActive()
+	timer.mark("cache")
+	timer.log()
 
 	m.emit(ProgressEvent{
 		CrawlID: crawlID, Type: "complete",
@@ -831,7 +865,7 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 				}
 			}()
 			coreSnap.save(dbPath)
-			m.runDeferredAnalysis(crawlID, pages, postCfg, crawlStats, dbPath)
+			m.runDeferredAnalysis(crawlID, pages, postCfg, crawlStats, dbPath, checkExternal)
 		}()
 	} else {
 		if intLinksClose != nil {
@@ -851,7 +885,7 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 // runDeferredAnalysis runs link intelligence and embeddings in the background.
 // Updates cached results and persists stats when complete.
 // Receives crawlStats directly from RunCoreAnalysis to avoid JSON round-trip.
-func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageData, cfg analysis.PostProcessConfig, crawlStats types.CrawlStats, dbPath string) {
+func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageData, cfg analysis.PostProcessConfig, crawlStats types.CrawlStats, dbPath string, checkExternal func() *crawler.ExternalCheckSummary) {
 	// Panic recovery: if analysis panics, clear pending flag so UI doesn't hang.
 	defer func() {
 		if r := recover(); r != nil {
@@ -869,6 +903,29 @@ func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageDa
 		}
 	}()
 
+	// External links first: their results are short and users wait for them.
+	// Stats are saved and the Results page refreshed as soon as they finish.
+	if checkExternal != nil {
+		if sum := checkExternal(); sum != nil {
+			for _, ext := range sum.Broken {
+				if ext.StatusCode >= 400 || ext.Error != "" {
+					crawlStats.BrokenExternalLinks = append(crawlStats.BrokenExternalLinks, ext)
+				}
+			}
+			applyExternalCheckSummary(&crawlStats, sum)
+			m.publishStats(crawlID, crawlStats)
+		}
+		m.mu.RLock()
+		if res := m.results[crawlID]; res != nil {
+			res.externalTotal.Store(0)
+		}
+		m.mu.RUnlock()
+		m.emit(ProgressEvent{
+			CrawlID: crawlID, Type: "analysis_progress",
+			Data: map[string]interface{}{"crawlId": crawlID, "phase": "external_done"},
+		})
+	}
+
 	m.emit(ProgressEvent{
 		CrawlID: crawlID, Type: "analysis_progress",
 		Data: map[string]interface{}{"crawlId": crawlID, "phase": "link_intelligence"},
@@ -883,35 +940,14 @@ func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageDa
 	}
 
 	// Persist stats after each LI phase so completed phases survive a crash.
-	cfg.OnPersist = func() {
-		data, err := json.Marshal(crawlStats)
-		if err != nil {
-			log.Printf("store: marshal LI stats for crawl %s: %v", crawlID, err)
-			return
-		}
-		if err := m.store.SaveCrawlStats(crawlID, data); err != nil {
-			log.Printf("store: persist LI phase for crawl %s: %v", crawlID, err)
-		}
-		var statsMap map[string]interface{}
-		if err := json.Unmarshal(data, &statsMap); err != nil {
-			return
-		}
-		m.mu.RLock()
-		res := m.results[crawlID]
-		m.mu.RUnlock()
-		if res != nil {
-			res.mu.Lock()
-			res.Stats = statsMap
-			res.mu.Unlock()
-		}
-	}
+	cfg.OnPersist = func() { m.publishStats(crawlID, crawlStats) }
 
 	// Run deferred analysis (link intelligence + embeddings)
 	graph := analysis.RunDeferredAnalysis(m.ctx, pages, cfg, &crawlStats)
 	// Link intelligence adds graph in-degree; refresh segment inlink averages.
 	refreshAutoSegmentStats(pages, &crawlStats)
 	// Store HITS scores with PageRank (the graph was stored after core analysis).
-	if dbPath != "" {
+	if dbPath != "" && graph != nil {
 		snapshotAnalysis(pages, graph, false).save(dbPath)
 	}
 
@@ -958,6 +994,31 @@ func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageDa
 	})
 
 	fmt.Fprintf(os.Stderr, "  [deferred] Analysis complete for crawl %s\n", crawlID)
+}
+
+// publishStats saves stats mid-analysis and swaps them into the cached
+// result, so finished parts survive a crash and show up on reload.
+func (m *CrawlManager) publishStats(crawlID string, crawlStats types.CrawlStats) {
+	data, err := json.Marshal(crawlStats)
+	if err != nil {
+		log.Printf("store: marshal stats for crawl %s: %v", crawlID, err)
+		return
+	}
+	if err := m.store.SaveCrawlStats(crawlID, data); err != nil {
+		log.Printf("store: persist stats for crawl %s: %v", crawlID, err)
+	}
+	var statsMap map[string]interface{}
+	if err := json.Unmarshal(data, &statsMap); err != nil {
+		return
+	}
+	m.mu.RLock()
+	res := m.results[crawlID]
+	m.mu.RUnlock()
+	if res != nil {
+		res.mu.Lock()
+		res.Stats = statsMap
+		res.mu.Unlock()
+	}
 }
 
 // evictOldestResult removes the oldest cached result, cancelling any background loading.

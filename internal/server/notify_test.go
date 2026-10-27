@@ -128,3 +128,28 @@ func TestChannelsFromEnvironment(t *testing.T) {
 		t.Error("GET /api/settings exposes a token from the environment")
 	}
 }
+
+// micelio schedule reads the channels saved in the dashboard.
+func TestLoadAlertChannelsFromSettings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MICELIO_TELEGRAM_TOKEN", "")
+	t.Setenv("MICELIO_TELEGRAM_CHAT", "")
+	store, err := OpenUiStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.UpdateSettings(map[string]interface{}{"alertTelegramToken": "1:T", "alertTelegramChatId": "42", "alertAlways": true})
+	store.Close()
+
+	ch, err := LoadAlertChannels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ch.Any() || strings.Join(ch.Names(), ",") != "telegram" || !ch.Always {
+		t.Errorf("channels = %v always=%v", ch.Names(), ch.Always)
+	}
+	ch.Override(nil, "", "99", "")
+	if ch.ch.telegramChat != "99" || ch.ch.telegramToken != "1:T" {
+		t.Errorf("override = %+v", ch.ch)
+	}
+}

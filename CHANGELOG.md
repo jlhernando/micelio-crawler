@@ -2,6 +2,12 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.7.2] - 2026-10-27
+
+### Changed
+
+- **One place for alert channels.** `micelio schedule` now uses the email, Telegram and Slack channels saved in the dashboard's Settings (or `~/.micelio/micelio.env`). It reports skipped and failed runs, and completed runs when "Send a report after every crawl" is on. `--email-to` and `--telegram-chat` still override Settings for one schedule.
+
 ## [1.7.1] - 2026-10-27
 
 ### Added

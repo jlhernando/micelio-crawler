@@ -327,3 +327,65 @@ func registerEmailRoutes(mux *http.ServeMux, manager *CrawlManager) {
 		jsonOK(w, map[string]interface{}{"chats": chats})
 	})
 }
+
+// AlertChannels are the report channels saved in the dashboard's Settings
+// (with environment fallbacks), for tools outside the dashboard such as
+// `micelio schedule`.
+type AlertChannels struct {
+	ch     reportChannels
+	Always bool
+}
+
+// LoadAlertChannels reads the channels from ~/.micelio's dashboard settings
+// without touching crawl jobs (safe next to a running dashboard).
+func LoadAlertChannels() (AlertChannels, error) {
+	store, err := OpenUiStore()
+	if err != nil {
+		return AlertChannels{}, err
+	}
+	defer store.Close()
+	m := &CrawlManager{store: store}
+	ch, always, _ := m.channelSettings()
+	return AlertChannels{ch: ch, Always: always}, nil
+}
+
+// Any reports whether at least one channel is configured.
+func (c AlertChannels) Any() bool { return c.ch.any() }
+
+// Names lists the configured channels ("email", "telegram", "slack").
+func (c AlertChannels) Names() []string {
+	var out []string
+	if c.ch.email.Enabled() {
+		out = append(out, "email")
+	}
+	if c.ch.telegramToken != "" && c.ch.telegramChat != "" {
+		out = append(out, "telegram")
+	}
+	if c.ch.slackURL != "" {
+		out = append(out, "slack")
+	}
+	return out
+}
+
+// Override replaces channels set on the command line.
+func (c *AlertChannels) Override(email *alerts.EmailConfig, telegramToken, telegramChat, slackURL string) {
+	if email != nil && email.Enabled() {
+		c.ch.email = *email
+	}
+	if telegramChat != "" {
+		c.ch.telegramChat = telegramChat
+	}
+	if telegramToken != "" {
+		c.ch.telegramToken = telegramToken
+	}
+	if slackURL != "" {
+		c.ch.slackURL = slackURL
+	}
+}
+
+// Send delivers a report to every configured channel; it returns the errors
+// by channel.
+func (c AlertChannels) Send(info alerts.RunInfo) map[string]error {
+	_, failed := sendReport(c.ch, info)
+	return failed
+}

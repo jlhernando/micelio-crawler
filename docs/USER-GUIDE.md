@@ -347,9 +347,10 @@ crawl of the same schedule or site: pages crawled, 4xx/5xx responses, indexable
 share, new soft-404 candidates, URLs no longer found. Each change lists up to 10
 example URLs. Scheduled runs that are skipped or fail are emailed too. Tick "Email
 a report after every crawl" for one after every run. Each channel has a test button.
-From the CLI, `micelio schedule --email-to ... --smtp-host ... --smtp-from ...`
-(password in `MICELIO_SMTP_PASSWORD`) and `--telegram-chat ...` (token in
-`MICELIO_TELEGRAM_TOKEN`) report each run.
+`micelio schedule` uses the same channels saved in Settings, so everything is
+set up in one place. It reports skipped and failed runs, and completed runs when
+"Send a report after every crawl" is on. `--email-to`/`--smtp-*` and
+`--telegram-chat` override Settings for one schedule and report every run.
 
 **Keep tokens and IDs out of git.** Values typed in Settings are stored in
 `~/.micelio/ui/micelio-ui.db`, outside any repository. You can also put them in

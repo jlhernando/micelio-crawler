@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1263,49 +1264,40 @@ Example, only crawl from an allowed network:
 			if pc.Enabled() {
 				cfg.Precheck = pc
 			}
-			envDefault := func(v *string, key string) {
-				if *v == "" {
-					*v = os.Getenv(key)
-				}
+			// Report channels: the ones saved in the dashboard's Settings (or
+			// ~/.micelio/micelio.env), unless set here with flags.
+			channels, err := server.LoadAlertChannels()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  [alerts] could not read dashboard settings: %v\n", err)
 			}
-			envDefault(&emailTo, "MICELIO_EMAIL_TO")
-			envDefault(&telegramChat, "MICELIO_TELEGRAM_CHAT")
-			envDefault(&smtpHost, "MICELIO_SMTP_HOST")
-			envDefault(&smtpUser, "MICELIO_SMTP_USER")
-			envDefault(&smtpFrom, "MICELIO_SMTP_FROM")
-			if smtpPort == 0 {
-				fmt.Sscan(os.Getenv("MICELIO_SMTP_PORT"), &smtpPort)
-			}
-			if !cmd.Flags().Changed("smtp-security") && os.Getenv("MICELIO_SMTP_SECURITY") != "" {
-				smtpSecurity = os.Getenv("MICELIO_SMTP_SECURITY")
-			}
-			if emailTo != "" || telegramChat != "" {
+			if emailTo != "" {
 				email := alerts.EmailConfig{
 					Host: smtpHost, Port: smtpPort, Username: smtpUser, From: smtpFrom,
 					Password: os.Getenv("MICELIO_SMTP_PASSWORD"), To: alerts.ParseRecipients(emailTo), Security: smtpSecurity,
 				}
-				if emailTo != "" && !email.Enabled() {
+				if !email.Enabled() {
 					return fmt.Errorf("--email-to needs --smtp-host and --smtp-from (password in MICELIO_SMTP_PASSWORD)")
 				}
-				tgToken := os.Getenv("MICELIO_TELEGRAM_TOKEN")
-				if telegramChat != "" && tgToken == "" {
-					return fmt.Errorf("--telegram-chat needs the bot token in MICELIO_TELEGRAM_TOKEN")
-				}
+				channels.Override(&email, "", "", "")
+			}
+			channels.Override(nil, os.Getenv("MICELIO_TELEGRAM_TOKEN"), telegramChat, "")
+			if telegramChat != "" && !slices.Contains(channels.Names(), "telegram") {
+				return fmt.Errorf("--telegram-chat needs a bot token in Settings or MICELIO_TELEGRAM_TOKEN")
+			}
+			if channels.Any() {
+				fmt.Fprintf(os.Stderr, "  Reports: %s\n", strings.Join(channels.Names(), ", "))
 				cfg.OnRunDone = func(sc scheduler.Config, res scheduler.RunResult) {
 					info := alerts.RunInfo{Name: sc.Name, SeedURL: sc.URL, Status: res.Status, Reason: res.Reason, Pages: res.Pages}
 					if res.Status == "success" {
 						info.Status = "completed"
 					}
-					if email.Enabled() {
-						subject, text, html := alerts.RenderEmail(info)
-						if err := alerts.SendEmail(email, subject, text, html); err != nil {
-							fmt.Fprintf(os.Stderr, "  [email] %v\n", err)
-						}
+					// Completed runs: always when channels were given here; from
+					// Settings only with "Send a report after every crawl".
+					if info.Status == "completed" && !channels.Always && emailTo == "" && telegramChat == "" {
+						return
 					}
-					if telegramChat != "" {
-						if err := alerts.SendTelegram(tgToken, telegramChat, alerts.RenderTelegram(info)); err != nil {
-							fmt.Fprintf(os.Stderr, "  [telegram] %v\n", err)
-						}
+					for name, err := range channels.Send(info) {
+						fmt.Fprintf(os.Stderr, "  [%s] %v\n", name, err)
 					}
 				}
 			}
@@ -1334,8 +1326,8 @@ Example, only crawl from an allowed network:
 	cmd.Flags().IntVar(&maxRuns, "max-runs", 0, "Maximum runs (0 = unlimited)")
 	cmd.Flags().StringVar(&outputDir, "output-dir", "scheduled-crawls", "Output directory for crawl results")
 	cmd.Flags().StringVar(&webhookURL, "webhook", "", "Webhook URL for notifications")
-	cmd.Flags().StringVar(&emailTo, "email-to", "", "Email each run's result to these addresses (comma separated); password in MICELIO_SMTP_PASSWORD")
-	cmd.Flags().StringVar(&telegramChat, "telegram-chat", "", "Send each run's result to this Telegram chat ID; bot token in MICELIO_TELEGRAM_TOKEN")
+	cmd.Flags().StringVar(&emailTo, "email-to", "", "Email each run to these addresses (comma separated), instead of the email set in the dashboard Settings; password in MICELIO_SMTP_PASSWORD")
+	cmd.Flags().StringVar(&telegramChat, "telegram-chat", "", "Send each run to this Telegram chat ID, instead of the one in Settings (bot token from Settings or MICELIO_TELEGRAM_TOKEN)")
 	cmd.Flags().StringVar(&smtpHost, "smtp-host", "", "SMTP server for --email-to")
 	cmd.Flags().IntVar(&smtpPort, "smtp-port", 0, "SMTP port (default 587, or 465 with --smtp-security tls)")
 	cmd.Flags().StringVar(&smtpUser, "smtp-user", "", "SMTP username")

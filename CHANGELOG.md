@@ -2,6 +2,13 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [Unreleased]
+
+### Changed
+
+- **External link check about 3× faster.** Each site now has its own queue, served in turn, so hundreds of links to one site no longer block checks of every other site. Large platforms (GitHub, YouTube, Wikipedia, X, Google…) get 6 checks at once instead of 2. A site that does not resolve or refuses connections fails its other URLs without a request each. On a blog with about 1,800 external URLs the check went from 200 s to 60 s, with the same broken links found.
+- The server log names the three sites that took the most time to check.
+
 ## [1.8.0] - 2026-10-27
 
 Change a running crawl, and get results right after Stop & Analyze.

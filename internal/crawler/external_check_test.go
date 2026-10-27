@@ -2,11 +2,15 @@ package crawler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestCheckExternalLinks_ReportsBrokenOnly(t *testing.T) {
@@ -126,5 +130,70 @@ func TestCheckExternalStatus_RetriesGETAfterHEAD404(t *testing.T) {
 	status, err := checkExternalStatus(context.Background(), srv.Client(), srv.URL+"/asset", "test-agent")
 	if err != nil || status != 200 {
 		t.Errorf("status = %d, err = %v; want 200 from the GET retry", status, err)
+	}
+}
+
+// Many links to one slow site must not hold every worker while they wait
+// for that site's two slots: other sites are checked meanwhile.
+func TestCheckExternalLinks_SlowHostDoesNotBlockOthers(t *testing.T) {
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond)
+	}))
+	defer slow.Close()
+	start := time.Now()
+	var lastFast atomic.Int64
+	links := map[string][]string{}
+	for i := 0; i < 20; i++ { // most linked: dispatched first
+		links[fmt.Sprintf("%s/s%d", slow.URL, i)] = []string{"a", "b", "c"}
+	}
+	for i := 0; i < 8; i++ {
+		fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			lastFast.Store(int64(time.Since(start)))
+		}))
+		defer fast.Close()
+		links[fast.URL+"/f"] = []string{"a"}
+	}
+	sum := CheckExternalLinks(context.Background(), links, ExternalCheckOptions{Concurrency: 20, SkipSSRF: true})
+	if sum.Checked != 28 || len(sum.Broken) != 0 {
+		t.Fatalf("checked %d, broken %d", sum.Checked, len(sum.Broken))
+	}
+	// The slow site alone needs 20/2 × 150 ms = 1.5 s.
+	if d := time.Duration(lastFast.Load()); d > 600*time.Millisecond {
+		t.Errorf("other sites finished after %s: they waited behind the slow one", d)
+	}
+}
+
+// When a site refuses connections, its other URLs are reported with the
+// same error without a request each.
+func TestCheckExternalLinks_DeadSiteShortCircuits(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	dead := srv.URL
+	srv.Close()
+	links := map[string][]string{}
+	for i := 0; i < 30; i++ {
+		links[fmt.Sprintf("%s/p%d", dead, i)] = []string{"a"}
+	}
+	sum := CheckExternalLinks(context.Background(), links, ExternalCheckOptions{SkipSSRF: true})
+	if sum.Checked != 30 || len(sum.Broken) != 30 {
+		t.Fatalf("checked %d, broken %d, want 30/30", sum.Checked, len(sum.Broken))
+	}
+	for _, b := range sum.Broken {
+		if !strings.Contains(b.Error, "refused") {
+			t.Fatalf("error = %q", b.Error)
+		}
+	}
+	if hostUnreachable(&url.Error{Op: "Head", URL: "https://other.test/x", Err: syscall.ECONNREFUSED}, "https://site.test") {
+		t.Error("a redirect target's failure marked the linking site dead")
+	}
+}
+
+func TestHostLimit(t *testing.T) {
+	for host, want := range map[string]int{
+		"github.com": 6, "gist.github.com": 6, "en.wikipedia.org": 6, "x.com:443": 6,
+		"notgithub.com": 2, "example.com": 2, "github.com.evil.test": 2,
+	} {
+		if got := hostLimit(host, 2); got != want {
+			t.Errorf("hostLimit(%q) = %d, want %d", host, got, want)
+		}
 	}
 }

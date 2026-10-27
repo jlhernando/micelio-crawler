@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,8 +62,8 @@ func (m *CrawlManager) checkExternalLinks(ctx context.Context, crawlID string, c
 			}
 		},
 	})
-	log.Printf("[external] crawl %s: checked %d/%d external URLs in %s, %d broken, %d skipped",
-		crawlID, summary.Checked, summary.Total, time.Since(start).Round(time.Millisecond), len(summary.Broken), summary.Skipped)
+	log.Printf("[external] crawl %s: checked %d/%d external URLs in %s, %d broken, %d skipped; busiest: %s",
+		crawlID, summary.Checked, summary.Total, time.Since(start).Round(time.Millisecond), len(summary.Broken), summary.Skipped, strings.Join(summary.Busiest, ", "))
 	return &summary
 }
 

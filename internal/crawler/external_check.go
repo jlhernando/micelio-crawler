@@ -2,14 +2,17 @@ package crawler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/micelio/micelio/internal/types"
@@ -29,7 +32,12 @@ const (
 	// DefaultExternalCheckMaxFoundOn caps the source pages kept per broken URL.
 	DefaultExternalCheckMaxFoundOn = 10
 	defaultExternalPerHost         = 2
-	maxExternalCheckConcurrency    = 50
+	// bigSitePerHost is the per-host limit for large platforms (bigSites):
+	// six HEAD requests at once are nothing to them, and a blog can link to
+	// GitHub hundreds of times (452 of 1,773 URLs in one test, which alone
+	// took 2+ minutes at 2 at a time).
+	bigSitePerHost              = 6
+	maxExternalCheckConcurrency = 50
 )
 
 // ExternalCheckOptions configures CheckExternalLinks.
@@ -62,6 +70,9 @@ type ExternalCheckSummary struct {
 	Checked int
 	// Skipped is how many were left unchecked (cap or cancellation).
 	Skipped int
+	// Busiest lists the hosts with the most request time, e.g.
+	// "github.com 212 URLs 95s" (top 3; for the log).
+	Busiest []string
 }
 
 // CheckExternalLinks checks the status of external URLs (map of URL -> pages
@@ -94,6 +105,7 @@ func CheckExternalLinks(ctx context.Context, links map[string][]string, opts Ext
 	type target struct {
 		url   string
 		host  string
+		site  string // scheme://host: the unit for host-level failures
 		pages []string
 		refs  int
 	}
@@ -103,7 +115,8 @@ func CheckExternalLinks(ctx context.Context, links map[string][]string, opts Ext
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			continue
 		}
-		targets = append(targets, target{url: raw, host: strings.ToLower(u.Host), pages: pages, refs: len(pages)})
+		host := strings.ToLower(u.Host)
+		targets = append(targets, target{url: raw, host: host, site: u.Scheme + "://" + host, pages: pages, refs: len(pages)})
 	}
 	// Most-referenced first so the cap keeps the URLs that matter most.
 	sort.Slice(targets, func(i, j int) bool {
@@ -127,70 +140,184 @@ func CheckExternalLinks(ctx context.Context, links map[string][]string, opts Ext
 	defer client.CloseIdleConnections()
 
 	var (
-		mu       sync.Mutex
-		wg       sync.WaitGroup
-		hostMu   sync.Mutex
-		hostSems = make(map[string]chan struct{})
-		sem      = make(chan struct{}, opts.Concurrency)
-		checked  atomic.Int32
-		total    = len(targets)
+		mu      sync.Mutex
+		checked atomic.Int32
+		total   = len(targets)
 	)
-	hostSem := func(host string) chan struct{} {
-		hostMu.Lock()
-		defer hostMu.Unlock()
-		s, ok := hostSems[host]
-		if !ok {
-			s = make(chan struct{}, opts.PerHostConcurrency)
-			hostSems[host] = s
+	report := func(t target, status int, err error) {
+		n := int(checked.Add(1))
+		if status >= 400 || err != nil {
+			res := types.ExternalLinkResult{URL: t.url, StatusCode: status, FoundOn: dedupeCap(t.pages, opts.MaxFoundOn)}
+			if err != nil {
+				res.Error = err.Error()
+			}
+			mu.Lock()
+			summary.Broken = append(summary.Broken, res)
+			mu.Unlock()
 		}
-		return s
+		if opts.OnProgress != nil {
+			opts.OnProgress(n, total)
+		}
 	}
 
-dispatch:
+	// One queue per host, served round-robin. A worker only starts when its
+	// host has a free slot, so 300 links to one site no longer hold every
+	// global slot while they wait their turn (which ran the whole check at
+	// PerHostConcurrency). Hosts keep the order of their most-linked URL.
+	queues := make(map[string][]target)
+	var hosts []string
 	for _, t := range targets {
-		if ctx.Err() != nil {
+		if _, ok := queues[t.host]; !ok {
+			hosts = append(hosts, t.host)
+		}
+		queues[t.host] = append(queues[t.host], t)
+	}
+	type result struct {
+		t   target
+		err error
+		dur time.Duration
+	}
+	type hostTime struct {
+		n   int
+		dur time.Duration
+	}
+	spent := make(map[string]*hostTime)
+	var (
+		inflight = make(map[string]int)
+		dead     = make(map[string]error) // site-level failure: skip its other URLs
+		done     = make(chan result, opts.Concurrency)
+		active   int
+		cursor   int
+	)
+	// next returns a host with queued URLs and a free slot, or "".
+	next := func() string {
+		for range hosts {
+			if cursor >= len(hosts) {
+				cursor = 0
+				// Drop finished hosts on each lap.
+				kept := hosts[:0]
+				for _, h := range hosts {
+					if len(queues[h]) > 0 {
+						kept = append(kept, h)
+					}
+				}
+				hosts = kept
+				if len(hosts) == 0 {
+					return ""
+				}
+			}
+			h := hosts[cursor]
+			cursor++
+			if len(queues[h]) > 0 && inflight[h] < hostLimit(h, opts.PerHostConcurrency) {
+				return h
+			}
+		}
+		return ""
+	}
+	for ctx.Err() == nil {
+		for active < opts.Concurrency {
+			h := next()
+			if h == "" {
+				break
+			}
+			t := queues[h][0]
+			queues[h] = queues[h][1:]
+			if err, ok := dead[t.site]; ok {
+				report(t, 0, err)
+				continue
+			}
+			inflight[h]++
+			active++
+			go func(t target) {
+				start := time.Now()
+				status, err := checkExternalStatus(ctx, client, t.url, opts.UserAgent)
+				if ctx.Err() == nil { // cancelled mid-flight: don't report as broken
+					report(t, status, err)
+				}
+				done <- result{t, err, time.Since(start)}
+			}(t)
+		}
+		if active == 0 {
 			break
 		}
 		select {
+		case r := <-done:
+			active--
+			inflight[r.t.host]--
+			ht := spent[r.t.host]
+			if ht == nil {
+				ht = &hostTime{}
+				spent[r.t.host] = ht
+			}
+			ht.n++
+			ht.dur += r.dur
+			if hostUnreachable(r.err, r.t.site) {
+				dead[r.t.site] = r.err
+			}
 		case <-ctx.Done():
-			break dispatch
-		case sem <- struct{}{}:
 		}
-		wg.Add(1)
-		go func(t target) {
-			defer func() { <-sem; wg.Done() }()
-			hs := hostSem(t.host)
-			select {
-			case <-ctx.Done():
-				return
-			case hs <- struct{}{}:
-			}
-			status, err := checkExternalStatus(ctx, client, t.url, opts.UserAgent)
-			<-hs
-			if ctx.Err() != nil {
-				return // cancelled mid-flight: don't report as broken
-			}
-			n := int(checked.Add(1))
-			if status >= 400 || err != nil {
-				res := types.ExternalLinkResult{URL: t.url, StatusCode: status, FoundOn: dedupeCap(t.pages, opts.MaxFoundOn)}
-				if err != nil {
-					res.Error = err.Error()
-				}
-				mu.Lock()
-				summary.Broken = append(summary.Broken, res)
-				mu.Unlock()
-			}
-			if opts.OnProgress != nil {
-				opts.OnProgress(n, total)
-			}
-		}(t)
 	}
-	wg.Wait()
+	for ; active > 0; active-- {
+		<-done
+	}
+
+	busy := make([]string, 0, len(spent))
+	for h := range spent {
+		busy = append(busy, h)
+	}
+	sort.Slice(busy, func(i, j int) bool { return spent[busy[i]].dur > spent[busy[j]].dur })
+	for _, h := range busy[:min(3, len(busy))] {
+		summary.Busiest = append(summary.Busiest, fmt.Sprintf("%s %d URLs %s", h, spent[h].n, spent[h].dur.Round(time.Second)))
+	}
 
 	summary.Checked = int(checked.Load())
 	summary.Skipped = summary.Total - summary.Checked
 	sort.Slice(summary.Broken, func(i, j int) bool { return summary.Broken[i].URL < summary.Broken[j].URL })
 	return summary
+}
+
+// bigSites are platforms built for heavy traffic; subdomains included.
+var bigSites = []string{
+	"github.com", "githubusercontent.com", "gitlab.com",
+	"youtube.com", "youtu.be", "wikipedia.org", "wikimedia.org",
+	"twitter.com", "x.com", "google.com", "apple.com", "microsoft.com",
+	"amazon.com", "cloudflare.com", "npmjs.com", "pypi.org",
+}
+
+// hostLimit is the number of checks allowed at once on host.
+func hostLimit(host string, def int) int {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	for _, d := range bigSites {
+		if host == d || strings.HasSuffix(host, "."+d) {
+			return max(def, bigSitePerHost)
+		}
+	}
+	return def
+}
+
+// hostUnreachable reports errors that every URL on site would hit (the name
+// does not resolve, nothing listens, or it resolves to a private address),
+// so the rest are not requested. Only errors from site itself count, not
+// from a site it redirected to. Timeouts are not included: they can be one
+// slow page.
+func hostUnreachable(err error, site string) bool {
+	if err == nil {
+		return false
+	}
+	var uerr *url.Error
+	if !errors.As(err, &uerr) {
+		return false
+	}
+	u, perr := url.Parse(uerr.URL)
+	if perr != nil || !strings.EqualFold(u.Scheme+"://"+u.Host, site) {
+		return false
+	}
+	var dnsErr *net.DNSError
+	var blocked *ssrfBlockedError
+	return (errors.As(err, &dnsErr) && dnsErr.IsNotFound) ||
+		errors.Is(err, syscall.ECONNREFUSED) || errors.As(err, &blocked)
 }
 
 func limitRedirects(_ *http.Request, via []*http.Request) error {

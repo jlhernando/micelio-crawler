@@ -319,12 +319,22 @@ func (m *CrawlManager) RestartCrawl(oldJobID string, configOverride map[string]i
 		log.Printf("store: clean up duplicate jobs for %s: %v", oldJobID, cleanErr)
 	}
 
-	// Reuse the existing job — update its config and status, add "resumed" event
+	// Reuse the existing job — update its config and status, add "resumed" event.
+	// The saved config leaves out resume/dbPath so a later Recrawl of this
+	// job starts fresh instead of reopening its DB.
+	saved := make(map[string]interface{}, len(config))
+	for k, v := range config {
+		if k != "resume" && k != "dbPath" {
+			saved[k] = v
+		}
+	}
+	if err := m.store.UpdateCrawlJobConfig(oldJobID, saved); err != nil {
+		return "", fmt.Errorf("save config for resume: %w", err)
+	}
 	if err := m.store.UpdateCrawlJob(oldJobID, map[string]interface{}{
-		"status":       "running",
-		"config":       config,
-		"completed_at": nil,
-		"duration_ms":  nil,
+		"status":      "running",
+		"completedAt": nil,
+		"durationMs":  nil,
 	}); err != nil {
 		return "", fmt.Errorf("update job for resume: %w", err)
 	}
@@ -636,6 +646,11 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 			"pageCount": pageCount, "durationMs": elapsed,
 		}); err2 != nil {
 			log.Printf("store: update crawl %s completion: %v", crawlID, err2)
+		}
+		if result.StopReason != "" {
+			// Stopped on its own with URLs still queued: say why, so a
+			// short crawl does not look like a finished one.
+			m.store.AddCrawlEvent(crawlID, "limit", "stopped early: "+result.StopReason+"; resume to continue")
 		}
 		m.store.AddCrawlEvent(crawlID, "completed", fmt.Sprintf("%d pages", pageCount))
 	}

@@ -2,6 +2,18 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [Unreleased]
+
+### Changed
+
+- **Failed URLs are retried, and failures never stop a crawl.** New Crawl's "Max Errors" is replaced by "Retries per URL" (default 2, max 10). A URL that fails with a network error, a timeout, 408, 429 or any 5xx is fetched again with growing pauses (Retry-After is honoured), then stored as failed. 404, 410, 403 and other 4xx are not retried. Before, only 429, 503 and network errors were, with a fixed 3 tries. `--max-errors` stays on the CLI.
+- **"Timeout (seconds)" is now "Stop crawl after (minutes)"**: it always was the total crawl time, not a per-request timeout.
+- **A crawl stopped by its time limit or by max errors says so.** Results shows the reason with a Resume button, and History offers Resume for these crawls.
+
+### Fixed
+
+- Settings edited when resuming a crawl are now saved. Before, resuming again brought back the old settings (for example a 60 s time limit).
+
 ## [1.8.2] - 2026-10-28
 
 Fewer false broken links, a truthful speed reading, and New Crawl uses your saved defaults.

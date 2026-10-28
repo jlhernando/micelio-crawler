@@ -118,8 +118,8 @@
   let adaptiveRate = $state(false);
   let delayFactor = $state(0);
   let stealth = $state(false);
-  let maxErrors = $state(0);
-  let timeoutSeconds = $state(0);
+  let retries = $state(2); // per URL, see types.DefaultRetries
+  let stopAfterMinutes = $state(0); // sent as timeoutSeconds
 
   // Database
   let dbPath = $state('');
@@ -272,8 +272,8 @@
     if (c.delayFactor !== undefined) delayFactor = c.delayFactor as number;
     if (c.stealth !== undefined) stealth = c.stealth as boolean;
     if (c.discoverSitemaps !== undefined) discoverSitemaps = c.discoverSitemaps as boolean;
-    if (c.maxErrors !== undefined) maxErrors = c.maxErrors as number;
-    if (c.timeoutSeconds !== undefined) timeoutSeconds = c.timeoutSeconds as number;
+    if (c.retries !== undefined) retries = c.retries as number;
+    if (c.timeoutSeconds !== undefined) stopAfterMinutes = Math.round((c.timeoutSeconds as number) / 60);
     if (c.delay !== undefined) delay = c.delay as number;
   }
 
@@ -337,8 +337,8 @@
     if (c.adaptiveRate !== undefined) adaptiveRate = c.adaptiveRate as boolean;
     if (c.delayFactor !== undefined) delayFactor = c.delayFactor as number;
     if (c.stealth !== undefined) stealth = c.stealth as boolean;
-    if (c.maxErrors !== undefined) maxErrors = c.maxErrors as number;
-    if (c.timeoutSeconds !== undefined) timeoutSeconds = c.timeoutSeconds as number;
+    if (c.retries !== undefined) retries = c.retries as number;
+    if (c.timeoutSeconds !== undefined) stopAfterMinutes = Math.round((c.timeoutSeconds as number) / 60);
     if (c.customExtractions && Array.isArray(c.customExtractions)) {
       extractions = (c.customExtractions as Array<{ name: string; selector: string }>).map(e => `${e.name}:${e.selector}`).join('\n');
     }
@@ -391,8 +391,8 @@
     config.adaptiveRate = adaptiveRate;
     if (adaptiveRate && delayFactor > 0) config.delayFactor = delayFactor;
     config.stealth = stealth;
-    if (maxErrors > 0) config.maxErrors = maxErrors;
-    if (timeoutSeconds > 0) config.timeoutSeconds = timeoutSeconds;
+    config.retries = retries;
+    if (stopAfterMinutes > 0) config.timeoutSeconds = stopAfterMinutes * 60;
     config.jsRendering = jsRendering;
     config.renderBlockResources = renderBlockResources;
     if (renderTimeoutSec > 0) config.renderTimeoutSec = renderTimeoutSec;
@@ -719,13 +719,13 @@
         <p class="text-xs text-fg-2 pl-6">Mimics Chrome TLS fingerprint and HTTP header order to evade bot detection. Use with a Chrome User-Agent.</p>
         <div class="grid grid-cols-2 gap-4">
           <div>
-            <label for="maxErrors" class="block text-xs font-medium text-fg-2 mb-1">Max Errors (0 = unlimited)</label>
-            <NumberInput id="maxErrors" min={0} bind:value={maxErrors}
+            <label for="retries" class="block text-xs font-medium text-fg-2 mb-1" title="A URL that fails (network error, timeout, 408, 429, 5xx) is fetched again up to this many times, with growing pauses, then saved as failed. The crawl never stops because of failures.">Retries per URL (0 = none)</label>
+            <NumberInput id="retries" min={0} max={10} bind:value={retries}
               className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent" />
           </div>
           <div>
-            <label for="timeout" class="block text-xs font-medium text-fg-2 mb-1">Timeout (seconds, 0 = none)</label>
-            <NumberInput id="timeout" min={0} bind:value={timeoutSeconds}
+            <label for="timeout" class="block text-xs font-medium text-fg-2 mb-1" title="Total duration of the whole crawl. When reached, the crawl stops, analyzes what it has, and can be resumed later.">Stop crawl after (minutes, 0 = never)</label>
+            <NumberInput id="timeout" min={0} bind:value={stopAfterMinutes}
               className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent" />
           </div>
         </div>

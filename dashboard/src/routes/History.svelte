@@ -340,7 +340,7 @@
                       class="px-3 py-1 rounded text-xs font-medium bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 transition-colors"
                     >Monitor</a>
                   {/if}
-                  {#if crawl.status === 'paused' || crawl.status === 'failed' || crawl.status === 'cancelled'}
+                  {#if crawl.status === 'paused' || crawl.status === 'failed' || crawl.status === 'cancelled' || crawl.events?.some(e => e.type === 'limit')}
                     <button
                       type="button"
                       class="px-3 py-1 rounded text-xs font-medium bg-green-500/10 text-green-400 hover:bg-green-500/20 transition-colors cursor-pointer"
@@ -364,7 +364,7 @@
                       <div class="text-[10px] uppercase text-fg-2/60 font-medium mb-1.5">Timeline</div>
                       <div class="flex flex-wrap gap-1.5 items-center text-xs">
                         {#each crawl.events as event, i}
-                          {@const color = event.type === 'completed' ? 'text-green-400' : event.type === 'failed' ? 'text-red-400' : event.type === 'paused' || event.type === 'cancelled' ? 'text-yellow-400' : 'text-fg-2'}
+                          {@const color = event.type === 'completed' ? 'text-green-400' : event.type === 'failed' ? 'text-red-400' : event.type === 'paused' || event.type === 'cancelled' || event.type === 'limit' ? 'text-yellow-400' : 'text-fg-2'}
                           {#if i > 0}<span class="text-fg-2/30">&rarr;</span>{/if}
                           <span class="{color}">
                             {event.type}

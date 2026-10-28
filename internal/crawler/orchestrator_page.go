@@ -85,10 +85,11 @@ func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
 	if s.handleRetryable(e, result) {
 		return
 	}
-	// DLQ: 429/503 after retry exhaustion. Page is still stored below with its
-	// status so it appears in results; DLQ provides the structured failure record.
-	if result.StatusCode == 429 || result.StatusCode == 503 {
-		s.addToDeadLetter(e, result.StatusCode, "rate limited / unavailable after max attempts")
+	// DLQ: HTTP failures after retry exhaustion. Page is still stored below
+	// with its status so it appears in results; DLQ provides the structured
+	// failure record.
+	if result.StatusCode > 0 && isRetryableResult(result) {
+		s.addToDeadLetter(e, result.StatusCode, fmt.Sprintf("HTTP %d after %d retries", result.StatusCode, s.config.RetriesPerURL()))
 	}
 	// DLQ: network-level failures (no HTTP response). Page is still stored below
 	// as an error entry so it appears in results alongside the DLQ record.
@@ -209,25 +210,34 @@ func (s *crawlSession) resourceSizer() analysis.ResourceSizer {
 	}
 }
 
-// maxFetchAttempts caps total fetches of one URL (first try + re-queues).
-const maxFetchAttempts = 3
-
 // retryBackoff is the host pause used when a 429/503/network error carries
 // no Retry-After header: 1s, 2s, 4s... by attempt.
 func retryBackoff(attempt int) time.Duration {
 	return backoffDelay(attempt)
 }
 
-// handleRetryable deals with 429, 503 and retryable network errors.
-// It pauses the host's shared bucket (Retry-After, capped, or exponential
-// backoff) so every worker waits, then re-queues the URL if attempts remain.
-// Returns true when the entry was re-queued and must not be stored yet.
-func (s *crawlSession) handleRetryable(e types.QueueEntry, result types.FetchResult) bool {
+// isRetryableResult reports whether a fetch failed in a way worth trying
+// again: network errors and timeouts, 408, 429 and any 5xx. Other 4xx
+// (404, 410, 403...) are real answers and are not retried.
+func isRetryableResult(result types.FetchResult) bool {
 	status := result.StatusCode
-	retryable := status == 429 || status == 503 || (status == 0 && result.Error != "" && result.Retryable)
-	if !retryable {
+	if status == 0 {
+		return result.Error != "" && result.Retryable
+	}
+	return status == 408 || status == 429 || status >= 500
+}
+
+// handleRetryable deals with failures isRetryableResult accepts. It pauses
+// the host's shared bucket (Retry-After, capped, or exponential backoff) so
+// every worker waits, then re-queues the URL while it has retries left
+// (config.RetriesPerURL). Returns true when the entry was re-queued and
+// must not be stored yet.
+func (s *crawlSession) handleRetryable(e types.QueueEntry, result types.FetchResult) bool {
+	if !isRetryableResult(result) {
 		return false
 	}
+	status := result.StatusCode
+	retries := s.config.RetriesPerURL()
 
 	pause, hasRetryAfter := RetryAfterDuration(result.Headers["retry-after"], MaxServerRetryAfter)
 	if !hasRetryAfter {
@@ -237,7 +247,7 @@ func (s *crawlSession) handleRetryable(e types.QueueEntry, result types.FetchRes
 		s.hostRL.Pause(e.URL, pause)
 	}
 
-	if e.Requeues+1 >= maxFetchAttempts {
+	if e.Requeues >= retries {
 		return false
 	}
 	e.Requeues++
@@ -246,7 +256,7 @@ func (s *crawlSession) handleRetryable(e types.QueueEntry, result types.FetchRes
 	if status == 0 {
 		label = "network error"
 	}
-	fmt.Fprintf(os.Stderr, "\n  [%s] host paused %v, re-queued %s (attempt %d/%d)\n", label, pause.Round(time.Millisecond), e.URL, e.Requeues+1, maxFetchAttempts)
+	fmt.Fprintf(os.Stderr, "\n  [%s] host paused %v, re-queued %s (attempt %d/%d)\n", label, pause.Round(time.Millisecond), e.URL, e.Requeues+1, retries+1)
 	return true
 }
 

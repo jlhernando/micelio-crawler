@@ -247,6 +247,13 @@
       <p class="text-fg-2">{error}</p>
     </div>
   {:else if stats}
+    {@const limitNote = (crawlJob?.events as { type: string; note?: string }[] | undefined)?.find(e => e.type === 'limit')?.note}
+    {#if limitNote}
+      <div class="mb-4 flex items-center justify-between gap-4 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm" role="status">
+        <span class="text-fg-1">This crawl {limitNote.replace(/; resume to continue$/, '')}. Results cover only the pages crawled so far.</span>
+        <a href="#/setup?resumeId={crawlJob?.id}" class="shrink-0 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white no-underline hover:brightness-110">Resume crawl</a>
+      </div>
+    {/if}
     <!-- Summary Header -->
     <SummaryHeader {stats} {pageCount} onFilter={handleSummaryFilter} activeTemplate={initialFilterTemplate} templateDistribution={originalTemplateDist} />
     {#if templateScoped && initialFilterTemplate !== 'all'}

@@ -403,8 +403,8 @@ func TestCrawlRetryAfterPausesHost(t *testing.T) {
 	if got := flakyHits.Load(); got != 2 {
 		t.Errorf("/flaky fetched %d times, want 2 (429 then success)", got)
 	}
-	if got := deadHits.Load(); got != maxFetchAttempts {
-		t.Errorf("/dead fetched %d times, want %d (attempt cap)", got, maxFetchAttempts)
+	if got, want := int(deadHits.Load()), types.DefaultRetries+1; got != want {
+		t.Errorf("/dead fetched %d times, want %d (attempt cap)", got, want)
 	}
 	var flakyStatus int
 	for _, p := range res.Pages {

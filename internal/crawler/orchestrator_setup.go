@@ -33,7 +33,12 @@ type crawlSession struct {
 	seedURL string
 
 	soft404Probes []types.Soft404Probe
-	sem           *dynSem // worker slots; resizable (Tuner)
+
+	// Setup work that runs alongside the crawl (startBackground).
+	background      sync.WaitGroup
+	sitemapsPending atomic.Bool // the crawl must not end while URLs may still arrive
+	stopSitemaps    context.CancelFunc
+	sem             *dynSem // worker slots; resizable (Tuner)
 
 	// Storage
 	writer *storage.ResultWriter
@@ -139,9 +144,13 @@ func newCrawlSession(ctx context.Context, config types.CrawlConfig, onProgress O
 	s.setupIntegrationClients()
 	s.setupNgrams()
 	s.anchorAgg = analysis.NewAnchorAggregator()
+	// robots.txt must be read before the first request. Sitemap discovery
+	// and the soft-404 probe run alongside the crawl (startBackground): on a
+	// news site the sitemaps alone took 111 s before the first page.
+	t0 := time.Now()
 	s.setupRobotsAndDelay(ctx)
-	s.setupSitemapDiscovery(ctx)
-	s.setupSoft404Probe(ctx)
+	fmt.Fprintf(os.Stderr, "  [timing] start: setup %s, robots.txt %s\n",
+		t0.Sub(s.startTime).Round(time.Millisecond), time.Since(t0).Round(time.Millisecond))
 	if err := s.seedSitemapMode(ctx); err != nil {
 		return nil, err
 	}
@@ -588,42 +597,71 @@ func (s *crawlSession) applyRobotsCrawlDelay(origin string, rc *RobotsChecker) {
 	}
 }
 
-func (s *crawlSession) setupSitemapDiscovery(ctx context.Context) {
-	if !s.config.DiscoverSitemaps {
-		return
-	}
+// startBackground starts sitemap discovery and the soft-404 probe next to
+// the crawl. finishBackground stops discovery and waits for both.
+func (s *crawlSession) startBackground(ctx context.Context) {
 	isSpiderMode := s.config.Mode == types.ModeSpider || s.config.Mode == ""
-	if !isSpiderMode {
-		return
+	if s.config.DiscoverSitemaps && isSpiderMode {
+		smCtx, cancel := context.WithCancel(ctx)
+		s.stopSitemaps = cancel
+		s.sitemapsPending.Store(true)
+		s.background.Add(1)
+		go func() {
+			defer s.background.Done()
+			defer s.sitemapsPending.Store(false)
+			s.setupSitemapDiscovery(smCtx)
+		}()
 	}
+	s.background.Add(1)
+	go func() {
+		defer s.background.Done()
+		s.setupSoft404Probe(ctx)
+	}()
+}
 
+// finishBackground ends sitemap discovery (a crawl that stopped no longer
+// needs more URLs; the sitemap list kept so far is still compared with the
+// crawl) and waits for the soft-404 probe.
+func (s *crawlSession) finishBackground() {
+	if s.stopSitemaps != nil {
+		s.stopSitemaps()
+	}
+	s.background.Wait()
+}
+
+func (s *crawlSession) setupSitemapDiscovery(ctx context.Context) {
 	var robotsSitemaps []string
 	if s.robotsChecker != nil {
 		robotsSitemaps = s.robotsChecker.SitemapURLs()
 	}
 
-	fmt.Fprintf(os.Stderr, "  [sitemap-discovery] Fetching sitemaps...\n")
-	urls, err := DiscoverSitemapURLs(ctx, s.seedURL, robotsSitemaps, s.fetchOpts.Client, s.config.UserAgent)
+	start := time.Now()
+	fmt.Fprintf(os.Stderr, "  [sitemap-discovery] Fetching sitemaps (crawl continues meanwhile)...\n")
+	enqueued := 0
+	ref := "sitemap"
+	err := discoverSitemaps(ctx, s.seedURL, robotsSitemaps, s.fetchOpts.Client, s.config.UserAgent, func(urls []string) {
+		s.discoveredSitemapURLs = append(s.discoveredSitemapURLs, urls...)
+		// Enqueue sitemap URLs into crawl queue at depth 0
+		for _, u := range urls {
+			if s.queue.Enqueue(u, 0, &ref) {
+				enqueued++
+			}
+		}
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  [sitemap-discovery] Error: %v\n", err)
 		return
 	}
-	if len(urls) == 0 {
+	if len(s.discoveredSitemapURLs) == 0 {
 		fmt.Fprintf(os.Stderr, "  [sitemap-discovery] No sitemap URLs found\n")
 		return
 	}
-
-	s.discoveredSitemapURLs = urls
-
-	// Enqueue sitemap URLs into crawl queue at depth 0
-	enqueued := 0
-	ref := "sitemap"
-	for _, u := range urls {
-		if s.queue.Enqueue(u, 0, &ref) {
-			enqueued++
-		}
+	stopped := ""
+	if ctx.Err() != nil {
+		stopped = " (stopped with the crawl)"
 	}
-	fmt.Fprintf(os.Stderr, "  [sitemap-discovery] Found %d URLs in sitemaps, %d new URLs enqueued\n", len(urls), enqueued)
+	fmt.Fprintf(os.Stderr, "  [sitemap-discovery] Found %d URLs in sitemaps, %d new URLs enqueued, %s%s\n",
+		len(s.discoveredSitemapURLs), enqueued, time.Since(start).Round(time.Millisecond), stopped)
 }
 
 // seedSitemapMode fetches the configured sitemap(s), extracts their page URLs,
@@ -677,7 +715,8 @@ func (s *crawlSession) seedSitemapMode(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		urls, err := fetchSitemap(ctx, sm, s.fetchOpts.Client, s.config.UserAgent, 0)
+		var urls []string
+		err := fetchSitemap(ctx, sm, s.fetchOpts.Client, s.config.UserAgent, 0, func(u []string) { urls = append(urls, u...) })
 		if err != nil {
 			lastErr = err
 			fmt.Fprintf(os.Stderr, "  [sitemap] %s: %v\n", sm, err)

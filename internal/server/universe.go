@@ -87,7 +87,7 @@ type universeLayout struct {
 	pos   []byte // int16 x,y,z
 	clus  []byte // uint16 cluster index
 	rank  []byte // uint8 PageRank bucket
-	flags []byte // bits 0-1 status class
+	flags []byte // bits 0-1 status class, bit 2 blocked by robots.txt
 	// Link graph lookups. posOf maps a page index to its order position.
 	posOf []int32
 	links []universeLink
@@ -97,6 +97,12 @@ type universeLayout struct {
 	sitewide []bool
 	// Link tree (layout "links"): parent page index and click level per page,
 	// -1 for pages not reached from the root.
+	// view holds the pages (and graph) this layout was built from; hidden
+	// counts the pages it leaves out (see universeView).
+	view   *CrawlResults
+	hidden universeHidden
+	all    bool
+
 	parent          []int32
 	inMainTree      []bool // reached from the start page (not from an extra root)
 	level           []int32
@@ -112,28 +118,145 @@ var universeCache = struct {
 	items []*universeLayout
 }{}
 
-func universeCacheKey(crawlID, dim, layout string, n int) string {
-	return crawlID + "|" + dim + "|" + layout + "|" + strconv.Itoa(n)
+func universeCacheKey(crawlID, dim, layout string, n int, all bool) string {
+	return crawlID + "|" + dim + "|" + layout + "|" + strconv.Itoa(n) + "|" + strconv.FormatBool(all)
+}
+
+// universeArchitecture reports whether a page is part of the site's
+// architecture: fetched, answered 2xx and did not redirect off the site.
+// Errors, URLs blocked by robots.txt and redirects to other hosts are left
+// out of Universe unless asked for. A URL that redirects is stored with the
+// final status (often 200) and its RedirectChain; on the same host it holds
+// the destination page (the link graph merges both URLs), so it stays.
+func universeArchitecture(p *types.PageData) bool {
+	return !p.RobotsBlocked && !universeLeavesSite(p) && p.StatusCode >= 200 && p.StatusCode < 300
+}
+
+// universeLeavesSite reports a redirect whose destination is on another host.
+func universeLeavesSite(p *types.PageData) bool {
+	if len(p.RedirectChain) == 0 || p.FinalURL == "" {
+		return false
+	}
+	a, errA := url.Parse(p.URL)
+	b, errB := url.Parse(p.FinalURL)
+	return errA == nil && errB == nil && !strings.EqualFold(a.Host, b.Host)
+}
+
+// universeStatus is the status class Universe draws with "Redirects, errors
+// & blocked" on: 0 page, 1 redirect, 2 error (pageStatusClass, with a
+// followed redirect counted as redirect).
+func universeStatus(p *types.PageData) byte {
+	c := pageStatusClass(p)
+	if c == 0 && len(p.RedirectChain) > 0 {
+		return 1
+	}
+	return c
+}
+
+// universeHidden counts the pages that are not architecture, by kind (left
+// out of the view unless all is set).
+type universeHidden struct {
+	Redirects int `json:"redirects"`
+	Errors    int `json:"errors"`
+	Blocked   int `json:"blocked"`
+}
+
+// universeStatusCounts counts the drawn pages by status kind (status pills).
+func universeStatusCounts(pages []*types.PageData) universeHidden {
+	var c universeHidden
+	for _, p := range pages {
+		switch {
+		case p.RobotsBlocked:
+			c.Blocked++
+		case universeStatus(p) == 1:
+			c.Redirects++
+		case universeStatus(p) == 2:
+			c.Errors++
+		}
+	}
+	return c
+}
+
+// universeView returns the pages (and the link graph between them) that
+// Universe draws: every page when all is set, else only architecture pages.
+// The view shares page pointers with results; handlers given a layout must
+// use l.view, whose indices match the layout's.
+func universeView(results *CrawlResults, all bool) (*CrawlResults, universeHidden) {
+	var hidden universeHidden
+	keep := make([]int32, len(results.Pages))
+	kept := 0
+	for i, p := range results.Pages {
+		arch := universeArchitecture(p)
+		if all || arch {
+			keep[i] = int32(kept)
+			kept++
+		} else {
+			keep[i] = -1
+		}
+		if arch {
+			continue
+		}
+		switch {
+		case p.RobotsBlocked:
+			hidden.Blocked++
+		case universeStatus(p) == 1:
+			hidden.Redirects++
+		default:
+			hidden.Errors++
+		}
+	}
+	if kept == len(results.Pages) {
+		return results, hidden
+	}
+	view := &CrawlResults{Pages: make([]*types.PageData, 0, kept), PagesReady: true}
+	for i, p := range results.Pages {
+		if keep[i] >= 0 {
+			view.Pages = append(view.Pages, p)
+		}
+	}
+	if g := universeGraph(results); g != nil {
+		sub := &analysis.AdjacencyGraph{
+			N: kept, Offsets: make([]int32, 1, kept+1),
+			URLs: make([]string, 0, kept), StatusCodes: make([]int16, 0, kept),
+		}
+		for i := 0; i < g.N; i++ {
+			if keep[i] < 0 {
+				continue
+			}
+			for _, t := range g.Edges[g.Offsets[i]:g.Offsets[i+1]] {
+				if nt := keep[t]; nt >= 0 {
+					sub.Edges = append(sub.Edges, nt)
+				}
+			}
+			sub.Offsets = append(sub.Offsets, int32(len(sub.Edges)))
+			sub.URLs = append(sub.URLs, g.URLs[i])
+			sub.StatusCodes = append(sub.StatusCodes, g.StatusCodes[i])
+		}
+		view.Graph = sub
+	}
+	return view, hidden
 }
 
 // getUniverseLayout returns a cached layout or builds one. Callers must hold
 // results.mu.RLock.
-func getUniverseLayout(crawlID string, results *CrawlResults, dim, layout string) *universeLayout {
+func getUniverseLayout(crawlID string, results *CrawlResults, dim, layout string, all bool) *universeLayout {
 	// Resolve "auto" first so it shares the cache entry of the grouping it
 	// picks (the dashboard asks for that grouping by name right after).
 	dim = resolveUniverseDim(results.Pages, dim)
 	layout = resolveUniverseLayout(results, layout)
-	key := universeCacheKey(crawlID, dim, layout, len(results.Pages))
+	key := universeCacheKey(crawlID, dim, layout, len(results.Pages), all)
 	universeCache.Lock()
 	for _, l := range universeCache.items {
-		if l.key == key && l.owner.Value() == results && l.n == len(results.Pages) {
+		if l.key == key && l.owner.Value() == results {
 			universeCache.Unlock()
 			return l
 		}
 	}
 	universeCache.Unlock()
 
-	l := buildUniverseLayout(results, dim, layout)
+	view, hidden := universeView(results, all)
+	l := buildUniverseLayout(view, dim, layout)
+	l.view, l.hidden, l.all = view, hidden, all
 	l.key = key
 	l.owner = weak.Make(results)
 	universeCache.Lock()
@@ -498,7 +621,10 @@ func buildUniverseLayout(results *CrawlResults, requested, layout string) *unive
 		if maxPR > 0 {
 			l.rank[pos] = byte(math.Round(255 * math.Sqrt(math.Max(0, p.PageRank)/maxPR)))
 		}
-		l.flags[pos] = pageStatusClass(p)
+		l.flags[pos] = universeStatus(p)
+		if p.RobotsBlocked {
+			l.flags[pos] |= 4 // bit 2: blocked by robots.txt (status class 0)
+		}
 	}
 	return l
 }
@@ -610,7 +736,17 @@ func withUniverse(manager *CrawlManager, w http.ResponseWriter, r *http.Request,
 	if dim == "" {
 		dim = "auto"
 	}
-	fn(results, getUniverseLayout(crawlID, results, dim, r.URL.Query().Get("layout")))
+	// Handlers get the layout's view so page indices match it.
+	l := getUniverseLayout(crawlID, results, dim, r.URL.Query().Get("layout"), r.URL.Query().Get("all") == "1")
+	if len(l.view.Pages) == 0 && !l.all {
+		// No 2xx page at all (e.g. everything redirects): show what there is.
+		l = getUniverseLayout(crawlID, results, dim, r.URL.Query().Get("layout"), true)
+	}
+	if len(l.view.Pages) == 0 {
+		jsonError(w, "no pages", http.StatusNotFound)
+		return
+	}
+	fn(l.view, l)
 }
 
 func registerUniverseRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlManager) {
@@ -636,6 +772,9 @@ func registerUniverseRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlMa
 				"edgesTotal":      universeEdgeCount(results),
 				"edgesContextual": l.edgesContextual,
 				"sitewideTargets": l.sitewideTargets,
+				"hidden":          l.hidden,
+				"statusCounts":    universeStatusCounts(l.view.Pages),
+				"all":             l.all,
 			})
 		})
 	})

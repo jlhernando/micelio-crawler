@@ -9,7 +9,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
-import { C, GRAPH_IN_COLOR, GRAPH_PALETTE, GRAPH_RAMP } from '../../../palette';
+import { GRAPH_IN_COLOR, GRAPH_PALETTE, GRAPH_RAMP, STATUS_LINK_COLORS } from '../../../palette';
 
 export interface UniverseCard {
   i: number; url: string; title: string; pr: number; in: number; out: number; status: number; depth: number;
@@ -24,6 +24,9 @@ export interface UniverseMeta {
   center?: [number, number, number]; extent?: number; // camera frame
   clusters: UniverseCluster[]; maxChunk: number; links: UniverseLink[] | null;
   hasGraph: boolean; edgesTotal: number; edgesContextual: number; sitewideTargets: number;
+  // Pages left out as not architecture (shown when all is set).
+  hidden?: { redirects: number; errors: number; blocked: number }; all?: boolean;
+  statusCounts?: { redirects: number; errors: number; blocked: number }; // drawn pages by status
   layout: 'links' | 'folders'; unreached: number; maxLevel: number;
 }
 export interface NodeLinks {
@@ -44,7 +47,6 @@ export const RAMP = GRAPH_RAMP; // low, mid, high
 export type ColorMode = 'cluster' | 'depth' | 'pagerank' | 'authority' | 'hub';
 export const OUT_COLOR = '#f2c46d';
 export const IN_COLOR = GRAPH_IN_COLOR;
-const ERROR_COLOR = C.danger;
 const MAX_FRAME_MS = 14; // stop loading more when a frame gets slower than this
 
 export function clusterColor(i: number) { return PALETTE[i % PALETTE.length]; }
@@ -87,30 +89,49 @@ const pointVertex = /* glsl */ `
   attribute float metric;
   ${colorGLSL}
   uniform vec3 errColor;
+  uniform vec3 redirColor;
+  uniform vec3 blockedColor;
+  uniform float showStatus; // 1 with "Redirects, errors & blocked" on
+  uniform float highlight;  // status pill: 0 none, 1 redirects, 2 errors, 3 blocked
   uniform float focus;
   uniform float projScale;
   uniform float sizeScale;
   varying vec3 vColor;
   varying float vAlpha;
+  varying float vMinAlpha;
   void main() {
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
-    bool dimmed = focus >= 0.0 && abs(cluster - focus) > 0.5;
+    float status = mod(flags, 4.0);
+    bool blocked = mod(floor(flags / 4.0), 2.0) > 0.5;
+    // Status pill: 1 redirects, 2 errors, 3 blocked; others fade.
+    float kind = status > 1.5 ? 2.0 : status > 0.5 ? 1.0 : blocked ? 3.0 : 0.0;
+    bool lit = highlight > 0.5 && abs(kind - highlight) < 0.5;
+    bool dimmed = (focus >= 0.0 && abs(cluster - focus) > 0.5) || (highlight > 0.5 && !lit);
     float world = mix(24.0, 80.0, rank) * sizeScale;
-    gl_PointSize = clamp(world * projScale / -mv.z, 1.0, dimmed ? 6.0 : 20.0);
-    vColor = mod(flags, 4.0) > 1.5 && colorMode < 0.5 ? errColor : pageColor(cluster, rank, metric);
-    vAlpha = dimmed ? 0.12 : 0.55 + rank * 0.45;
+    // Every page stays a visible dot. On big crawls low-PageRank pages
+    // shrank to a faint pixel while their links still showed, so links
+    // seemed to fan out of nothing.
+    gl_PointSize = clamp(world * projScale / -mv.z, lit ? 8.0 : dimmed ? 2.0 : 4.0, dimmed ? 6.0 : 20.0);
+    vColor = colorMode > 0.5 || showStatus < 0.5 ? (status > 1.5 && colorMode < 0.5 ? errColor : pageColor(cluster, rank, metric))
+      : status > 1.5 ? errColor
+      : status > 0.5 ? redirColor
+      : blocked ? blockedColor
+      : pageColor(cluster, rank, metric);
+    vAlpha = lit ? 1.0 : dimmed ? 0.12 : 0.55 + rank * 0.45;
+    vMinAlpha = lit ? 1.0 : dimmed ? 0.0 : 0.6;
   }`;
 
 const pointFragment = /* glsl */ `
   uniform float alpha;
   varying vec3 vColor;
   varying float vAlpha;
+  varying float vMinAlpha;
   void main() {
     vec2 d = gl_PointCoord - 0.5;
     float r = dot(d, d);
     if (r > 0.25) discard;
-    gl_FragColor = vec4(vColor, alpha * vAlpha * smoothstep(0.25, 0.08, r));
+    gl_FragColor = vec4(vColor, max(alpha * vAlpha, vMinAlpha) * smoothstep(0.25, 0.08, r));
   }`;
 
 // Links reuse the point attributes; each end takes its own cluster colour, so
@@ -137,6 +158,41 @@ const linkFragment = /* glsl */ `
   varying float vDim;
   void main() { gl_FragColor = vec4(vColor, alpha * vDim); }`;
 
+// Status links: own vertices (both ends), kind 1 redirect, 2 error,
+// 3 blocked. Dashes are measured in screen pixels along the line.
+const statusVertex = /* glsl */ `
+  attribute float kind;
+  attribute float end;   // 0 at the source, 1 at the target
+  attribute vec3 other;  // the line's other end
+  uniform vec3 colors[3];
+  uniform vec2 viewport; // drawing buffer size in pixels
+  varying vec3 vColor;
+  varying float vDist;   // pixels from the source, for dashes
+  varying float vKind;
+  vec2 screen(vec4 c) { return (c.xy / c.w * 0.5 + 0.5) * viewport; }
+  void main() {
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec4 o = projectionMatrix * modelViewMatrix * vec4(other, 1.0);
+    vKind = kind;
+    vColor = kind < 1.5 ? colors[0] : kind < 2.5 ? colors[1] : colors[2];
+    vDist = end * length(screen(gl_Position) - screen(o));
+  }`;
+
+const statusFragment = /* glsl */ `
+  uniform float alpha;
+  uniform float period;
+  uniform float highlight; // status pill: only that kind is drawn
+  varying vec3 vColor;
+  varying float vDist;
+  varying float vKind;
+  void main() {
+    if (highlight > 0.5 && abs(vKind - highlight) > 0.5) discard;
+    float t = fract(vDist / period);
+    if (vKind < 1.5 && t > 0.6) discard;              // redirect: dashes
+    if (vKind > 2.5 && t > 0.35) discard;             // blocked: dots
+    gl_FragColor = vec4(vColor, alpha * (vKind > 1.5 && vKind < 2.5 ? 1.0 : 0.85));
+  }`;
+
 export interface EngineUrls {
   nodes: (offset: number, limit: number) => string;
   metric: (name: string, n: number) => string;
@@ -147,6 +203,10 @@ export interface EngineEvents {
   onFocus: (index: number | null) => void;
   onSelect: (links: NodeLinks | null) => void;
   onProgress: (p: Progress) => void;
+}
+
+function newStatusData() {
+  return { pos: [] as number[], other: [] as number[], kind: [] as number[], end: [] as number[] };
 }
 
 export class UniverseEngine {
@@ -173,6 +233,12 @@ export class UniverseEngine {
   private clusterLinkCount = 0;
   private selLinks: THREE.LineSegments[] = []; // inlinks/outlinks of the selected page
   private highways: THREE.LineSegments | null = null;
+  // Links to redirects, errors and blocked URLs, drawn on top (status layer).
+  private status: THREE.LineSegments | null = null;
+  // Per source, so reloading cross links does not duplicate tree ones.
+  private statusData = { tree: newStatusData(), edges: newStatusData() };
+  private viewport = new THREE.Vector2(1, 1); // drawing buffer px, for screen-space dashes
+  private highlight = 0; // status pill: 0 none, 1 redirects, 2 errors, 3 blocked
   private marker: CSS2DObject | null = null;
   private chips: { el: HTMLElement; obj: CSS2DObject; c: UniverseCluster }[] = [];
   private progress: Progress = { loaded: 0, target: 0, edges: 0, edgeTarget: 0, phase: 'pages', reason: '' };
@@ -259,7 +325,11 @@ export class UniverseEngine {
     g.setDrawRange(0, 0);
     this.pointMat = new THREE.ShaderMaterial({
       vertexShader: pointVertex, fragmentShader: pointFragment, transparent: true, depthWrite: false,
-      uniforms: { ...this.uniformsBase(), errColor: { value: new THREE.Color(ERROR_COLOR) }, projScale: { value: 1 }, sizeScale: { value: 1 } },
+      uniforms: {
+        ...this.uniformsBase(), errColor: { value: new THREE.Color(STATUS_LINK_COLORS.error) },
+        redirColor: { value: new THREE.Color(STATUS_LINK_COLORS.redirect) }, blockedColor: { value: new THREE.Color(STATUS_LINK_COLORS.blocked) },
+        showStatus: { value: this.meta.all ? 1 : 0 }, highlight: { value: 0 }, projScale: { value: 1 }, sizeScale: { value: 1 },
+      },
     });
     this.points = this.scaled(new THREE.Points(g, this.pointMat));
     this.points.renderOrder = 2;
@@ -293,6 +363,68 @@ export class UniverseEngine {
       vertexShader: linkVertex, fragmentShader: linkFragment, transparent: true, depthWrite: false,
       uniforms: { ...this.uniformsBase(), alpha: { value: alpha }, tint: { value: new THREE.Color(tint ?? '#ffffff') }, useTint: { value: tint ? 1 : 0 } },
     });
+  }
+
+  /**
+   * Moves the links whose target is a redirect, error or blocked URL to the
+   * status layer and returns the others. Only with "Redirects, errors &
+   * blocked" on; a status link is drawn once, in its own style.
+   */
+  private splitStatusLinks(pairs: Uint32Array, source: 'tree' | 'edges'): Uint32Array {
+    if (!this.meta.all) return pairs;
+    const { pos, flags } = this.arrays;
+    const d = this.statusData[source];
+    const keep = new Uint32Array(pairs.length);
+    let kept = 0;
+    for (let k = 0; k < pairs.length; k += 2) {
+      const a = pairs[k], b = pairs[k + 1];
+      const f = flags[b];
+      const kind = (f & 3) === 2 ? 2 : (f & 3) === 1 ? 1 : f & 4 ? 3 : 0;
+      if (!kind) {
+        keep[kept++] = a;
+        keep[kept++] = b;
+        continue;
+      }
+      const ax = pos[a * 3] / 32767, ay = pos[a * 3 + 1] / 32767, az = pos[a * 3 + 2] / 32767;
+      const bx = pos[b * 3] / 32767, by = pos[b * 3 + 1] / 32767, bz = pos[b * 3 + 2] / 32767;
+      d.pos.push(ax, ay, az, bx, by, bz);
+      d.other.push(bx, by, bz, ax, ay, az);
+      d.kind.push(kind, kind);
+      d.end.push(0, 1);
+    }
+    if (kept < pairs.length) this.rebuildStatus();
+    return keep.subarray(0, kept);
+  }
+
+  /** Drops the status links that came with the cross links (they reload). */
+  private clearEdgeStatus() {
+    const d = this.statusData.edges;
+    if (!d.kind.length) return;
+    this.statusData.edges = newStatusData();
+    this.rebuildStatus();
+  }
+
+  private rebuildStatus() {
+    const { tree, edges } = this.statusData;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute([...tree.pos, ...edges.pos], 3));
+    g.setAttribute('other', new THREE.Float32BufferAttribute([...tree.other, ...edges.other], 3));
+    g.setAttribute('kind', new THREE.Float32BufferAttribute([...tree.kind, ...edges.kind], 1));
+    g.setAttribute('end', new THREE.Float32BufferAttribute([...tree.end, ...edges.end], 1));
+    if (this.status) {
+      this.status.geometry.dispose();
+      this.status.geometry = g;
+    } else {
+      const c = STATUS_LINK_COLORS;
+      this.status = this.scaled(new THREE.LineSegments(g, new THREE.ShaderMaterial({
+        vertexShader: statusVertex, fragmentShader: statusFragment, transparent: true, depthWrite: false,
+        // Dash period in screen pixels, so dashes read the same at any zoom.
+        uniforms: { colors: { value: [c.redirect, c.error, c.blocked].map((x) => new THREE.Color(x)) }, alpha: { value: 0.95 }, period: { value: 9 }, viewport: { value: this.viewport }, highlight: { value: this.highlight } },
+      })));
+      this.status.renderOrder = 1.5;
+      this.scene.add(this.status);
+    }
+    this.request();
   }
 
   /** Real links between clusters, one line per pair, brighter for more links. */
@@ -385,6 +517,7 @@ export class UniverseEngine {
       this.progress.edges = 0;
       this.progress.phase = 'done';
       this.edgeGeo.setDrawRange(0, 0);
+      this.clearEdgeStatus();
       this.emit();
     }
     if (this.focused !== null) {
@@ -405,6 +538,7 @@ export class UniverseEngine {
     p.edges = 0;
     p.linkError = undefined;
     this.edgeGeo.setDrawRange(0, 0);
+    this.clearEdgeStatus();
     const available = this.sitewide ? this.meta.edgesTotal : this.meta.edgesContextual;
     p.edgeTarget = Math.min(this.edgeBudget, available);
     const per = p.loaded <= 5_000 ? 4096 : Math.max(2, Math.min(24, Math.round(p.edgeTarget / p.loaded)));
@@ -414,7 +548,9 @@ export class UniverseEngine {
         const limit = Math.min(200_000, p.edgeTarget - p.edges);
         const res = await fetch(this.urls.edges({ n: p.loaded, offset, limit, per, sitewide: this.sitewide }), { signal: sig });
         if (!res.ok) throw new Error(`links ${res.status}`);
-        const { next, done, pairs } = parseEdges(await res.arrayBuffer());
+        const parsed = parseEdges(await res.arrayBuffer());
+        const { next, done } = parsed;
+        const pairs = this.splitStatusLinks(parsed.pairs, 'edges');
         const room = Math.min(pairs.length, this.edgeIndex.length - p.edges * 2);
         this.edgeIndex.set(pairs.subarray(0, room), p.edges * 2);
         const idx = this.edgeGeo.getIndex()!;
@@ -452,7 +588,9 @@ export class UniverseEngine {
       while (!sig.aborted) {
         const res = await fetch(this.urls.edges({ n: p.loaded, offset, limit: 200_000, per: 1, sitewide: true, tree: true }), { signal: sig });
         if (!res.ok) throw new Error(`link tree ${res.status}`);
-        const { next, done, pairs } = parseEdges(await res.arrayBuffer());
+        const parsed = parseEdges(await res.arrayBuffer());
+        const { next, done } = parsed;
+        const pairs = this.splitStatusLinks(parsed.pairs, 'tree');
         const room = Math.min(pairs.length, this.treeIndex.length - this.treeCount * 2);
         this.treeIndex.set(pairs.subarray(0, room), this.treeCount * 2);
         const idx = this.treeGeo.getIndex()!;
@@ -557,6 +695,7 @@ export class UniverseEngine {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.pointMat.uniforms.projScale.value = (h * this.renderer.getPixelRatio()) / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)));
+    this.viewport.set(w * this.renderer.getPixelRatio(), h * this.renderer.getPixelRatio());
     if (!this.placed) {
       this.placed = true;
       const v = this.homeView();
@@ -641,13 +780,22 @@ export class UniverseEngine {
   }
 
   /** While a page is selected, fade every other link so its own stand out. */
+  /** Status pill: light up redirects (1), errors (2) or blocked URLs (3) and their links; 0 clears. */
+  setHighlight(kind: 0 | 1 | 2 | 3) {
+    this.highlight = kind;
+    this.pointMat.uniforms.highlight.value = kind;
+    const sm = this.status?.material as THREE.ShaderMaterial | undefined;
+    if (sm) sm.uniforms.highlight.value = kind;
+    this.dimForSelection();
+  }
+
   private dimForSelection() {
-    const k = this.selLinks.length ? 0.12 : 1;
+    const k = (this.selLinks.length ? 0.12 : 1) * (this.highlight ? 0.25 : 1);
     // With a cluster focused its own sample (clusterLinks) carries the detail.
     const tree = this.meta.layout === 'links';
     // With the link tree drawn, extra links are a faint second layer.
     this.edgeMat.uniforms.alpha.value = linkAlpha(this.progress.edges) * k * (this.focused !== null ? 0.2 : 1) * (tree ? 0.5 : 1);
-    if (this.treeMat) this.treeMat.uniforms.alpha.value = Math.min(0.55, linkAlpha(this.treeCount) * 2.2) * (this.selLinks.length ? 0.25 : 1);
+    if (this.treeMat) this.treeMat.uniforms.alpha.value = Math.min(0.55, linkAlpha(this.treeCount) * 2.2) * (this.selLinks.length || this.highlight ? 0.25 : 1);
     const cm = this.clusterLinks?.material as THREE.ShaderMaterial | undefined;
     if (cm) cm.uniforms.alpha.value = Math.min(0.5, linkAlpha(this.clusterLinkCount) * 0.7) * k;
     this.request();

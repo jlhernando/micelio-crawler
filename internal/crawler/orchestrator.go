@@ -136,6 +136,13 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 	}
 	s.onPhase = phaseFn
 	defer s.cleanup()
+	s.startBackground(ctx)
+	backgroundDone := false
+	defer func() {
+		if !backgroundDone {
+			s.finishBackground()
+		}
+	}()
 	s.sink = newPageSink(s.writer, s.crawlDB, &s.errorCount)
 
 	// Main crawl loop. The worker limit and the page limit can change while
@@ -176,6 +183,15 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 		if entry == nil {
 			wg.Wait()
 			entry = s.queue.Dequeue()
+			if entry == nil && s.sitemapsPending.Load() {
+				// Sitemap URLs may still arrive: wait instead of ending.
+				select {
+				case <-ctx.Done():
+					cancelled = true
+				case <-time.After(100 * time.Millisecond):
+				}
+				continue
+			}
 			if entry == nil {
 				break
 			}
@@ -212,6 +228,8 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 	}
 
 	wg.Wait()
+	s.finishBackground()
+	backgroundDone = true
 	// Write and commit every queued page before the queue flush, status
 	// update and reload below read the output file / crawl DB.
 	s.sink.Close()

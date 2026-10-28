@@ -326,21 +326,91 @@ func TestUniverseSearchAndMetric(t *testing.T) {
 		t.Fatalf("search = %+v", s.Rows)
 	}
 	rec = httptest.NewRecorder()
-	api.ServeHTTP(rec, httptest.NewRequest("GET", "/api/crawl/sm/universe/metric?name=depth&n=5", nil))
+	api.ServeHTTP(rec, httptest.NewRequest("GET", "/api/crawl/sm/universe/metric?name=depth&n=5&all=1", nil))
 	b := rec.Body.Bytes()
 	if string(b[:4]) != "UNM1" || len(b) != universeHeaderBytes+5 {
 		t.Fatalf("metric %q len %d", b[:4], len(b))
 	}
-	// order is PageRank desc = page index asc here, so depth = pos % 4
+	// all=1 keeps the 404 (pages[5]): order is PageRank desc = page index
+	// asc here, so depth = pos % 4
 	for k := 0; k < 5; k++ {
 		if b[universeHeaderBytes+k] != byte(k%4) {
 			t.Errorf("depth[%d] = %d", k, b[universeHeaderBytes+k])
 		}
 	}
 	rec = httptest.NewRecorder()
-	api.ServeHTTP(rec, httptest.NewRequest("GET", "/api/crawl/sm/universe/metric?name=authority", nil))
+	api.ServeHTTP(rec, httptest.NewRequest("GET", "/api/crawl/sm/universe/metric?name=authority&all=1", nil))
 	b = rec.Body.Bytes()
 	if b[universeHeaderBytes+29] != 255 || b[universeHeaderBytes] != 0 || b[universeHeaderBytes+1] != 1 {
 		t.Errorf("authority ends = %d %d", b[universeHeaderBytes], b[universeHeaderBytes+29])
+	}
+}
+
+// By default Universe draws only the site's architecture: redirects, errors
+// and robots-blocked URLs (and links to them) are left out; all=1 adds them.
+func TestUniverseHidesNonArchitecturePages(t *testing.T) {
+	api, _, m := newTestAPI(t)
+	pages := linkedPages() // /, /cat/, /cat/p1, /cat/p2, /cat/p3
+	for i, p := range pages {
+		p.PageRank = float64(10 - i)
+		p.AutoSegments = &types.PageSegments{Dir1: "/cat/"}
+	}
+	// /cat/p2 (linked from /, /cat/ and /cat/p1) redirects off the site:
+	// stored with the final 200 and its chain.
+	pages[3].RedirectChain = []types.RedirectHop{{URL: pages[3].URL, StatusCode: 301}}
+	pages[3].FinalURL = "https://other.test/p2"
+	// /cat/p1 redirects on the same host: it holds the destination page.
+	pages[2].RedirectChain = []types.RedirectHop{{URL: pages[2].URL, StatusCode: 301}}
+	pages[2].FinalURL = "https://ex.com/cat/p1-new"
+	pages[4].RobotsBlocked, pages[4].StatusCode = true, 0
+	iter := diskIter(pages)
+	stripLinks(pages)
+	g := analysis.BuildAdjacencyListFromDisk(pages, iter)
+	m.mu.Lock()
+	m.results["arch"] = &CrawlResults{Pages: pages, Graph: g, PagesReady: true}
+	m.mu.Unlock()
+
+	meta := func(q string) (total int, hidden universeHidden, edges int) {
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, httptest.NewRequest("GET", "/api/crawl/arch/universe?dim=dir1"+q, nil))
+		var m struct {
+			Total  int            `json:"total"`
+			Hidden universeHidden `json:"hidden"`
+			Edges  int            `json:"edgesTotal"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&m); err != nil {
+			t.Fatal(err)
+		}
+		return m.Total, m.Hidden, m.Edges
+	}
+	total, hidden, edges := meta("")
+	if total != 3 || hidden != (universeHidden{Redirects: 1, Blocked: 1}) {
+		t.Fatalf("default: total %d hidden %+v", total, hidden)
+	}
+	allTotal, allHidden, allEdges := meta("&all=1")
+	if allTotal != 5 || allHidden != hidden || allEdges <= edges {
+		t.Fatalf("all=1: total %d hidden %+v edges %d (default %d)", allTotal, allHidden, allEdges, edges)
+	}
+	// No edge may point at a page outside the view.
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest("GET", "/api/crawl/arch/universe/edges?dim=dir1&n=3&limit=100&per=100&sitewide=1", nil))
+	b := rec.Body.Bytes()
+	cnt := int(binary.LittleEndian.Uint32(b[8:]))
+	for k := 0; k < cnt; k++ {
+		src := binary.LittleEndian.Uint32(b[universeHeaderBytes+k*8:])
+		dst := binary.LittleEndian.Uint32(b[universeHeaderBytes+k*8+4:])
+		if src >= 3 || dst >= 3 {
+			t.Errorf("edge %d->%d leaves the 3 architecture pages", src, dst)
+		}
+	}
+	// Search finds only drawn pages.
+	rec = httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest("GET", "/api/crawl/arch/universe/search?dim=dir1&q=p2", nil))
+	var s struct {
+		Rows []universeCard `json:"rows"`
+	}
+	json.NewDecoder(rec.Body).Decode(&s)
+	if len(s.Rows) != 0 {
+		t.Errorf("search found hidden page: %+v", s.Rows)
 	}
 }

@@ -8,10 +8,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -38,6 +37,11 @@ const (
 	// took 2+ minutes at 2 at a time).
 	bigSitePerHost              = 6
 	maxExternalCheckConcurrency = 50
+	// A host answering 429 pauses rateLimitBaseWait (5 s, doubling, at most
+	// maxRateLimitWait) unless it sends Retry-After; after
+	// maxRateLimitStrikes 429s its remaining URLs are left unchecked.
+	maxRateLimitWait    = 60 * time.Second
+	maxRateLimitStrikes = 4
 )
 
 // ExternalCheckOptions configures CheckExternalLinks.
@@ -70,6 +74,10 @@ type ExternalCheckSummary struct {
 	Checked int
 	// Skipped is how many were left unchecked (cap or cancellation).
 	Skipped int
+	// RateLimited is how many URLs (part of Skipped) were left unchecked
+	// because their host kept answering 429 Too Many Requests.
+	RateLimited      int
+	RateLimitedHosts []string
 	// Busiest lists the hosts with the most request time, e.g.
 	// "github.com 212 URLs 95s" (top 3; for the log).
 	Busiest []string
@@ -139,24 +147,19 @@ func CheckExternalLinks(ctx context.Context, links map[string][]string, opts Ext
 	}
 	defer client.CloseIdleConnections()
 
-	var (
-		mu      sync.Mutex
-		checked atomic.Int32
-		total   = len(targets)
-	)
+	total := len(targets)
+	checked := 0
 	report := func(t target, status int, err error) {
-		n := int(checked.Add(1))
+		checked++
 		if status >= 400 || err != nil {
 			res := types.ExternalLinkResult{URL: t.url, StatusCode: status, FoundOn: dedupeCap(t.pages, opts.MaxFoundOn)}
 			if err != nil {
 				res.Error = err.Error()
 			}
-			mu.Lock()
 			summary.Broken = append(summary.Broken, res)
-			mu.Unlock()
 		}
 		if opts.OnProgress != nil {
-			opts.OnProgress(n, total)
+			opts.OnProgress(checked, total)
 		}
 	}
 
@@ -173,24 +176,42 @@ func CheckExternalLinks(ctx context.Context, links map[string][]string, opts Ext
 		queues[t.host] = append(queues[t.host], t)
 	}
 	type result struct {
-		t   target
-		err error
-		dur time.Duration
+		t          target
+		status     int
+		retryAfter time.Duration
+		err        error
+		dur        time.Duration
 	}
 	type hostTime struct {
 		n   int
 		dur time.Duration
 	}
+	// A host that answers 429 is throttled: one check at a time after a
+	// pause (its Retry-After, else 5 s doubling), and the URL is retried.
+	// 429 means "too many requests", not a broken link, so it is never
+	// reported as broken: after maxRateLimitStrikes the host's remaining
+	// URLs are left unchecked.
+	type throttle struct {
+		strikes   int
+		notBefore time.Time
+	}
 	spent := make(map[string]*hostTime)
 	var (
-		inflight = make(map[string]int)
-		dead     = make(map[string]error) // site-level failure: skip its other URLs
-		done     = make(chan result, opts.Concurrency)
-		active   int
-		cursor   int
+		inflight  = make(map[string]int)
+		throttled = make(map[string]*throttle)
+		dead      = make(map[string]error) // site-level failure: skip its other URLs
+		done      = make(chan result, opts.Concurrency)
+		active    int
+		cursor    int
 	)
+	limitFor := func(h string) int {
+		if throttled[h] != nil {
+			return 1
+		}
+		return hostLimit(h, opts.PerHostConcurrency)
+	}
 	// next returns a host with queued URLs and a free slot, or "".
-	next := func() string {
+	next := func(now time.Time) string {
 		for range hosts {
 			if cursor >= len(hosts) {
 				cursor = 0
@@ -208,15 +229,30 @@ func CheckExternalLinks(ctx context.Context, links map[string][]string, opts Ext
 			}
 			h := hosts[cursor]
 			cursor++
-			if len(queues[h]) > 0 && inflight[h] < hostLimit(h, opts.PerHostConcurrency) {
-				return h
+			if len(queues[h]) == 0 || inflight[h] >= limitFor(h) {
+				continue
 			}
+			if th := throttled[h]; th != nil && now.Before(th.notBefore) {
+				continue
+			}
+			return h
 		}
 		return ""
 	}
+	// wakeAt is the end of the earliest pause of an idle throttled host
+	// with queued URLs (zero if none).
+	wakeAt := func() time.Time {
+		var w time.Time
+		for h, th := range throttled {
+			if len(queues[h]) > 0 && inflight[h] == 0 && (w.IsZero() || th.notBefore.Before(w)) {
+				w = th.notBefore
+			}
+		}
+		return w
+	}
 	for ctx.Err() == nil {
 		for active < opts.Concurrency {
-			h := next()
+			h := next(time.Now())
 			if h == "" {
 				break
 			}
@@ -230,36 +266,73 @@ func CheckExternalLinks(ctx context.Context, links map[string][]string, opts Ext
 			active++
 			go func(t target) {
 				start := time.Now()
-				status, err := checkExternalStatus(ctx, client, t.url, opts.UserAgent)
-				if ctx.Err() == nil { // cancelled mid-flight: don't report as broken
-					report(t, status, err)
-				}
-				done <- result{t, err, time.Since(start)}
+				status, retryAfter, err := checkExternalStatus(ctx, client, t.url, opts.UserAgent)
+				done <- result{t, status, retryAfter, err, time.Since(start)}
 			}(t)
 		}
-		if active == 0 {
+		var timer <-chan time.Time
+		if w := wakeAt(); !w.IsZero() {
+			timer = time.After(max(time.Until(w), time.Millisecond))
+		}
+		if active == 0 && timer == nil {
 			break
 		}
 		select {
 		case r := <-done:
 			active--
-			inflight[r.t.host]--
-			ht := spent[r.t.host]
+			h := r.t.host
+			inflight[h]--
+			ht := spent[h]
 			if ht == nil {
 				ht = &hostTime{}
-				spent[r.t.host] = ht
+				spent[h] = ht
 			}
 			ht.n++
 			ht.dur += r.dur
+			if ctx.Err() != nil {
+				continue // cancelled mid-flight: don't report as broken
+			}
+			if r.status == http.StatusTooManyRequests {
+				th := throttled[h]
+				if th == nil {
+					th = &throttle{}
+					throttled[h] = th
+				}
+				// Requests already in flight when the host started refusing
+				// come back 429 too: one strike per pause, not per request.
+				if time.Now().After(th.notBefore) {
+					th.strikes++
+					wait := r.retryAfter
+					if wait <= 0 {
+						wait = rateLimitBaseWait << (th.strikes - 1)
+					}
+					th.notBefore = time.Now().Add(min(wait, maxRateLimitWait))
+				}
+				if th.strikes > maxRateLimitStrikes {
+					summary.RateLimitedHosts = append(summary.RateLimitedHosts, h)
+					summary.RateLimited += 1 + len(queues[h])
+					queues[h] = nil
+					continue
+				}
+				queues[h] = append([]target{r.t}, queues[h]...)
+				if !slices.Contains(hosts, h) {
+					hosts = append(hosts, h)
+				}
+				continue
+			}
+			report(r.t, r.status, r.err)
 			if hostUnreachable(r.err, r.t.site) {
 				dead[r.t.site] = r.err
 			}
+		case <-timer:
 		case <-ctx.Done():
 		}
 	}
 	for ; active > 0; active-- {
 		<-done
 	}
+	slices.Sort(summary.RateLimitedHosts)
+	summary.RateLimitedHosts = slices.Compact(summary.RateLimitedHosts)
 
 	busy := make([]string, 0, len(spent))
 	for h := range spent {
@@ -270,11 +343,15 @@ func CheckExternalLinks(ctx context.Context, links map[string][]string, opts Ext
 		summary.Busiest = append(summary.Busiest, fmt.Sprintf("%s %d URLs %s", h, spent[h].n, spent[h].dur.Round(time.Second)))
 	}
 
-	summary.Checked = int(checked.Load())
+	summary.Checked = checked
 	summary.Skipped = summary.Total - summary.Checked
 	sort.Slice(summary.Broken, func(i, j int) bool { return summary.Broken[i].URL < summary.Broken[j].URL })
 	return summary
 }
+
+// rateLimitBaseWait is the first pause after a 429 without Retry-After
+// (a variable so tests can shorten it).
+var rateLimitBaseWait = 5 * time.Second
 
 // bigSites are platforms built for heavy traffic; subdomains included.
 var bigSites = []string{
@@ -329,36 +406,41 @@ func limitRedirects(_ *http.Request, via []*http.Request) error {
 
 // checkExternalStatus issues HEAD, falling back to GET when the server does
 // not support HEAD (405/501) or rejects it outright (some CDNs answer 403/404
-// to HEAD only). Returns the final status after redirects.
-func checkExternalStatus(ctx context.Context, client *http.Client, rawURL, userAgent string) (int, error) {
-	status, err := doExternalRequest(ctx, client, http.MethodHead, rawURL, userAgent)
+// to HEAD only). Returns the final status after redirects, and the server's
+// Retry-After on a 429 (0 if absent).
+func checkExternalStatus(ctx context.Context, client *http.Client, rawURL, userAgent string) (int, time.Duration, error) {
+	status, retryAfter, err := doExternalRequest(ctx, client, http.MethodHead, rawURL, userAgent)
 	// Network errors (DNS, timeout, TLS) would fail for GET too: don't double the wait.
 	if err != nil || (status != http.StatusMethodNotAllowed && status != http.StatusNotImplemented &&
 		status != http.StatusForbidden && status != http.StatusNotFound) {
-		return status, err
+		return status, retryAfter, err
 	}
-	getStatus, getErr := doExternalRequest(ctx, client, http.MethodGet, rawURL, userAgent)
+	getStatus, getRetry, getErr := doExternalRequest(ctx, client, http.MethodGet, rawURL, userAgent)
 	if getErr != nil {
-		return status, nil // keep the HEAD answer when GET fails outright
+		return status, 0, nil // keep the HEAD answer when GET fails outright
 	}
-	return getStatus, nil
+	return getStatus, getRetry, nil
 }
 
-func doExternalRequest(ctx context.Context, client *http.Client, method, rawURL, userAgent string) (int, error) {
+func doExternalRequest(ctx context.Context, client *http.Client, method, rawURL, userAgent string) (int, time.Duration, error) {
 	req, err := newRequest(ctx, method, rawURL)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "*/*")
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	// Drain a little so the connection can be reused, never the full body.
 	io.CopyN(io.Discard, resp.Body, 4096)
 	resp.Body.Close()
-	return resp.StatusCode, nil
+	var retryAfter time.Duration
+	if resp.StatusCode == http.StatusTooManyRequests {
+		retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"), 0)
+	}
+	return resp.StatusCode, retryAfter, nil
 }
 
 func dedupeCap(pages []string, max int) []string {

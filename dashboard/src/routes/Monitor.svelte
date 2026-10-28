@@ -151,6 +151,19 @@
     }
   }
   let pagesPerSecond = $derived(elapsedMs > 1000 ? ((completed + failed) / (elapsedMs / 1000)).toFixed(1) : '—');
+  // Speed over the last 15 s: the average since the start hides changes
+  // (an Adjust from 800 to 200 ms still read 1.2 p/s a minute later).
+  let speedSamples: { t: number; n: number }[] = [];
+  let currentSpeed = $state<string>('—');
+  function recordSpeed(t: number, n: number) {
+    speedSamples.push({ t, n });
+    while (speedSamples.length > 2 && t - speedSamples[0].t > 15000) speedSamples.shift();
+    const first = speedSamples[0];
+    const dt = (t - first.t) / 1000;
+    currentSpeed = dt >= 3 ? ((n - first.n) / dt).toFixed(1) : pagesPerSecond;
+  }
+  // Fastest the delay allows: it applies per site, whatever the concurrency.
+  let speedCap = $derived(tuneDelay > 0 ? 1000 / tuneDelay : 0);
   let estimatedRemaining = $derived.by(() => {
     if (elapsedMs < 2000 || completed + failed === 0 || pending === 0) return '—';
     const rate = (completed + failed) / (elapsedMs / 1000);
@@ -186,6 +199,7 @@
       excludedStats = (msg.data.excludedStats as typeof excludedStats) || [];
       total = (msg.data.total as number) || 0;
       elapsedMs = (msg.data.elapsedMs as number) || (Date.now() - startedAt);
+      recordSpeed(elapsedMs, completed + failed);
     } else if (msg.type === 'tuned') {
       total = (msg.data.limit as number) || total;
       if (!tuneBusy) {
@@ -214,6 +228,10 @@
       scheduleFlush();
     } else if (msg.type === 'complete') {
       status = 'completed';
+      // The crawl is over: drop the "Loading pages for analysis" phase and
+      // the queue left behind by Stop & Analyze, so the bar reads 100%.
+      phase = null;
+      pending = 0;
       completionData = {
         totalPages: (msg.data.totalPages as number) || completed,
         durationMs: (msg.data.durationMs as number) || elapsedMs,
@@ -356,6 +374,9 @@
   });
 
   onMount(() => {
+    api.getCrawlTuning(id).then(t => {
+      tuneDelay = t.delay; tuneConcurrency = t.concurrency; tuneLimit = t.limit;
+    }).catch(() => {});
     return () => {
       wsClient?.close();
       if (autoRedirectTimer) clearTimeout(autoRedirectTimer);
@@ -527,6 +548,7 @@
           class="px-4 py-1.5 rounded-lg text-sm font-medium bg-accent/20 text-accent hover:bg-accent/30 transition-colors cursor-pointer disabled:opacity-50"
         >{tuneBusy ? 'Applying…' : 'Apply'}</button>
         <p class="basis-full text-[11px] text-fg-2">
+          The delay is per site: {tuneDelay > 0 ? `max ≈ ${(1000 / tuneDelay).toLocaleString(undefined, { maximumFractionDigits: 1 })} pages/s whatever the concurrency` : 'with no delay, concurrency sets the pace'}.
           Filters, depth, robots and JS rendering stay fixed so the analysis stays consistent. Changes are kept if the crawl is resumed.
         </p>
         {#if tuneMsg}
@@ -584,8 +606,11 @@
       </div>
       {/if}
       <div>
-        <div class="text-xs text-fg-2">Speed</div>
-        <div class="text-lg font-semibold">{pagesPerSecond} <span class="text-xs text-fg-2">p/s</span></div>
+        <div class="text-xs text-fg-2">Speed (last 15 s)</div>
+        <div class="text-lg font-semibold">{status === 'running' ? currentSpeed : pagesPerSecond} <span class="text-xs text-fg-2">p/s</span></div>
+        <div class="text-[11px] text-fg-2">
+          avg {pagesPerSecond}{#if speedCap > 0 && status === 'running'}&nbsp;· max ≈ {speedCap.toLocaleString(undefined, { maximumFractionDigits: 1 })} with {tuneDelay} ms delay{/if}
+        </div>
       </div>
       <div>
         <div class="text-xs text-fg-2">Elapsed</div>

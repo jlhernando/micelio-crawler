@@ -2,6 +2,22 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.8.2] - 2026-10-28
+
+Fewer false broken links, a truthful speed reading, and New Crawl uses your saved defaults.
+
+### Changed
+
+- **New Crawl starts at a 200 ms delay** instead of 1,000 ms. The delay is per site, so 1,000 ms capped every crawl at 1 page/s whatever the concurrency; 200 ms allows up to 5 pages/s. New Crawl and Settings show the cap for the chosen delay.
+- **Monitor speed is the last 15 seconds**, with the average and the delay's cap below it. The average since the start hid changes: after Adjust from 800 to 200 ms it still read 3.0 pages/s while the crawl ran at 5.0.
+
+### Fixed
+
+- **New Crawl now uses Settings → Default Crawl Settings** (delay, concurrency, depth, limit, user agent, external links, JS rendering, robots, n-grams, embeddings, link intelligence…). Before, the page ignored them. Settings' own defaults now match New Crawl, so saving Settings for something else does not change your next crawl.
+
+- **A 429 is no longer reported as a broken external link.** 429 means the site asks us to slow down. In a real crawl, GitHub answered 429 to 316 links after about 750 checks, and all 316 showed as broken. Now a site that answers 429 is checked one URL at a time after a pause (its Retry-After, else 5 s, doubling up to 60 s) and the URL is retried. If it keeps answering 429, its remaining URLs are left unchecked, never broken, and Issues says which sites and how many URLs. Re-run: all 805 GitHub URLs checked, none reported as 429.
+- The Monitor no longer shows "Loading pages for analysis" and a low % under "Crawl Complete" after Stop & Analyze.
+
 ## [1.8.1] - 2026-10-27
 
 ### Changed

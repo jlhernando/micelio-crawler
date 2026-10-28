@@ -16,6 +16,9 @@
     issueFilter?: string; // server-side filter key for lazy loading
   }
 
+  let rateLimitedExternal = $derived((stats.externalLinksRateLimited as number) || 0);
+  let rateLimitedHosts = $derived((stats.externalRateLimitedHosts as string[]) || []);
+
   let issues = $derived.by((): IssueCard[] => {
     const cards: IssueCard[] = [];
 
@@ -441,6 +444,13 @@
         {/if}
       </div>
     </div>
+
+    {#if rateLimitedExternal > 0}
+      <p class="mb-3 rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-fg-2" data-testid="external-rate-limited">
+        {rateLimitedExternal.toLocaleString()} external URLs were not checked: {rateLimitedHosts.join(', ')} kept answering
+        429 (too many requests). They are not counted as broken.
+      </p>
+    {/if}
 
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
       {#each issues as issue}

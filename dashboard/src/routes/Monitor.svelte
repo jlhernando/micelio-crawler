@@ -214,6 +214,10 @@
       scheduleFlush();
     } else if (msg.type === 'complete') {
       status = 'completed';
+      // The crawl is over: drop the "Loading pages for analysis" phase and
+      // the queue left behind by Stop & Analyze, so the bar reads 100%.
+      phase = null;
+      pending = 0;
       completionData = {
         totalPages: (msg.data.totalPages as number) || completed,
         durationMs: (msg.data.durationMs as number) || elapsedMs,

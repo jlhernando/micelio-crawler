@@ -62,8 +62,9 @@ func (m *CrawlManager) checkExternalLinks(ctx context.Context, crawlID string, c
 			}
 		},
 	})
-	log.Printf("[external] crawl %s: checked %d/%d external URLs in %s, %d broken, %d skipped; busiest: %s",
-		crawlID, summary.Checked, summary.Total, time.Since(start).Round(time.Millisecond), len(summary.Broken), summary.Skipped, strings.Join(summary.Busiest, ", "))
+	log.Printf("[external] crawl %s: checked %d/%d external URLs in %s, %d broken, %d skipped; busiest: %s; rate-limited: %d (%s)",
+		crawlID, summary.Checked, summary.Total, time.Since(start).Round(time.Millisecond), len(summary.Broken), summary.Skipped, strings.Join(summary.Busiest, ", "),
+		summary.RateLimited, strings.Join(summary.RateLimitedHosts, ", "))
 	return &summary
 }
 
@@ -75,4 +76,6 @@ func applyExternalCheckSummary(stats *types.CrawlStats, summary *crawler.Externa
 	}
 	stats.ExternalLinksChecked = summary.Checked
 	stats.ExternalLinksUnchecked = summary.Skipped
+	stats.ExternalLinksRateLimited = summary.RateLimited
+	stats.ExternalRateLimitedHosts = summary.RateLimitedHosts
 }

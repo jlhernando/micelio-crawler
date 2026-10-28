@@ -136,86 +136,90 @@ type CrawlStats struct {
 	// one entry per page, re-encoded on every stats save); per-page scores
 	// live on PageData.PageRank and in the crawl DB (page_scores table).
 	// Old stored crawls may still carry the full map; readers accept both.
-	PageRankScores            map[string]float64     `json:"pageRankScores,omitempty"`
-	PageRankHistogram         *PageRankHistogram     `json:"pageRankHistogram,omitempty"`
-	RenderCompareStats        *RenderCompareStats    `json:"renderCompareStats"`
-	PageWeightStats           *PageWeightStats       `json:"pageWeightStats"`
-	CruxStats                 *CruxStats             `json:"cruxStats"`
-	URLStructureStats         *URLStructureStats     `json:"urlStructureStats"`
-	TemplateTypeDistribution  map[string]int         `json:"templateTypeDistribution"`
-	CanonicalStats            *CanonicalStats        `json:"canonicalStats"`
-	RedirectStats             *RedirectStats         `json:"redirectStats"`
-	NgramStats                *NgramStats            `json:"ngramStats"`
-	EmbeddingStats            *EmbeddingStats        `json:"embeddingStats"`
-	LinkIntelligenceStats     *LinkIntelligenceStats `json:"linkIntelligenceStats"`
-	ImageAuditStats           *ImageAuditStats       `json:"imageAuditStats"`
-	CustomSearchSummary       map[string]SearchStat  `json:"customSearchSummary"`
-	StatusCodes               map[int]int            `json:"statusCodes"`
-	GscStats                  *GscStats              `json:"gscStats"`
-	Ga4Stats                  *Ga4Stats              `json:"ga4Stats"`
-	SchemaValidationStats     *SchemaValidationStats `json:"schemaValidationStats"`
-	TextToCodeStats           *TextToCodeStats       `json:"textToCodeStats"`
-	WordCountBuckets          *WordCountBuckets      `json:"wordCountBuckets,omitempty"`
-	PerformanceScores         *PerformanceScores     `json:"performanceScores"`
-	URLIssueStats             map[string][]string    `json:"urlIssueStats"`
-	ReadabilityStats          *ReadabilityStats      `json:"readabilityStats"`
-	PlausibleStats            *PlausibleStats        `json:"plausibleStats"`
-	SeoFunnelStats            *SeoFunnelStats        `json:"seoFunnelStats"`
-	AIVisibilityStats         *AIVisibilityStats     `json:"aiVisibilityStats,omitempty"`
-	FreshnessStats            *FreshnessStats        `json:"freshnessStats,omitempty"`
-	ContentRichnessStats      *ContentRichnessStats  `json:"contentRichnessStats,omitempty"`
-	EEATStats                 *EEATStats             `json:"eeatStats,omitempty"`
-	PassageReadinessStats     *PassageReadinessStats `json:"passageReadinessStats,omitempty"`
-	AIReadinessStats          *AIReadinessStats      `json:"aiReadinessStats,omitempty"`
-	TopicalityStats           *TopicalityStats       `json:"topicalityStats,omitempty"`
-	AnchorHealthStats         *AnchorHealthStats     `json:"anchorHealthStats,omitempty"`
-	AnchorCloud               *AnchorCloudStats      `json:"anchorCloud,omitempty"`
-	AlertSummary              *AlertSummary          `json:"alertSummary,omitempty"`
-	DepthDistribution         map[int]int            `json:"depthDistribution"`
-	SitemapStats              *SitemapStats          `json:"sitemapStats"`
-	BrokenExternalLinks       []ExternalLinkResult   `json:"brokenExternalLinks"`
-	LongRedirectChains        []RedirectChainInfo    `json:"longRedirectChains"`
-	MixedContentPages         []string               `json:"mixedContentPages"`
-	IndexabilityStats         IndexabilityStats      `json:"indexabilityStats"`
-	RedirectChains            []RedirectChainInfo    `json:"redirectChains"`
-	BrokenLinks               []BrokenLink           `json:"brokenLinks"`
-	NonDescriptiveAnchors     []NonDescriptiveAnchor `json:"nonDescriptiveAnchors"`
-	DuplicateContentGroups    []HashDuplicateGroup   `json:"duplicateContentGroups"`
-	ThinContentPages          []URLWordCount         `json:"thinContentPages"`
-	NonHTTPSPages             []string               `json:"nonHttpsPages"`
-	NearDuplicateGroups       []NearDuplicateGroup   `json:"nearDuplicateGroups"`
-	SegmentStats              []SegmentStat          `json:"segmentStats"`
-	HreflangIssues            []HreflangIssue        `json:"hreflangIssues"`
-	Soft404Pages              []string               `json:"soft404Pages"`
-	Soft404Stats              *Soft404Stats          `json:"soft404Stats,omitempty"`
-	OrphanPages               []string               `json:"orphanPages"` // capped at StatsListCap; see TotalOrphanPages
-	TotalOrphanPages          int                    `json:"totalOrphanPages,omitempty"`
-	OrphanMethodology         string                 `json:"orphanMethodology,omitempty"` // "reporter" (basic) or "graph" (redirect-aware via link intelligence)
-	SlowPages                 []URLResponseTime      `json:"slowPages"`
-	LinkAnalysis              LinkAnalysis           `json:"linkAnalysis"`
-	ResponseTimePercentiles   PercentileData         `json:"responseTimePercentiles"`
-	ResponseTimeBuckets       ResponseTimeBuckets    `json:"responseTimeBuckets"`
-	ImagesMissingAlt          int                    `json:"imagesMissingAlt"`
-	TotalExternalLinks        int                    `json:"totalExternalLinks"`
-	ExternalLinksChecked      int                    `json:"externalLinksChecked,omitempty"`   // unique external URLs status-checked (Check External)
-	ExternalLinksUnchecked    int                    `json:"externalLinksUnchecked,omitempty"` // unique external URLs skipped (cap or cancellation)
-	PagesWithStructuredData   int                    `json:"pagesWithStructuredData"`
-	TotalInternalLinks        int                    `json:"totalInternalLinks"`
-	TotalImages               int                    `json:"totalImages"`
-	CrawlDurationMs           int64                  `json:"crawlDurationMs"`
-	PagesWithoutOG            int                    `json:"pagesWithoutOg"`
-	PagesWithAIAnalysis       int                    `json:"pagesWithAiAnalysis"`
-	TotalPages                int                    `json:"totalPages"`
-	PagesWithoutH1            int                    `json:"pagesWithoutH1"`
-	PagesWithoutDescription   int                    `json:"pagesWithoutDescription"`
-	PagesWithoutTitle         int                    `json:"pagesWithoutTitle"`
-	RobotsBlockedCount        int                    `json:"robotsBlockedCount"`
-	DuplicateTitleCount       int                    `json:"duplicateTitleCount"`
-	DuplicateDescriptionCount int                    `json:"duplicateDescriptionCount"`
-	MultipleH1Count           int                    `json:"multipleH1Count"`
-	TitleTooLongCount         int                    `json:"titleTooLongCount"`
-	TitleTooShortCount        int                    `json:"titleTooShortCount"`
-	DescriptionTooLongCount   int                    `json:"descriptionTooLongCount"`
+	PageRankScores           map[string]float64     `json:"pageRankScores,omitempty"`
+	PageRankHistogram        *PageRankHistogram     `json:"pageRankHistogram,omitempty"`
+	RenderCompareStats       *RenderCompareStats    `json:"renderCompareStats"`
+	PageWeightStats          *PageWeightStats       `json:"pageWeightStats"`
+	CruxStats                *CruxStats             `json:"cruxStats"`
+	URLStructureStats        *URLStructureStats     `json:"urlStructureStats"`
+	TemplateTypeDistribution map[string]int         `json:"templateTypeDistribution"`
+	CanonicalStats           *CanonicalStats        `json:"canonicalStats"`
+	RedirectStats            *RedirectStats         `json:"redirectStats"`
+	NgramStats               *NgramStats            `json:"ngramStats"`
+	EmbeddingStats           *EmbeddingStats        `json:"embeddingStats"`
+	LinkIntelligenceStats    *LinkIntelligenceStats `json:"linkIntelligenceStats"`
+	ImageAuditStats          *ImageAuditStats       `json:"imageAuditStats"`
+	CustomSearchSummary      map[string]SearchStat  `json:"customSearchSummary"`
+	StatusCodes              map[int]int            `json:"statusCodes"`
+	GscStats                 *GscStats              `json:"gscStats"`
+	Ga4Stats                 *Ga4Stats              `json:"ga4Stats"`
+	SchemaValidationStats    *SchemaValidationStats `json:"schemaValidationStats"`
+	TextToCodeStats          *TextToCodeStats       `json:"textToCodeStats"`
+	WordCountBuckets         *WordCountBuckets      `json:"wordCountBuckets,omitempty"`
+	PerformanceScores        *PerformanceScores     `json:"performanceScores"`
+	URLIssueStats            map[string][]string    `json:"urlIssueStats"`
+	ReadabilityStats         *ReadabilityStats      `json:"readabilityStats"`
+	PlausibleStats           *PlausibleStats        `json:"plausibleStats"`
+	SeoFunnelStats           *SeoFunnelStats        `json:"seoFunnelStats"`
+	AIVisibilityStats        *AIVisibilityStats     `json:"aiVisibilityStats,omitempty"`
+	FreshnessStats           *FreshnessStats        `json:"freshnessStats,omitempty"`
+	ContentRichnessStats     *ContentRichnessStats  `json:"contentRichnessStats,omitempty"`
+	EEATStats                *EEATStats             `json:"eeatStats,omitempty"`
+	PassageReadinessStats    *PassageReadinessStats `json:"passageReadinessStats,omitempty"`
+	AIReadinessStats         *AIReadinessStats      `json:"aiReadinessStats,omitempty"`
+	TopicalityStats          *TopicalityStats       `json:"topicalityStats,omitempty"`
+	AnchorHealthStats        *AnchorHealthStats     `json:"anchorHealthStats,omitempty"`
+	AnchorCloud              *AnchorCloudStats      `json:"anchorCloud,omitempty"`
+	AlertSummary             *AlertSummary          `json:"alertSummary,omitempty"`
+	DepthDistribution        map[int]int            `json:"depthDistribution"`
+	SitemapStats             *SitemapStats          `json:"sitemapStats"`
+	BrokenExternalLinks      []ExternalLinkResult   `json:"brokenExternalLinks"`
+	LongRedirectChains       []RedirectChainInfo    `json:"longRedirectChains"`
+	MixedContentPages        []string               `json:"mixedContentPages"`
+	IndexabilityStats        IndexabilityStats      `json:"indexabilityStats"`
+	RedirectChains           []RedirectChainInfo    `json:"redirectChains"`
+	BrokenLinks              []BrokenLink           `json:"brokenLinks"`
+	NonDescriptiveAnchors    []NonDescriptiveAnchor `json:"nonDescriptiveAnchors"`
+	DuplicateContentGroups   []HashDuplicateGroup   `json:"duplicateContentGroups"`
+	ThinContentPages         []URLWordCount         `json:"thinContentPages"`
+	NonHTTPSPages            []string               `json:"nonHttpsPages"`
+	NearDuplicateGroups      []NearDuplicateGroup   `json:"nearDuplicateGroups"`
+	SegmentStats             []SegmentStat          `json:"segmentStats"`
+	HreflangIssues           []HreflangIssue        `json:"hreflangIssues"`
+	Soft404Pages             []string               `json:"soft404Pages"`
+	Soft404Stats             *Soft404Stats          `json:"soft404Stats,omitempty"`
+	OrphanPages              []string               `json:"orphanPages"` // capped at StatsListCap; see TotalOrphanPages
+	TotalOrphanPages         int                    `json:"totalOrphanPages,omitempty"`
+	OrphanMethodology        string                 `json:"orphanMethodology,omitempty"` // "reporter" (basic) or "graph" (redirect-aware via link intelligence)
+	SlowPages                []URLResponseTime      `json:"slowPages"`
+	LinkAnalysis             LinkAnalysis           `json:"linkAnalysis"`
+	ResponseTimePercentiles  PercentileData         `json:"responseTimePercentiles"`
+	ResponseTimeBuckets      ResponseTimeBuckets    `json:"responseTimeBuckets"`
+	ImagesMissingAlt         int                    `json:"imagesMissingAlt"`
+	TotalExternalLinks       int                    `json:"totalExternalLinks"`
+	ExternalLinksChecked     int                    `json:"externalLinksChecked,omitempty"`   // unique external URLs status-checked (Check External)
+	ExternalLinksUnchecked   int                    `json:"externalLinksUnchecked,omitempty"` // unique external URLs skipped (cap or cancellation)
+	// External URLs left unchecked because their site kept answering 429
+	// Too Many Requests (part of ExternalLinksUnchecked), and those sites.
+	ExternalLinksRateLimited  int      `json:"externalLinksRateLimited,omitempty"`
+	ExternalRateLimitedHosts  []string `json:"externalRateLimitedHosts,omitempty"`
+	PagesWithStructuredData   int      `json:"pagesWithStructuredData"`
+	TotalInternalLinks        int      `json:"totalInternalLinks"`
+	TotalImages               int      `json:"totalImages"`
+	CrawlDurationMs           int64    `json:"crawlDurationMs"`
+	PagesWithoutOG            int      `json:"pagesWithoutOg"`
+	PagesWithAIAnalysis       int      `json:"pagesWithAiAnalysis"`
+	TotalPages                int      `json:"totalPages"`
+	PagesWithoutH1            int      `json:"pagesWithoutH1"`
+	PagesWithoutDescription   int      `json:"pagesWithoutDescription"`
+	PagesWithoutTitle         int      `json:"pagesWithoutTitle"`
+	RobotsBlockedCount        int      `json:"robotsBlockedCount"`
+	DuplicateTitleCount       int      `json:"duplicateTitleCount"`
+	DuplicateDescriptionCount int      `json:"duplicateDescriptionCount"`
+	MultipleH1Count           int      `json:"multipleH1Count"`
+	TitleTooLongCount         int      `json:"titleTooLongCount"`
+	TitleTooShortCount        int      `json:"titleTooShortCount"`
+	DescriptionTooLongCount   int      `json:"descriptionTooLongCount"`
 
 	// Automatic segmentation (no user rules): per-dimension value breakdown.
 	AutoSegmentStats     []SegmentDimensionStats `json:"autoSegmentStats,omitempty"`

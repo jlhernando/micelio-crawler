@@ -1767,8 +1767,11 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 			},
 		})
 		fmt.Fprintf(os.Stderr, "\r  External: %d/%d checked\n", extSummary.Checked, extSummary.Total)
-		if extSummary.Skipped > 0 {
-			fmt.Fprintf(os.Stderr, "  External links: %d not checked (cap %d or cancelled)\n", extSummary.Skipped, crawler.DefaultExternalCheckMaxURLs)
+		if extSummary.RateLimited > 0 {
+			fmt.Fprintf(os.Stderr, "  External links: %d not checked, sites limiting requests (429): %s\n", extSummary.RateLimited, strings.Join(extSummary.RateLimitedHosts, ", "))
+		}
+		if n := extSummary.Skipped - extSummary.RateLimited; n > 0 {
+			fmt.Fprintf(os.Stderr, "  External links: %d not checked (cap %d or cancelled)\n", n, crawler.DefaultExternalCheckMaxURLs)
 		}
 		brokenExternal = extSummary.Broken
 		if ppCfg != nil {

@@ -127,7 +127,7 @@ func TestCheckExternalStatus_RetriesGETAfterHEAD404(t *testing.T) {
 		w.WriteHeader(200)
 	}))
 	defer srv.Close()
-	status, err := checkExternalStatus(context.Background(), srv.Client(), srv.URL+"/asset", "test-agent")
+	status, _, err := checkExternalStatus(context.Background(), srv.Client(), srv.URL+"/asset", "test-agent")
 	if err != nil || status != 200 {
 		t.Errorf("status = %d, err = %v; want 200 from the GET retry", status, err)
 	}
@@ -195,5 +195,58 @@ func TestHostLimit(t *testing.T) {
 		if got := hostLimit(host, 2); got != want {
 			t.Errorf("hostLimit(%q) = %d, want %d", host, got, want)
 		}
+	}
+}
+
+// A 429 is "slow down", not a broken link: the URL is retried after the
+// pause and counts as fine when it then answers 200.
+func TestCheckExternalLinks_429IsRetriedNotBroken(t *testing.T) {
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) <= 3 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+		}
+	}))
+	defer srv.Close()
+	links := map[string][]string{}
+	for i := 0; i < 5; i++ {
+		links[fmt.Sprintf("%s/p%d", srv.URL, i)] = []string{"a"}
+	}
+	start := time.Now()
+	sum := CheckExternalLinks(context.Background(), links, ExternalCheckOptions{SkipSSRF: true})
+	if sum.Checked != 5 || len(sum.Broken) != 0 || sum.RateLimited != 0 {
+		t.Fatalf("checked %d broken %v rate-limited %d", sum.Checked, sum.Broken, sum.RateLimited)
+	}
+	if d := time.Since(start); d < time.Second {
+		t.Errorf("finished in %s: ignored Retry-After", d)
+	}
+}
+
+// A site that keeps answering 429 has its URLs left unchecked (not broken),
+// and other sites are checked meanwhile.
+func TestCheckExternalLinks_Persistent429LeftUnchecked(t *testing.T) {
+	old := rateLimitBaseWait
+	rateLimitBaseWait = 20 * time.Millisecond
+	defer func() { rateLimitBaseWait = old }()
+	limited := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer limited.Close()
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer ok.Close()
+	links := map[string][]string{ok.URL + "/fine": {"a"}}
+	for i := 0; i < 10; i++ {
+		links[fmt.Sprintf("%s/p%d", limited.URL, i)] = []string{"a", "b"}
+	}
+	sum := CheckExternalLinks(context.Background(), links, ExternalCheckOptions{SkipSSRF: true})
+	if len(sum.Broken) != 0 {
+		t.Fatalf("429s reported as broken: %d", len(sum.Broken))
+	}
+	if sum.Checked != 1 || sum.RateLimited != 10 || sum.Skipped != 10 {
+		t.Fatalf("checked %d rate-limited %d skipped %d, want 1/10/10", sum.Checked, sum.RateLimited, sum.Skipped)
+	}
+	if len(sum.RateLimitedHosts) != 1 || !strings.HasPrefix(limited.URL, "http://"+sum.RateLimitedHosts[0]) {
+		t.Errorf("rate-limited hosts = %v", sum.RateLimitedHosts)
 	}
 }

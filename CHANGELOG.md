@@ -2,6 +2,13 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [Unreleased]
+
+### Fixed
+
+- **A 429 is no longer reported as a broken external link.** 429 means the site asks us to slow down. In a real crawl, GitHub answered 429 to 316 links after about 750 checks, and all 316 showed as broken. Now a site that answers 429 is checked one URL at a time after a pause (its Retry-After, else 5 s, doubling up to 60 s) and the URL is retried. If it keeps answering 429, its remaining URLs are left unchecked, never broken, and Issues says which sites and how many URLs. Re-run: all 805 GitHub URLs checked, none reported as 429.
+- The Monitor no longer shows "Loading pages for analysis" and a low % under "Crawl Complete" after Stop & Analyze.
+
 ## [1.8.1] - 2026-10-27
 
 ### Changed

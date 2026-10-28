@@ -33,9 +33,20 @@ type sitemapEntry struct {
 // It uses sitemap URLs from robots.txt if available, otherwise falls back to common paths.
 // Returns deduplicated URLs filtered to the same domain as seedURL.
 func DiscoverSitemapURLs(ctx context.Context, seedURL string, robotsSitemaps []string, client *http.Client, userAgent string) ([]string, error) {
+	var all []string
+	err := discoverSitemaps(ctx, seedURL, robotsSitemaps, client, userAgent, func(urls []string) {
+		all = append(all, urls...)
+	})
+	return all, err
+}
+
+// discoverSitemaps is DiscoverSitemapURLs that hands over the new same-domain
+// URLs of each sitemap file as soon as it is parsed, so a crawl can start
+// on them while the rest download (a news site's index can take minutes).
+func discoverSitemaps(ctx context.Context, seedURL string, robotsSitemaps []string, client *http.Client, userAgent string, emit func([]string)) error {
 	parsed, err := url.Parse(seedURL)
 	if err != nil {
-		return nil, fmt.Errorf("parse seed URL: %w", err)
+		return fmt.Errorf("parse seed URL: %w", err)
 	}
 	seedDomain := parsed.Hostname()
 	origin := fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
@@ -51,17 +62,8 @@ func DiscoverSitemapURLs(ctx context.Context, seedURL string, robotsSitemaps []s
 	}
 
 	seen := make(map[string]bool)
-	var allURLs []string
-
-	for _, smURL := range sitemapURLs {
-		if ctx.Err() != nil {
-			break
-		}
-		urls, err := fetchSitemap(ctx, smURL, client, userAgent, 0)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  [sitemap-discovery] %s: %v\n", smURL, err)
-			continue
-		}
+	keep := func(urls []string) {
+		var out []string
 		for _, u := range urls {
 			normalized := normalizeURL(u)
 			if seen[normalized] {
@@ -73,18 +75,30 @@ func DiscoverSitemapURLs(ctx context.Context, seedURL string, robotsSitemaps []s
 				continue
 			}
 			seen[normalized] = true
-			allURLs = append(allURLs, u)
+			out = append(out, u)
+		}
+		if len(out) > 0 {
+			emit(out)
 		}
 	}
 
-	return allURLs, nil
+	for _, smURL := range sitemapURLs {
+		if ctx.Err() != nil {
+			break
+		}
+		if err := fetchSitemap(ctx, smURL, client, userAgent, 0, keep); err != nil {
+			fmt.Fprintf(os.Stderr, "  [sitemap-discovery] %s: %v\n", smURL, err)
+		}
+	}
+	return nil
 }
 
 // fetchSitemap fetches and parses a single sitemap URL. Handles both urlset and sitemapindex.
 // maxDepth prevents infinite recursion in nested sitemap indexes.
-func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, userAgent string, depth int) ([]string, error) {
+// Page URLs go to emit, one call per urlset file.
+func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, userAgent string, depth int, emit func([]string)) error {
 	if depth > 3 {
-		return nil, fmt.Errorf("sitemap nesting too deep")
+		return fmt.Errorf("sitemap nesting too deep")
 	}
 
 	if client == nil {
@@ -93,7 +107,7 @@ func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, u
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sitemapURL, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if userAgent != "" {
 		req.Header.Set("User-Agent", userAgent)
@@ -102,13 +116,13 @@ func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, u
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
 	// Handle gzip-compressed sitemaps (.xml.gz)
@@ -116,7 +130,7 @@ func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, u
 	if strings.HasSuffix(sitemapURL, ".gz") || resp.Header.Get("Content-Type") == "application/gzip" {
 		gz, err := gzip.NewReader(resp.Body)
 		if err != nil {
-			return nil, fmt.Errorf("gzip: %w", err)
+			return fmt.Errorf("gzip: %w", err)
 		}
 		defer gz.Close()
 		reader = gz
@@ -124,7 +138,7 @@ func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, u
 
 	body, err := io.ReadAll(io.LimitReader(reader, 50<<20)) // 50MB limit
 	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
+		return fmt.Errorf("read body: %w", err)
 	}
 
 	// Try parsing as urlset first
@@ -136,13 +150,13 @@ func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, u
 				urls = append(urls, loc)
 			}
 		}
-		return urls, nil
+		emit(urls)
+		return nil
 	}
 
 	// Try parsing as sitemapindex
 	var idx sitemapIndex
 	if xml.Unmarshal(body, &idx) == nil && len(idx.Sitemaps) > 0 {
-		var allURLs []string
 		for _, sm := range idx.Sitemaps {
 			loc := strings.TrimSpace(sm.Loc)
 			if loc == "" {
@@ -151,16 +165,12 @@ func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, u
 			if ctx.Err() != nil {
 				break
 			}
-			childURLs, err := fetchSitemap(ctx, loc, client, userAgent, depth+1)
-			if err != nil {
+			if err := fetchSitemap(ctx, loc, client, userAgent, depth+1, emit); err != nil {
 				fmt.Fprintf(os.Stderr, "  [sitemap-discovery] %s: %v\n", loc, err)
-				continue
 			}
-			allURLs = append(allURLs, childURLs...)
 		}
-		return allURLs, nil
+		return nil
 	}
 
-	return nil, fmt.Errorf("not a valid XML sitemap")
+	return fmt.Errorf("not a valid XML sitemap")
 }
-

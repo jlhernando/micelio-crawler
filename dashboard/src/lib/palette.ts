@@ -35,3 +35,7 @@ export const GRAPH_PALETTE = [C.blue, C.warning, C.success, '#f2a3c7', C.purple,
 export const GRAPH_RAMP = ['#4a5468', C.blue, '#f2c46d'];
 /** Colour of inbound links / sources in the link map. */
 export const GRAPH_IN_COLOR = C.success;
+
+// Universe links to pages outside the site architecture: errors solid
+// intense red, redirects dashed yellow, URLs blocked by robots.txt dotted grey.
+export const STATUS_LINK_COLORS = { error: '#ff2d3f', redirect: '#ffe14d', blocked: '#c3c7cf' };

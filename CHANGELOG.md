@@ -2,6 +2,23 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [Unreleased]
+
+### Added
+
+- **Universe up front.** Links opens with Universe at the top and selected. Overview has a "Site architecture" card: a small map of the top 4,000 pages by PageRank and their links, with the page and cluster counts. A click opens Universe.
+- **Status pills in Universe.** Errors, Redirects and Robots.txt, each with its count. A click lights up that kind of page and the links to it, and fades everything else, so you see where they sit in the architecture.
+- **Link styles by target.** With "Redirects, errors & blocked" on, links to 4xx/5xx pages are solid red, links to redirects dashed yellow, links to URLs blocked by robots.txt dotted grey. The pages take the same colours.
+
+### Changed
+
+- **Universe draws the site's architecture only**: pages that were fetched and answered 2xx. Errors, URLs blocked by robots.txt and redirects to other sites come back with the "Redirects, errors & blocked" toggle. Same-site redirects stay, because the map merges them with the page they lead to.
+- **A crawl starts in seconds.** Only robots.txt is read before the first request; sitemap discovery and the missing-page (soft 404) check run while the crawl goes. With sitemaps on, bbc.com went from 113.6 s to 2.4 s before its first page. The crawl still waits for sitemap URLs that are on their way, and the log has a `[timing] start` line.
+
+### Fixed
+
+- **No more links fanning out of empty space in Universe.** On big crawls, pages with low PageRank shrank to a faint pixel while their links still showed. Every page now stays a visible dot.
+
 ## [1.8.3] - 2026-10-28
 
 ### Changed

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { UniverseEngine, UniverseMeta, UniverseCard, NodeLinks, Progress, ColorMode } from './universe/engine.js';
+  import { STATUS_LINK_COLORS } from '../../palette';
   // Same colours as the WebGL engine, shared via palette so this component
   // does not pull the lazily loaded engine (three.js) into its chunk.
   import { GRAPH_IN_COLOR, GRAPH_PALETTE } from '../../palette';
@@ -25,6 +26,26 @@
   let sitewide = $state(false);
   let layout = $state<'links' | 'folders'>('links');
   let crossLinks = $state(false);
+  // Redirects, errors and robots-blocked URLs are not site architecture:
+  // the server leaves them out unless this is on.
+  let showAll = $state(false);
+  let allQ = $derived(showAll ? '&all=1' : '');
+  // Status pill: 0 none, 1 redirects, 2 errors, 3 blocked by robots.txt.
+  let highlight = $state<0 | 1 | 2 | 3>(0);
+  const STATUS_PILLS = [
+    { kind: 2, key: 'errors', label: 'Errors', title: '4xx/5xx pages', color: 'error', dash: '' },
+    { kind: 1, key: 'redirects', label: 'Redirects', title: 'redirects', color: 'redirect', dash: '5 3' },
+    { kind: 3, key: 'blocked', label: 'Robots.txt', title: 'URLs blocked by robots.txt', color: 'blocked', dash: '2 3' },
+  ] as const;
+  function pickHighlight(kind: 1 | 2 | 3) {
+    highlight = highlight === kind ? 0 : kind;
+    if (highlight && !showAll) {
+      showAll = true; // these pages are only drawn with the toggle on
+      start(dim);
+      return;
+    }
+    engine?.setHighlight(highlight);
+  }
   let loadingPages = $state(false);
   let colorMode = $state<ColorMode>('cluster');
   const METRICS: [ColorMode, string][] = [['depth', 'Depth'], ['pagerank', 'PageRank'], ['authority', 'Authority'], ['hub', 'Hub']];
@@ -41,7 +62,7 @@
     searchTimer = setTimeout(async () => {
       const seq = ++searchSeq;
       try {
-        const res = await fetch(`${base}/search?dim=${dim}&layout=${layout}&q=${encodeURIComponent(q)}&limit=12`);
+        const res = await fetch(`${base}/search?dim=${dim}&layout=${layout}${allQ}&q=${encodeURIComponent(q)}&limit=12`);
         const data = await res.json();
         if (seq === searchSeq) hits = data.rows ?? [];
       } catch { /* keep previous hits */ }
@@ -83,7 +104,7 @@
   function thumbUrl(i: number): Promise<string | null> {
     let p = thumbCache.get(i);
     if (!p) {
-      p = fetch(`${base}/thumb?i=${i}&dim=${dim}&layout=${layout}`)
+      p = fetch(`${base}/thumb?i=${i}&dim=${dim}&layout=${layout}${allQ}`)
         .then(async (res) => {
           if (!res.ok) return null;
           const url = URL.createObjectURL(await res.blob());
@@ -104,16 +125,17 @@
     const seq = ++startSeq;
     engine?.dispose();
     engine = null;
+    thumbCache.clear(); // page indices change with the view
     meta = null; focused = null; detail = null; error = ''; sitewide = false; crossLinks = false; colorMode = 'cluster'; query = ''; hits = [];
     progress = { loaded: 0, target: 0, edges: 0, edgeTarget: 0, phase: 'pages', reason: '' };
     try {
       // Right after a restart the server loads the crawl's pages in the
       // background and answers 503 until they are ready: wait and retry.
-      let res = await fetch(`${base}?dim=${d}&layout=${layout}`);
+      let res = await fetch(`${base}?dim=${d}&layout=${layout}${allQ}`);
       for (let tries = 0; res.status === 503 && tries < 120 && seq === startSeq; tries++) {
         loadingPages = true;
         await new Promise((r) => setTimeout(r, 1500));
-        res = await fetch(`${base}?dim=${d}&layout=${layout}`);
+        res = await fetch(`${base}?dim=${d}&layout=${layout}${allQ}`);
       }
       loadingPages = false;
       if (seq !== startSeq) return;
@@ -124,7 +146,7 @@
       meta = m;
       dim = m.dim;
       layout = m.layout;
-      const q = `dim=${m.dim}&layout=${m.layout}`;
+      const q = `dim=${m.dim}&layout=${m.layout}${m.all ? '&all=1' : ''}`;
       engine = new UniverseEngine(host, m, {
         nodes: (o, l) => `${base}/nodes?${q}&offset=${o}&limit=${l}`,
         metric: (name, n) => `${base}/metric?${q}&name=${name}&n=${n}`,
@@ -135,6 +157,7 @@
         onSelect: (d) => openDetail(d),
         onProgress: (p) => { progress = p; },
       });
+      if (highlight) engine.setHighlight(highlight);
       await engine.load();
     } catch (e) {
       if ((e as Error).name !== 'AbortError' && seq === startSeq) error = (e as Error).message;
@@ -148,7 +171,7 @@
     rowsLoading = true;
     const offset = reset ? 0 : rows.length;
     try {
-      const res = await fetch(`${base}/cluster?dim=${dim}&layout=${layout}&c=${focused}&sort=${pSort}&dir=${pDir}&offset=${offset}&limit=${PAGE_SIZE}`);
+      const res = await fetch(`${base}/cluster?dim=${dim}&layout=${layout}${allQ}&c=${focused}&sort=${pSort}&dir=${pDir}&offset=${offset}&limit=${PAGE_SIZE}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (seq !== rowsSeq) return; // a newer list request won
@@ -266,6 +289,28 @@
           <span class="uv-switch {crossLinks ? 'on' : ''}"></span>
           Cross links · {compact(Math.max(0, meta.edgesContextual - (progress.treeEdges ?? 0)))}
         </button>
+      {/if}
+      {#if meta.hidden && meta.hidden.redirects + meta.hidden.errors + meta.hidden.blocked + (meta.statusCounts?.redirects ?? 0) > 0}
+        {@const h = meta.hidden}
+        <button class="pointer-events-auto mt-2.5 flex items-center gap-2 rounded-md border border-border bg-[#171819cc] px-2.5 py-1.5 text-[11px] text-fg-2 hover:text-fg {focused !== null ? 'uv-fade' : ''}"
+          title="Off: only pages that answered 2xx, the site's real architecture. On: also {h.redirects.toLocaleString()} redirects, {h.errors.toLocaleString()} errors and {h.blocked.toLocaleString()} URLs blocked by robots.txt"
+          onclick={() => { showAll = !showAll; if (!showAll) highlight = 0; start(dim); }}>
+          <span class="uv-switch {showAll ? 'on' : ''}"></span>
+          Redirects, errors &amp; blocked · {compact(h.redirects + h.errors + h.blocked)}
+        </button>
+        <!-- Status pills: the legend, and a click lights up one kind -->
+        <div class="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] {focused !== null ? 'uv-fade' : ''}">
+          {#each STATUS_PILLS as pill (pill.kind)}
+            {@const n = showAll && meta.statusCounts ? meta.statusCounts[pill.key] : null}
+            <button class="pointer-events-auto flex items-center gap-1.5 rounded-full border px-2.5 py-1 {highlight === pill.kind ? 'border-fg-2 bg-[#292b2e] text-fg' : 'border-border bg-[#171819cc] text-fg-2 hover:text-fg'}"
+              title="Light up {pill.title} and the links to them; everything else fades. Click again to clear."
+              aria-pressed={highlight === pill.kind}
+              onclick={() => pickHighlight(pill.kind)}>
+              <svg width="18" height="6"><line x1="0" y1="3" x2="18" y2="3" stroke={STATUS_LINK_COLORS[pill.color]} stroke-width="2" stroke-dasharray={pill.dash} /></svg>
+              {pill.label}{#if n !== null}&nbsp;· {compact(n)}{/if}
+            </button>
+          {/each}
+        </div>
       {/if}
       {#if meta.hasGraph && meta.sitewideTargets > 0 && (meta.layout !== 'links' || crossLinks)}
         <button class="pointer-events-auto mt-2.5 flex items-center gap-2 rounded-md border border-border bg-[#171819cc] px-2.5 py-1.5 text-[11px] text-fg-2 hover:text-fg {focused !== null ? 'uv-fade' : ''}"

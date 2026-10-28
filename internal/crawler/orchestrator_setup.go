@@ -752,14 +752,16 @@ func (s *crawlSession) seedSitemapMode(ctx context.Context) error {
 	return nil
 }
 
-func (s *crawlSession) shouldAbort() bool {
-	if s.config.MaxErrors > 0 && int(s.errorCount.Load()) >= s.config.MaxErrors {
-		return true
+// abortReason says why the crawl must stop early (max errors or time
+// limit reached), or "" to keep going.
+func (s *crawlSession) abortReason() string {
+	if n := int(s.errorCount.Load()); s.config.MaxErrors > 0 && n >= s.config.MaxErrors {
+		return fmt.Sprintf("max errors reached (%d failed pages)", n)
 	}
-	if s.config.TimeoutSeconds > 0 && time.Since(s.startTime) > time.Duration(s.config.TimeoutSeconds)*time.Second {
-		return true
+	if limit := time.Duration(s.config.TimeoutSeconds) * time.Second; limit > 0 && time.Since(s.startTime) > limit {
+		return fmt.Sprintf("time limit reached (%s)", limit)
 	}
-	return false
+	return ""
 }
 
 func (s *crawlSession) cleanup() {

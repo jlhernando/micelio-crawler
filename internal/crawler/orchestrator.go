@@ -53,8 +53,11 @@ type CrawlResult struct {
 	InternalLinksClose func()
 	Duration           time.Duration
 	Errors             int
-	ChangedPages       int
-	UnchangedPages     int
+	// StopReason is set when the crawl stopped early on its own (time
+	// limit, max errors), with pages still queued.
+	StopReason     string
+	ChangedPages   int
+	UnchangedPages int
 }
 
 // OnProgress is a callback for crawl progress updates.
@@ -144,6 +147,7 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 	}
 	var wg sync.WaitGroup
 	cancelled := false
+	stopReason := "" // why the loop stopped early on its own, if it did
 	lastScavenge := time.Now()
 	// Force OS memory return at most this often. FreeOSMemory runs a full
 	// GC; every 1000 pages it cost ~1000 full collections of a multi-GB
@@ -151,7 +155,7 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 	const scavengeEvery = time.Minute
 
 	for !cancelled {
-		if s.shouldAbort() {
+		if stopReason = s.abortReason(); stopReason != "" {
 			break
 		}
 
@@ -216,7 +220,7 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 	coverage.Final = true
 
 	// Persist pending queue on interruption for later resume
-	interrupted := cancelled || s.shouldAbort()
+	interrupted := cancelled || stopReason != ""
 	if interrupted {
 		s.flushPendingQueue()
 	}
@@ -270,6 +274,7 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 		Pages:                 s.pages,
 		Duration:              time.Since(s.startTime),
 		Errors:                int(s.errorCount.Load()),
+		StopReason:            stopReason,
 		ExternalLinks:         externalLinks,
 		ResourceRefs:          resourceRefs,
 		TransferSizes:         s.transferSizes,

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -190,5 +192,29 @@ func TestGetOrLoadResults_CachedResult(t *testing.T) {
 	}
 	if result.PageCount != 42 {
 		t.Fatalf("expected 42 pages, got %d", result.PageCount)
+	}
+}
+
+// Resuming with edited settings saves them on the job, so the next resume
+// or Recrawl does not bring back the old ones.
+func TestRestartSavesEditedConfig(t *testing.T) {
+	_, s, m := newTestAPI(t)
+	dbPath := filepath.Join(t.TempDir(), "crawl.db")
+	os.WriteFile(dbPath, nil, 0o644)
+	seed := "http://127.0.0.1:1/" // blocked as private: the resumed crawl ends at once
+	job, err := s.CreateCrawlJobWithDB(map[string]interface{}{"seedUrl": seed, "timeoutSeconds": 60, "maxErrors": 3}, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.UpdateCrawlJob(job.ID, map[string]interface{}{"status": "completed", "completedAt": "2026-01-01T00:00:00Z", "durationMs": 60000})
+	if _, err := m.RestartCrawl(job.ID, map[string]interface{}{"seedUrl": seed, "retries": 2}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetCrawlJob(job.ID)
+	if got.Config["timeoutSeconds"] != nil || got.Config["maxErrors"] != nil || got.Config["retries"] != float64(2) {
+		t.Errorf("saved config = %v, want the edited one", got.Config)
+	}
+	if got.Config["resume"] != nil || got.Config["dbPath"] != nil {
+		t.Errorf("resume/dbPath saved in the job config: %v", got.Config)
 	}
 }

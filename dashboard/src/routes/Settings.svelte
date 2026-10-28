@@ -67,10 +67,12 @@
   let savedSnapshot = $state('');
 
   const DEFAULTS: Settings = {
-    defaultDepth: 3,
-    defaultLimit: 500,
-    defaultConcurrency: 5,
-    defaultDelay: 0,
+    // Same as the New Crawl page, so saving Settings for something else
+    // does not change the next crawl.
+    defaultDepth: 20,
+    defaultLimit: 1000000,
+    defaultConcurrency: 3,
+    defaultDelay: 200,
     defaultUserAgent: '',
     psiKey: '',
     aiProvider: '',
@@ -92,7 +94,7 @@
     similarityThreshold: 0.85,
     defaultNgrams: false,
     defaultLinkIntelligence: false,
-    liMaxSuggestions: 200,
+    liMaxSuggestions: 50,
     liNoCentrality: false,
     defaultSitemapOut: false,
     defaultOutputFormat: 'jsonl',
@@ -420,6 +422,7 @@
             oninput={(e) => setNum('defaultDelay', (e.target as HTMLInputElement).value)}
             class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent"
           />
+          <span class="mt-1 block text-[11px] text-fg-2">Per site: {num('defaultDelay') > 0 ? `max ≈ ${(1000 / num('defaultDelay')).toLocaleString(undefined, { maximumFractionDigits: 1 })} pages/s` : 'no cap'}. Used by New Crawl.</span>
         </label>
       </div>
       <label class="block mt-3">

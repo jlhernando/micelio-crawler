@@ -18,7 +18,7 @@
   let depth = $state(20);
   let limit = $state(1000000);
   let concurrency = $state(3);
-  let delay = $state(1000);
+  let delay = $state(200); // per site: max 5 pages/s
   let userAgent = $state('');
 
   // Include/Exclude
@@ -188,6 +188,37 @@
         error = 'Failed to load crawl config for resuming';
         resumeId = null;
       });
+    } else {
+      // A new crawl starts from Settings → Default Crawl Settings (only the
+      // values saved there; the rest keep this page's defaults).
+      api.getSettings().then(st => {
+        const n = (k: string) => (typeof st[k] === 'number' ? (st[k] as number) : undefined);
+        const d = n('defaultDepth'), l = n('defaultLimit'), c = n('defaultConcurrency'), dl = n('defaultDelay');
+        if (d !== undefined && d > 0) depth = d;
+        if (l !== undefined && l > 0) limit = l;
+        if (c !== undefined && c > 0) concurrency = c;
+        if (dl !== undefined && dl >= 0) delay = dl;
+        if (typeof st.defaultUserAgent === 'string' && st.defaultUserAgent) {
+          userAgent = st.defaultUserAgent;
+          onUaManualEdit();
+        }
+        const b = (k: string) => (typeof st[k] === 'boolean' ? (st[k] as boolean) : undefined);
+        checkExternal = b('defaultCheckExternal') ?? checkExternal;
+        jsRendering = b('defaultJsRendering') ?? jsRendering;
+        respectRobots = b('defaultRespectRobots') ?? respectRobots;
+        showBlockedInternal = b('defaultShowBlockedInternal') ?? showBlockedInternal;
+        htmlReport = b('defaultHtmlReport') ?? htmlReport;
+        sitemapOut = b('defaultSitemapOut') ?? sitemapOut;
+        ngrams = b('defaultNgrams') ?? ngrams;
+        embeddings = b('defaultEmbeddings') ?? embeddings;
+        linkIntelligence = b('defaultLinkIntelligence') ?? linkIntelligence;
+        liNoCentrality = b('liNoCentrality') ?? liNoCentrality;
+        const lm = n('liMaxSuggestions'), th = n('similarityThreshold');
+        if (lm !== undefined && lm > 0) liMaxSuggestions = lm;
+        if (th !== undefined && th > 0) similarityThreshold = th;
+        if (typeof st.embeddingModel === 'string' && st.embeddingModel) embeddingModel = st.embeddingModel;
+        if (st.defaultOutputFormat === 'jsonl' || st.defaultOutputFormat === 'csv') outputFormat = st.defaultOutputFormat;
+      }).catch(() => {});
     }
 
     api.listCrawls().then(data => {
@@ -561,6 +592,13 @@
         <label for="delay" class="block text-xs font-medium text-fg-2 mb-1">Delay (ms)</label>
         <NumberInput id="delay" min={0} bind:value={delay}
           className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent" />
+        <p class="mt-1 text-[11px] text-fg-2" data-testid="speed-cap">
+          {#if delay > 0}
+            Max ≈ {(1000 / delay).toLocaleString(undefined, { maximumFractionDigits: 1 })} pages/s: the delay is per site, so more concurrency does not go faster.
+          {:else}
+            No delay: speed depends on concurrency and the site's response time.
+          {/if}
+        </p>
       </div>
     </div>
   </div>

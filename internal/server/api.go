@@ -689,9 +689,9 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 	})
 
 	mux.HandleFunc("DELETE /api/crawl/{id}", func(w http.ResponseWriter, r *http.Request) {
-		deleted, err := store.DeleteCrawlJob(r.PathValue("id"))
+		deleted, err := manager.DeleteCrawl(r.PathValue("id"))
 		if err != nil {
-			jsonError(w, err.Error(), http.StatusInternalServerError)
+			jsonError(w, err.Error(), http.StatusConflict)
 			return
 		}
 		if !deleted {

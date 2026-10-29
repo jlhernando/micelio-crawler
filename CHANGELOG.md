@@ -2,6 +2,14 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.8.5] - 2026-10-29
+
+### Fixed
+
+- **Page Limit and the other number fields on New Crawl send what they show.** Clicking into a field rewrote "1,000,000" as "1000000" and lost your selection, so typing 150 over it gave 1000000150. The value was also only saved when you left the field. Now every keystroke counts, commas are ignored, and an empty or invalid field turns red and blocks Start with "<field>: enter a number." This applies to all 12 number fields.
+- **A page picked in Universe's search lands in the middle of the visible map**, between the side panel and the page card, so a click there selects it. Orbit and zoom turn around the selected page.
+- The Schedules dashboard test uses the current form again.
+
 ## [1.8.4] - 2026-10-28
 
 ### Added

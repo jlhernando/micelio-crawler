@@ -242,7 +242,7 @@ export class UniverseEngine {
   private marker: CSS2DObject | null = null;
   private chips: { el: HTMLElement; obj: CSS2DObject; c: UniverseCluster }[] = [];
   private progress: Progress = { loaded: 0, target: 0, edges: 0, edgeTarget: 0, phase: 'pages', reason: '' };
-  private fly: { t: number; fp: THREE.Vector3; ft: THREE.Vector3; tp: THREE.Vector3; tt: THREE.Vector3 } | null = null;
+  private fly: { t: number; fp: THREE.Vector3; ft: THREE.Vector3; tp: THREE.Vector3; tt: THREE.Vector3; fl: number; tl: number } | null = null;
   private frame = 0;
   private visible = true;
   private abort = new AbortController();
@@ -251,7 +251,9 @@ export class UniverseEngine {
   private visObs: IntersectionObserver;
   private radius = 1000;
   private placed = false;
-  private panelPx = 470;
+  private panelPx = 456; // side panel: 440px + 16px inset
+  private cardPx = 396; // page detail card on the left (380px + 16px inset)
+  private viewLeft = 0; // canvas px on the left hidden by an overlay; the orbit target sits centred in what is left
   private focused: number | null = null;
   private selected: number | null = null;
   private down: { x: number; y: number } | null = null;
@@ -693,7 +695,7 @@ export class UniverseEngine {
     this.renderer.domElement.style.height = h + 'px';
     this.css.setSize(w, h);
     this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
+    this.applyView();
     this.pointMat.uniforms.projScale.value = (h * this.renderer.getPixelRatio()) / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)));
     this.viewport.set(w * this.renderer.getPixelRatio(), h * this.renderer.getPixelRatio());
     if (!this.placed) {
@@ -705,6 +707,13 @@ export class UniverseEngine {
     this.request();
   }
 
+  /** Shifts the projection so the orbit target lands in the middle of the free area between the overlays. */
+  private applyView() {
+    const w = this.host.clientWidth, h = this.host.clientHeight;
+    if (!w || !h) return;
+    this.camera.setViewOffset(w, h, (this.panelPx - this.viewLeft) / 2, 0, w, h);
+  }
+
   /** Camera that fits every cluster into the area left of the side panel. */
   private homeView() {
     const w = this.host.clientWidth || 1200;
@@ -712,10 +721,8 @@ export class UniverseEngine {
     const frac = Math.max(0.4, (w - this.panelPx) / w);
     const r = this.meta.extent ?? this.radius;
     const d = Math.max(r / tan, r / (tan * this.camera.aspect * frac)) * 0.95 + r * 0.4;
-    const off = (this.panelPx / 2 / w) * 2 * d * tan * this.camera.aspect;
     const dir = new THREE.Vector3(-0.28, 0.32, 1).normalize();
-    const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), dir).normalize();
-    const target = right.multiplyScalar(off).add(new THREE.Vector3(...(this.meta.center ?? [0, 0, 0])));
+    const target = new THREE.Vector3(...(this.meta.center ?? [0, 0, 0]));
     return { target, pos: target.clone().add(dir.multiplyScalar(d)) };
   }
 
@@ -733,6 +740,8 @@ export class UniverseEngine {
       const e = f.t < 0.5 ? 4 * f.t ** 3 : 1 - Math.pow(-2 * f.t + 2, 3) / 2;
       this.camera.position.lerpVectors(f.fp, f.tp, e);
       this.controls.target.lerpVectors(f.ft, f.tt, e);
+      this.viewLeft = f.fl + (f.tl - f.fl) * e;
+      this.applyView();
       if (f.t >= 1) this.fly = null;
       again = true;
     }
@@ -761,8 +770,9 @@ export class UniverseEngine {
     }
   }
 
-  private flyTo(target: THREE.Vector3, pos: THREE.Vector3) {
-    this.fly = { t: 0, fp: this.camera.position.clone(), ft: this.controls.target.clone(), tp: pos, tt: target };
+  /** Flies the camera; `left` is the overlay width on the left the target is centred beside. */
+  private flyTo(target: THREE.Vector3, pos: THREE.Vector3, left = 0) {
+    this.fly = { t: 0, fp: this.camera.position.clone(), ft: this.controls.target.clone(), tp: pos, tt: target, fl: this.viewLeft, tl: left };
     this.request();
   }
 
@@ -847,11 +857,9 @@ export class UniverseEngine {
     const tan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
     const frac = Math.max(0.4, (w - this.panelPx) / w);
     const d = Math.max(c.spread * 1.25 / tan, c.spread * 1.25 / (tan * this.camera.aspect * frac)) + c.spread;
-    const off = (this.panelPx / 2 / w) * 2 * d * tan * this.camera.aspect;
     const center = new THREE.Vector3(...c.center);
     const dir = this.camera.position.clone().sub(this.controls.target).normalize();
-    const right = new THREE.Vector3().crossVectors(this.camera.up, dir).normalize().multiplyScalar(off);
-    this.flyTo(center.clone().add(right), center.clone().add(right).add(dir.multiplyScalar(d)));
+    this.flyTo(center, center.clone().add(dir.multiplyScalar(d)));
     if (this.meta.hasGraph && this.crossLinks) this.loadClusterLinks(i);
   }
 
@@ -910,9 +918,12 @@ export class UniverseEngine {
       this.marker.position.copy(this.worldPos(i));
       this.scene.add(this.marker);
       if (fly) {
+        // Orbit around the page, centred between the side panel and its detail card
+        // (unless the card leaves no usable strip).
         const p = this.worldPos(i);
         const dir = this.camera.position.clone().sub(this.controls.target);
-        this.flyTo(p, p.clone().add(dir));
+        const free = (this.host.clientWidth || 1200) - this.panelPx - this.cardPx;
+        this.flyTo(p, p.clone().add(dir), free >= 120 ? this.cardPx : 0);
       }
     }
     this.ev.onSelect(data);

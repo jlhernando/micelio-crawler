@@ -52,11 +52,47 @@ test('Setup presets and submit keep the crawl configuration',async({page})=>{
   expect(writes.find(w=>w.path==='/api/crawl/start')?.body.seedUrl).toBe('https://new.example');
 });
 
+test('Page Limit sends what the field shows', async ({page}) => {
+  const writes = await mockApi(page); await page.goto('/#/setup');
+  await page.locator('#url').fill('https://new.example');
+  const limit = page.locator('#limit');
+  await expect(limit).toHaveValue('1,000,000');
+  // Select-all then type: the old field rewrote its text on focus, lost the
+  // selection and sent 1000000150.
+  await limit.evaluate((e: HTMLInputElement) => { e.focus(); e.select(); });
+  await page.keyboard.type('150');
+  await expect(limit).toHaveValue('150');
+  await page.getByRole('button', {name: 'Start Crawl', exact: true}).click();
+  await expect(page).toHaveURL(/monitor\/live/);
+  expect(writes.find(w => w.path === '/api/crawl/start')?.body.limit).toBe(150);
+});
+
+test('An emptied Page Limit blocks Start instead of sending a hidden value', async ({page}) => {
+  const writes = await mockApi(page); await page.goto('/#/setup');
+  await page.locator('#url').fill('https://new.example');
+  const limit = page.locator('#limit');
+  await expect(limit).toHaveValue('1,000,000');
+  await limit.evaluate((e: HTMLInputElement) => {
+    e.value = undefined as unknown as string; // what an automation tool did: the old field showed "undefined"
+    e.dispatchEvent(new Event('input', {bubbles: true}));
+  });
+  await expect(limit).toHaveValue('');
+  await expect(limit).toHaveAttribute('aria-invalid', 'true');
+  await page.getByRole('button', {name: 'Start Crawl', exact: true}).click();
+  await expect(page.getByText('Page Limit: enter a number.')).toBeVisible();
+  expect(writes.find(w => w.path === '/api/crawl/start')).toBeUndefined();
+  await limit.fill('1,500');
+  await page.getByRole('button', {name: 'Start Crawl', exact: true}).click();
+  await expect(page).toHaveURL(/monitor\/live/);
+  expect(writes.find(w => w.path === '/api/crawl/start')?.body.limit).toBe(1500);
+});
+
 test('Schedules can create and settings can save',async({page})=>{
   const writes=await mockApi(page);await page.goto('/#/schedules');
   await page.getByRole('button',{name:'New Schedule',exact:true}).click();
-  await page.locator('#sched-url').fill('https://new.example');
-  await page.getByRole('button',{name:'Create Schedule',exact:true}).click();
+  // The form was rebuilt: labelled fields, "Create schedule".
+  await page.getByLabel('Start URL',{exact:true}).fill('https://new.example');
+  await page.getByRole('button',{name:'Create schedule',exact:true}).click();
   await expect.poll(()=>writes.some(w=>w.path==='/api/schedules')).toBe(true);
   await page.goto('/#/settings');
   await page.getByRole('button',{name:'Reset Defaults',exact:true}).first().click();

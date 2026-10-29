@@ -457,14 +457,32 @@
     return config;
   }
 
+  // Blur a focused number field so it shows (and binds) the value about to be
+  // sent, then name the first number field left empty or invalid, if any.
+  function numberFieldError(): string {
+    const el = document.activeElement;
+    if (el instanceof HTMLInputElement) el.blur();
+    const bad = document.querySelector<HTMLInputElement>('input[data-number-invalid]');
+    if (!bad) return '';
+    const label = document.querySelector(`label[for="${bad.id}"]`)?.textContent?.trim() || 'A number field';
+    return `${label}: enter a number.`;
+  }
+
   let showSchedule = $state(false);
   function scheduleConfig() {
+    const numErr = numberFieldError();
+    if (numErr) throw new Error(numErr);
     const target = mode === 'spider' ? url : mode === 'list' ? urlList : sitemapUrls;
     if (!target.trim()) throw new Error('Please enter a URL or file path');
     return buildConfig();
   }
 
   async function startCrawl() {
+    const numErr = numberFieldError();
+    if (numErr) {
+      error = numErr;
+      return;
+    }
     const target = mode === 'spider' ? url : mode === 'list' ? urlList : sitemapUrls;
     if (!target.trim()) {
       error = 'Please enter a URL or file path';

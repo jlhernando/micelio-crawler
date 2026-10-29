@@ -73,6 +73,7 @@ func NewUiStore() (*UiStore, error) {
 		return nil, err
 	}
 	s.recoverStaleJobs()
+	s.removeOrphanCrawlFiles()
 	return s, nil
 }
 

@@ -2,6 +2,16 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.8.6] - 2026-10-29
+
+### Fixed
+
+- **Deleting a crawl deletes its data file.** History removed the crawl but left its database in `~/.micelio/ui/crawls/`, so deleted crawls kept using disk (hundreds of MB for big ones). Now the file goes too, unless another crawl still uses it (a resumed crawl shares it) or it lives outside that folder (a custom path is yours). At start, Micelio removes once the files that older versions left behind.
+
+### Changed
+
+- A running crawl can no longer be deleted: cancel it first.
+
 ## [1.8.5] - 2026-10-29
 
 ### Fixed

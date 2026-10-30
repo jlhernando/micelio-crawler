@@ -554,6 +554,10 @@ func (s *crawlSession) setupRobotsAndDelay(ctx context.Context) {
 		floor = s.adaptiveRL.baseRate
 	}
 	s.hostRL = newHostRateLimiter(floor, s.adaptiveRL)
+	// Every request the crawl sends to a site goes through it: crawl
+	// workers, the soft-404 probe, page-weight HEADs and sitemap downloads,
+	// which run alongside the workers.
+	s.fetchOpts.Pace = s.hostRL.pace
 
 	isSpiderMode := s.config.Mode == types.ModeSpider || s.config.Mode == ""
 	if !isSpiderMode || !s.config.RespectRobots {
@@ -639,7 +643,7 @@ func (s *crawlSession) setupSitemapDiscovery(ctx context.Context) {
 	fmt.Fprintf(os.Stderr, "  [sitemap-discovery] Fetching sitemaps (crawl continues meanwhile)...\n")
 	enqueued := 0
 	ref := "sitemap"
-	err := discoverSitemaps(ctx, s.seedURL, robotsSitemaps, s.fetchOpts.Client, s.config.UserAgent, func(urls []string) {
+	err := discoverSitemaps(ctx, s.seedURL, robotsSitemaps, s.fetchOpts.Client, s.config.UserAgent, s.fetchOpts.Pace, func(urls []string) {
 		s.discoveredSitemapURLs = append(s.discoveredSitemapURLs, urls...)
 		// Enqueue sitemap URLs into crawl queue at depth 0
 		for _, u := range urls {
@@ -716,7 +720,7 @@ func (s *crawlSession) seedSitemapMode(ctx context.Context) error {
 			return ctx.Err()
 		}
 		var urls []string
-		err := fetchSitemap(ctx, sm, s.fetchOpts.Client, s.config.UserAgent, 0, func(u []string) { urls = append(urls, u...) })
+		err := fetchSitemap(ctx, sm, s.fetchOpts.Client, s.config.UserAgent, s.fetchOpts.Pace, 0, func(u []string) { urls = append(urls, u...) })
 		if err != nil {
 			lastErr = err
 			fmt.Fprintf(os.Stderr, "  [sitemap] %s: %v\n", sm, err)

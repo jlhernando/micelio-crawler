@@ -429,10 +429,17 @@ func TestCrawlRetryAfterPausesHost(t *testing.T) {
 	}
 }
 
-// TestCrawlDelayNeverUndercut checks the effective spacing with adaptive rate on.
+// TestCrawlDelayNeverUndercut checks the effective spacing with adaptive rate
+// on, as the server sees it. New connections take 120 ms to set up (like
+// TCP+TLS to a real server) and the server closes every other connection, so
+// some requests go out late while the next one reuses a warm connection. The
+// old limiter booked slots in advance and sent that next request on its
+// original slot, 80 ms after the late one.
 func TestCrawlDelayNeverUndercut(t *testing.T) {
+	slowNewConnections(t, 120*time.Millisecond)
 	var mu sync.Mutex
 	var times []time.Time
+	var paths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/robots.txt" {
 			fmt.Fprint(w, "User-agent: *\nCrawl-delay: 0.2\n")
@@ -440,7 +447,12 @@ func TestCrawlDelayNeverUndercut(t *testing.T) {
 		}
 		mu.Lock()
 		times = append(times, time.Now())
+		paths = append(paths, r.URL.Path)
+		closeConn := len(times)%2 == 1
 		mu.Unlock()
+		if closeConn {
+			w.Header().Set("Connection", "close")
+		}
 		w.Header().Set("Content-Type", "text/html")
 		html := "<html><body>"
 		for i := 0; i < 12; i++ {
@@ -460,9 +472,8 @@ func TestCrawlDelayNeverUndercut(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	for i := 1; i < len(times); i++ {
-		if g := times[i].Sub(times[i-1]); g < 180*time.Millisecond {
-			t.Fatalf("request %d came %v after the previous one; Crawl-delay is 200ms", i, g)
-		}
+	if len(times) < 8 {
+		t.Fatalf("only %d requests reached the server", len(times))
 	}
+	assertSpacing(t, times, paths, 200*time.Millisecond)
 }

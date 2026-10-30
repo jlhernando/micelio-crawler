@@ -34,7 +34,7 @@ type sitemapEntry struct {
 // Returns deduplicated URLs filtered to the same domain as seedURL.
 func DiscoverSitemapURLs(ctx context.Context, seedURL string, robotsSitemaps []string, client *http.Client, userAgent string) ([]string, error) {
 	var all []string
-	err := discoverSitemaps(ctx, seedURL, robotsSitemaps, client, userAgent, func(urls []string) {
+	err := discoverSitemaps(ctx, seedURL, robotsSitemaps, client, userAgent, nil, func(urls []string) {
 		all = append(all, urls...)
 	})
 	return all, err
@@ -43,7 +43,9 @@ func DiscoverSitemapURLs(ctx context.Context, seedURL string, robotsSitemaps []s
 // discoverSitemaps is DiscoverSitemapURLs that hands over the new same-domain
 // URLs of each sitemap file as soon as it is parsed, so a crawl can start
 // on them while the rest download (a news site's index can take minutes).
-func discoverSitemaps(ctx context.Context, seedURL string, robotsSitemaps []string, client *http.Client, userAgent string, emit func([]string)) error {
+// pace (FetchOptions.Pace, may be nil) spaces the downloads with the crawl's
+// own requests to the same host.
+func discoverSitemaps(ctx context.Context, seedURL string, robotsSitemaps []string, client *http.Client, userAgent string, pace func(context.Context, string) func(), emit func([]string)) error {
 	parsed, err := url.Parse(seedURL)
 	if err != nil {
 		return fmt.Errorf("parse seed URL: %w", err)
@@ -86,7 +88,7 @@ func discoverSitemaps(ctx context.Context, seedURL string, robotsSitemaps []stri
 		if ctx.Err() != nil {
 			break
 		}
-		if err := fetchSitemap(ctx, smURL, client, userAgent, 0, keep); err != nil {
+		if err := fetchSitemap(ctx, smURL, client, userAgent, pace, 0, keep); err != nil {
 			fmt.Fprintf(os.Stderr, "  [sitemap-discovery] %s: %v\n", smURL, err)
 		}
 	}
@@ -96,7 +98,7 @@ func discoverSitemaps(ctx context.Context, seedURL string, robotsSitemaps []stri
 // fetchSitemap fetches and parses a single sitemap URL. Handles both urlset and sitemapindex.
 // maxDepth prevents infinite recursion in nested sitemap indexes.
 // Page URLs go to emit, one call per urlset file.
-func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, userAgent string, depth int, emit func([]string)) error {
+func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, userAgent string, pace func(context.Context, string) func(), depth int, emit func([]string)) error {
 	if depth > 3 {
 		return fmt.Errorf("sitemap nesting too deep")
 	}
@@ -114,7 +116,7 @@ func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, u
 	}
 	req.Header.Set("Accept", "application/xml, text/xml, */*")
 
-	resp, err := client.Do(req)
+	resp, err := pacedDo(client, req, pace)
 	if err != nil {
 		return err
 	}
@@ -165,7 +167,7 @@ func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, u
 			if ctx.Err() != nil {
 				break
 			}
-			if err := fetchSitemap(ctx, loc, client, userAgent, depth+1, emit); err != nil {
+			if err := fetchSitemap(ctx, loc, client, userAgent, pace, depth+1, emit); err != nil {
 				fmt.Fprintf(os.Stderr, "  [sitemap-discovery] %s: %v\n", loc, err)
 			}
 		}

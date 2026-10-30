@@ -217,14 +217,14 @@ func TestTokenBucketStaggering(t *testing.T) {
 
 	// First call should return immediately
 	start := time.Now()
-	tb.Wait(ctx)
+	tb.Wait(ctx)()
 	if d := time.Since(start); d > 20*time.Millisecond {
 		t.Errorf("first Wait took %v, expected immediate", d)
 	}
 
 	// Second call should wait ~100ms
 	start = time.Now()
-	tb.Wait(ctx)
+	tb.Wait(ctx)()
 	if d := time.Since(start); d < 80*time.Millisecond {
 		t.Errorf("second Wait took %v, expected ~100ms", d)
 	}
@@ -233,25 +233,25 @@ func TestTokenBucketStaggering(t *testing.T) {
 func TestTokenBucketSetInterval(t *testing.T) {
 	tb := newTokenBucket(50 * time.Millisecond)
 	ctx := context.Background()
-	tb.Wait(ctx) // consume first token
+	tb.Wait(ctx)() // consume first token
 
-	// Change interval to 200ms
+	// Raising the interval applies to the very next request.
 	tb.SetInterval(200 * time.Millisecond)
 	start := time.Now()
-	tb.Wait(ctx)
-	if d := time.Since(start); d < 40*time.Millisecond {
-		t.Errorf("Wait after SetInterval took %v, expected >= 50ms", d)
+	tb.Wait(ctx)()
+	if d := time.Since(start); d < 180*time.Millisecond {
+		t.Errorf("Wait after SetInterval took %v, expected ~200ms", d)
 	}
 }
 
 func TestTokenBucketContextCancel(t *testing.T) {
 	tb := newTokenBucket(5 * time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
-	tb.Wait(ctx) // consume first token
+	tb.Wait(ctx)() // consume first token
 
 	cancel()
 	start := time.Now()
-	tb.Wait(ctx)
+	tb.Wait(ctx)()
 	if d := time.Since(start); d > 100*time.Millisecond {
 		t.Errorf("Wait on cancelled ctx took %v, expected immediate", d)
 	}
@@ -294,10 +294,10 @@ func TestExtractDomain(t *testing.T) {
 func TestTokenBucketPause(t *testing.T) {
 	tb := newTokenBucket(0)
 	ctx := context.Background()
-	tb.Wait(ctx)
+	tb.Wait(ctx)()
 	tb.PauseFor(150 * time.Millisecond)
 	start := time.Now()
-	tb.Wait(ctx)
+	tb.Wait(ctx)()
 	if d := time.Since(start); d < 130*time.Millisecond {
 		t.Fatalf("Wait during pause took %v, expected >= 150ms", d)
 	}
@@ -321,12 +321,12 @@ func TestHostRateLimiterFloorAndPause(t *testing.T) {
 	h.Pause("https://b.com/", 200*time.Millisecond)
 	ctx := context.Background()
 	start := time.Now()
-	h.Wait(ctx, "https://c.com/")
+	h.Wait(ctx, "https://c.com/")()
 	if d := time.Since(start); d > 50*time.Millisecond {
 		t.Fatalf("unpaused host waited %v", d)
 	}
 	start = time.Now()
-	h.Wait(ctx, "https://b.com/z")
+	h.Wait(ctx, "https://b.com/z")()
 	if d := time.Since(start); d < 180*time.Millisecond {
 		t.Fatalf("paused host waited only %v", d)
 	}

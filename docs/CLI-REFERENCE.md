@@ -15,8 +15,9 @@ This reference matches the commands and flags in the current source tree. Run
 | `verify-bot <ip...>` | Check IPs against Google's official crawler ranges |
 | `diff <old.jsonl> <new.jsonl>` | Compare two crawl exports |
 | `generate-sitemap <input.jsonl>` | Build an XML sitemap from eligible crawl results |
+| `import <file>` | Add a crawl made elsewhere to the dashboard's History and analyse it |
 | `logs <file...>` | Analyze and merge server access logs |
-| `schedule <url>` | Register a recurring Spider crawl |
+| `schedule [url]` | Run crawls on a cron schedule, with prechecks and reports |
 | `schedules` | List registered schedules and their state |
 | `gsc-auth` | Manage the local Search Console OAuth token |
 | `ui` | Start the embedded web dashboard |
@@ -50,12 +51,12 @@ micelio crawl <url> [flags]
 | `--delay <ms>` | `200` | Minimum request delay |
 | `--max-errors <n>` | `0` | Stop after N errors; 0 is unlimited |
 | `--timeout <seconds>` | `0` | Stop after N seconds; 0 is unlimited |
-| `--allowed-domains <domain>` | — | Add an allowed domain; repeat the flag for more |
-| `--include <regex>` | — | Include matching URLs; repeatable |
-| `--exclude <regex>` | — | Exclude matching URLs; repeatable |
+| `--allowed-domains <domain>` | | Add an allowed domain; repeat the flag for more |
+| `--include <regex>` | | Include matching URLs; repeatable |
+| `--exclude <regex>` | | Exclude matching URLs; repeatable |
 | `--discover-sitemaps` | off | Add sitemap-listed URLs to a Spider crawl |
-| `-o, --output <path>` | — | Page-data output path |
-| `-f, --format <format>` | — | `jsonl` or `csv` |
+| `-o, --output <path>` | | Page-data output path |
+| `-f, --format <format>` | | `jsonl` or `csv` |
 | `--html` | off | Generate an interactive HTML report |
 | `--html-open` | off | Open the generated HTML report |
 | `--sitemap-out` | off | Generate an XML sitemap from indexable pages |
@@ -63,25 +64,31 @@ micelio crawl <url> [flags]
 | `--no-db` | off | Disable automatic database creation |
 | `--resume` | off | Resume an interrupted crawl from `--db` |
 | `--full-anchors` | off | Preserve full anchor detail in page output |
+| `--no-analysis` | off | Only crawl and save; skip post-crawl analysis (run it later with `micelio import`) |
+| `--db-only` | off | Write only the crawl database, no JSONL/CSV output |
+| `--no-soft404-probe` | off | Skip the one request for a URL that cannot exist (soft-404 check) |
 
 When no database path is supplied, the CLI derives one from the output path or
 seed domain. `--resume` cannot be combined with `--no-db`.
+
+`--max-errors` exists on the CLI only. Dashboard crawls retry failed URLs instead
+(New Crawl > Retries per URL) and never stop because of failures.
 
 ### HTTP, robots, rendering, and safety
 
 | Flag | Default | Meaning |
 |---|---:|---|
 | `-u, --user-agent <value>` | `Micelio/1.0` | Request user agent |
-| `-H, --header "Name: Value"` | — | Add a custom request header; repeatable |
-| `--cookies <value>` | — | Initial Cookie header |
-| `--proxy <url>` | — | HTTP, HTTPS, or SOCKS5 proxy; `tor` selects Tor |
+| `-H, --header "Name: Value"` | | Add a custom request header; repeatable |
+| `--cookies <value>` | | Initial Cookie header |
+| `--proxy <url>` | | HTTP, HTTPS, or SOCKS5 proxy; `tor` selects Tor |
 | `--no-robots` | off | Ignore robots.txt restrictions |
 | `--show-blocked-internal` | off | Include internally discovered URLs blocked by robots.txt |
 | `--adaptive-rate` | off | Adjust request rate from server feedback |
 | `--delay-factor <n>` | `0` | Adaptive gap as a multiple of average response time |
 | `--stealth` | off | Mimic a Chrome TLS/HTTP fingerprint |
 | `--tor-control-port <host:port>` | `127.0.0.1:9051` when used | Tor control endpoint |
-| `--tor-password <value>` | — | Tor control password |
+| `--tor-password <value>` | | Tor control password |
 | `--tor-rotate <n>` | `50` when used | Rotate the Tor circuit every N requests |
 | `--js` | off | Render pages in headless Chrome |
 | `--render-block-resources` | on | Block images, fonts, and analytics while rendering |
@@ -104,7 +111,7 @@ seed domain. `--resume` cannot be combined with `--no-db`.
 | `--link-intelligence` | off | Compute graph metrics, orphans, and suggestions |
 | `--li-no-centrality` | off | Skip expensive centrality calculations |
 | `--li-max-suggestions <n>` | `20` | Maximum internal-link suggestions |
-| `--segment <name:pattern>` | — | Add a named URL segment; repeatable |
+| `--segment <name:pattern>` | | Add a named URL segment; repeatable |
 
 ### Extraction and AI analysis
 
@@ -118,13 +125,49 @@ seed domain. `--resume` cannot be combined with `--no-db`.
 | `--ai-model <name>` | Override the provider model |
 | `--ai-key <key>` | Provider key; environment fallback is supported |
 
-Snippet files are expressions, not ES modules. Their return values are stored in
-`snippetResults` under the filename:
+### Custom snippets
+
+`--snippet` runs your own JavaScript on each page in headless Chrome. It needs
+`--js`. Snippet files hold **raw JavaScript expressions**, not ES modules. The
+return value is stored in the crawl results under `snippetResults`, keyed by
+filename. The `snippets/` folder of the repository has ready-made examples
+(accessibility, analytics, console errors, cookie consent, performance, tech
+stack).
+
+```bash
+micelio crawl https://example.com --js \
+  --snippet snippets/tech-stack.js --snippet ./my-snippet.js
+```
+
+A single value:
 
 ```javascript
+// heading.js
+document.querySelector('h1')?.textContent
+```
+
+An object with several values:
+
+```javascript
+// hero-data.js
 ({
   heading: document.querySelector('h1')?.textContent,
-  productCount: document.querySelectorAll('[data-product]').length
+  heroImage: document.querySelector('.hero img')?.src,
+  articleDate: document.querySelector('time')?.getAttribute('datetime'),
+  wordCount: document.body.innerText.split(/\s+/).length
+})
+```
+
+Quick audit checks:
+
+```javascript
+// audit-checks.js
+({
+  hasLazyImages: document.querySelectorAll('img[loading="lazy"]').length,
+  hasCookieBanner: !!document.querySelector('[class*="cookie"], [id*="cookie"]'),
+  externalScripts: [...document.querySelectorAll('script[src]')]
+    .filter(s => !s.src.includes(location.hostname))
+    .map(s => s.src)
 })
 ```
 
@@ -170,9 +213,37 @@ micelio crawl https://example.com \
 micelio crawl https://example.com \
   --db example.db --adaptive-rate --delay-factor 5 --max-pages 100000
 
-# Custom extraction and a source regex
+# Custom extraction, a literal search and a source regex
 micelio crawl https://example.com \
-  --extract 'author:.author-name' --search '/out of stock/i'
+  --extract 'author:.author-name' \
+  --search 'out of stock' \
+  --search '/price:\s*\$[\d,]+/'
+
+# Full audit with the main analyses
+micelio crawl https://example.com --link-intelligence --ngrams --page-weight --check-external --html
+
+# JS rendering with a Chrome user agent
+micelio crawl https://example.com --js --max-pages 200 \
+  -u "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+# Multi-domain crawl
+micelio crawl https://example.com --allowed-domains blog.example.com
+
+# Resume an interrupted crawl
+micelio crawl https://example.com --db crawl.db
+micelio crawl https://example.com --db crawl.db --resume
+
+# Stop after 5 minutes or 50 errors
+micelio crawl https://example.com --timeout 300 --max-errors 50
+
+# Search Console data with a service account
+micelio crawl https://example.com --gsc --gsc-property "https://example.com/" --gsc-key-file sa.json
+
+# CSV output
+micelio crawl https://example.com -f csv -o crawl.csv
+
+# Lean crawl for a small cloud server (analyse later with micelio import)
+micelio crawl https://example.com --max-pages 50000 --no-analysis --db-only --db example.db
 ```
 
 ## `list`: Crawl a URL file
@@ -221,6 +292,9 @@ links.
 | `--stealth` | off |
 
 ```bash
+micelio sitemap https://example.com/sitemap.xml
+micelio sitemap https://example.com/sitemap.xml https://example.com/sitemap-news.xml -l 5000
+# Sitemap hosted on a CDN or S3, pages on the main domain:
 micelio sitemap https://cdn.example.com/sitemaps/index.xml -l 50000
 ```
 
@@ -243,6 +317,7 @@ redirect chains, and response headers.
 | `--proxy`, `--cookies`, `-H, --header` | unset |
 
 ```bash
+micelio head urls.txt -c 20 -o status-check.jsonl
 micelio head redirect-list.txt --csv -o headers.csv
 ```
 
@@ -252,8 +327,16 @@ micelio head redirect-list.txt --csv -o headers.csv
 micelio robots-test https://example.com [flags]
 ```
 
-Without `--agents`, Micelio tests 21 major bot signatures. Without `--url`, it
-tests a built-in set of common paths.
+Without `--agents`, Micelio tests 21 major bot signatures, including Googlebot,
+Google-Agent, Google-Extended, Bingbot and GPTBot. It reports an allow/block
+matrix and any Crawl-delay. Without `--url`, it tests a built-in set of common
+paths. `--url` is repeatable.
+
+| Flag | Meaning |
+|---|---|
+| `--agents <list>` | Comma-separated user agents |
+| `--url <path>` | Path or URL to test; repeatable |
+| `--json` | Print JSON |
 
 ```bash
 micelio robots-test https://example.com \
@@ -268,7 +351,8 @@ micelio verify-bot 66.249.79.1 192.0.2.1 [--json]
 ```
 
 The command checks Google's official Googlebot, special-crawler, and
-user-triggered-fetcher ranges. Range data is cached locally for 24 hours.
+user-triggered-fetcher ranges (the last includes Google-Agent). Range data is
+cached locally for 24 hours.
 
 ## `diff`: Compare crawl exports
 
@@ -310,6 +394,37 @@ micelio generate-sitemap crawl.jsonl -o sitemap.xml \
   --changefreq weekly --priority 0.8
 ```
 
+## `import`: Open a crawl made elsewhere
+
+```bash
+micelio import <crawl.db | crawl.jsonl[.gz|.zst]> [flags]
+```
+
+Adds a crawl made with `micelio crawl` (for example on a small cloud server) to
+the dashboard's History and runs the dashboard's analysis on this computer:
+stats, issues, PageRank, Universe and the directory tree. It sends the file to a
+running dashboard, or imports it straight into `~/.micelio` when none is running.
+JSONL input is converted to a crawl database first.
+
+| Flag | Default | Meaning |
+|---|---:|---|
+| `--server <url>` | `http://127.0.0.1:3100` | Running dashboard to send the crawl to |
+| `--auth-token <token>` | | Dashboard token, if it was started with `--auth-token` |
+| `--link-intelligence` | off | Run link analysis (centrality, suggestions) even if the crawl did not |
+| `--local` | off | Import into `~/.micelio` directly, even if a dashboard is running |
+
+```bash
+# On the server: crawl only, one output file
+micelio crawl https://example.com --max-pages 50000 --no-analysis --db-only --db example.db
+
+# On your computer
+scp server:example.db . && micelio import example.db --link-intelligence
+```
+
+Anchor stats need `--full-anchors` at crawl time. N-grams, page weight and
+integrations are not rebuilt by an import. The dashboard has the same action
+under **History > Import crawl…**. See [Crawl in the cloud](CLOUD-CRAWLS.md).
+
 ## `logs`: Analyze server access logs
 
 ```bash
@@ -337,10 +452,12 @@ log-to-crawl merge views; see the [user guide](USER-GUIDE.md#5-analyze-server-lo
 
 ```bash
 micelio schedule https://example.com --cron '0 2 * * *' [flags]
+micelio schedule --config site.json --cron '0 2 * * *' [flags]
 micelio schedules
 ```
 
 Scheduling persists the definition and can notify a webhook after each run.
+`micelio schedules` lists every schedule and its state.
 
 | Flag | Default |
 |---|---:|
@@ -360,6 +477,46 @@ Scheduled analysis flags are `--ngrams`, `--language`, `--link-intelligence`,
 `--search`.
 
 Cron supports five-field expressions and aliases such as `@daily` and `@weekly`.
+
+### Config file, prechecks and reports
+
+| Flag | Default | Meaning |
+|---|---:|---|
+| `--config <file.json>` | | Crawl config in the dashboard's JSON format (the body of `POST /api/crawl/start`); overrides the crawl flags, so a schedule can use sitemap or list mode, filters, adaptive rate and every other dashboard option |
+| `--name <name>` | | Schedule name, so one URL can have several schedules |
+| `--precheck-egress <CIDR>` | | Only run when the public IP is in this range (CIDR or IP); repeatable |
+| `--precheck-cmd <command>` | | Only run when this shell command exits 0 |
+| `--precheck-interval <s>` | `60` | Seconds between checks during a crawl |
+| `--check-only` | off | Run the checks once, print the result and exit (1 if they fail) |
+| `--email-to <list>` | Settings | Email each run to these addresses (comma separated) |
+| `--smtp-host`, `--smtp-port`, `--smtp-user`, `--smtp-from` | Settings | SMTP account for `--email-to`; password in `MICELIO_SMTP_PASSWORD` |
+| `--smtp-security` | `starttls` | `starttls`, `tls` or `none` (local relay only) |
+| `--telegram-chat <id>` | Settings | Send each run to this Telegram chat; bot token from Settings or `MICELIO_TELEGRAM_TOKEN` |
+
+A run is skipped when a precheck fails. The checks repeat during the crawl and
+stop it if they fail (the CLI cannot pause; dashboard schedules pause instead).
+
+Without `--email-to` or `--telegram-chat`, the CLI uses the email, Telegram and
+Slack channels saved in the dashboard's Settings (or `~/.micelio/micelio.env`).
+It reports skipped and failed runs, and completed runs when "Send a report after
+every crawl" is on. The override flags report every run.
+
+```bash
+# Daily crawl at 2 AM
+micelio schedule https://example.com --cron "0 2 * * *" --link-intelligence --ngrams
+
+# Weekly crawl with a Slack webhook
+micelio schedule https://example.com --cron "@weekly" --webhook https://hooks.slack.com/...
+
+# Seven runs, then stop
+micelio schedule https://example.com --cron "@daily" --max-runs 7
+
+# Dashboard config, only from an allowed network
+micelio schedule --config site.json --cron "0 2 * * *" --precheck-egress 203.0.113.0/24
+
+# Test the checks once
+micelio schedule --config site.json --precheck-egress 203.0.113.0/24 --check-only
+```
 
 ## `gsc-auth`: Search Console OAuth
 
@@ -387,6 +544,8 @@ micelio ui [flags]
 | `--auth-token` | environment | Require a bearer token for API requests |
 
 ```bash
+micelio ui                     # 127.0.0.1:3100
+micelio ui --port 8080         # custom port
 MICELIO_AUTH_TOKEN='replace-me' micelio ui --host 0.0.0.0
 ```
 
@@ -429,6 +588,12 @@ Explicit flags take precedence over environment variables.
 | `MICELIO_CRUX_KEY` | Dashboard Settings fallback |
 | `MICELIO_AI_KEY` | Dashboard Settings AI key fallback |
 | `MICELIO_PLAUSIBLE_KEY` | Dashboard Settings Plausible key fallback |
+| `MICELIO_SMTP_PASSWORD` | Email report password (dashboard and `schedule --email-to`) |
+| `MICELIO_TELEGRAM_TOKEN` | Telegram bot token (dashboard and `schedule --telegram-chat`) |
+| `MICELIO_ENV_FILE` | Path of the local secrets file; default `~/.micelio/micelio.env` |
+
+Every alert channel setting can also come from `~/.micelio/micelio.env`. The
+[user guide](USER-GUIDE.md#6-configure-integrations-and-defaults) lists the keys.
 
 Avoid putting secrets directly in shell history. Use your shell's environment,
 secret manager, or locally protected configuration.

@@ -2,6 +2,17 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [1.8.7] - 2026-10-30
+
+### Fixed
+
+- **robots.txt Crawl-delay is never undercut.** The per-site pacing booked each request's slot in advance, so after a request that went out late (opening a new connection, for example) the next one still left on time and the server saw two requests closer than the Crawl-delay (141 ms for a 200 ms delay). The gap now counts from when the previous request was really sent. Sitemap downloads, the missing-page check, page-weight requests and redirect hops now follow the same per-site pacing. Crawl speed is unchanged; crawls with many redirects get a little slower because each hop now waits too.
+- PageRank options with only some fields set use the defaults for the rest (from #3, thanks @estevecastells).
+
+### Changed
+
+- **Shorter README.** The detail moved to the [User Guide](docs/USER-GUIDE.md), the [CLI Reference](docs/CLI-REFERENCE.md), [Architecture](docs/ARCHITECTURE.md) and [Contributing](CONTRIBUTING.md), with new screenshots and a Universe GIF. The guide covers everything up to this version.
+
 ## [1.8.6] - 2026-10-29
 
 ### Fixed

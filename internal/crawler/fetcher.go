@@ -96,6 +96,11 @@ type FetchOptions struct {
 	// The crawler sets it so retries are re-queued through the shared per-host
 	// rate limiter (and so the limiter sees every 429/503).
 	NoRetry bool
+	// Pace, if set, is called before every request FetchPage/FetchHead send
+	// (redirect hops and retries included). It blocks until rawURL's host may
+	// be hit and returns a func that is called once the request is on the
+	// wire. The crawler passes its per-host rate limiter.
+	Pace func(ctx context.Context, rawURL string) (sent func())
 }
 
 // ssrfSafeDialer returns a net.Dialer wrapped with DNS rebinding protection.
@@ -236,7 +241,7 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 
 		setHeaders(req, opts)
 
-		resp, err := client.Do(req)
+		resp, err := pacedDo(client, req, opts.Pace)
 		if err != nil {
 			retryable := isRetryableFetchErr(ctx, err)
 			if retryable && !opts.NoRetry && retries < maxRetries {
@@ -420,7 +425,7 @@ func FetchHead(ctx context.Context, rawURL string, opts FetchOptions) types.Head
 
 		setHeaders(req, opts)
 
-		resp, err := client.Do(req)
+		resp, err := pacedDo(client, req, opts.Pace)
 		if err != nil {
 			if isRetryableFetchErr(ctx, err) && !opts.NoRetry && retries < maxRetries {
 				retries++

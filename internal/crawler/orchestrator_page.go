@@ -32,12 +32,12 @@ func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
 		return
 	}
 
-	// Rate limiting: per-host token bucket ensures even spacing across all
-	// workers, never below the configured delay / robots Crawl-delay, and is
-	// paused for everyone when the server sends 429/503 + Retry-After.
-	if s.hostRL != nil {
-		s.hostRL.Wait(ctx, e.URL)
-	} else if s.delay > 0 {
+	// Rate limiting: the per-host token bucket (s.fetchOpts.Pace, applied by
+	// FetchPage to every request it sends, redirect hops included) ensures
+	// even spacing across all workers and background requests, never below
+	// the configured delay / robots Crawl-delay, and is paused for everyone
+	// when the server sends 429/503 + Retry-After.
+	if s.hostRL == nil && s.delay > 0 {
 		sleepCtx(ctx, jitter(s.delay))
 	}
 	if ctx.Err() != nil {
@@ -180,14 +180,12 @@ func (s *crawlSession) resourceSizer() analysis.ResourceSizer {
 		internal[strings.ToLower(d)] = true
 	}
 	hostRL := s.hostRL
+	if hostRL != nil {
+		opts.Pace = hostRL.pace
+		thirdParty.Pace = hostRL.pace
+	}
 
 	return func(ctx context.Context, u string) (int64, bool) {
-		if hostRL != nil {
-			hostRL.Wait(ctx, u)
-		}
-		if ctx.Err() != nil {
-			return 0, false
-		}
 		o := thirdParty
 		if p, err := url.Parse(u); err == nil && internal[strings.ToLower(p.Hostname())] {
 			o = opts

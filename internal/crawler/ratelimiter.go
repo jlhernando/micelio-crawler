@@ -4,6 +4,8 @@ import (
 	"context"
 	"math"
 	"math/rand/v2"
+	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"sync"
@@ -14,37 +16,85 @@ import (
 // Unlike per-worker sleep, it guarantees even spacing across all concurrent workers.
 // It can also be paused (e.g. after a 429 with Retry-After) so every worker
 // sharing the bucket waits, not just the one that saw the error.
+//
+// The gap is measured from the moment the previous request was actually
+// sent, not from a slot booked in advance. Booking slots ahead (the old
+// design) let a request that went out late (a timer that fired late, a busy
+// scheduler, a slow connection setup) be followed by the next one on its
+// original slot, so the server saw two requests closer than the interval.
+// Now one caller at a time holds the bucket's turn from the end of Wait until
+// its request is on the wire (the sent func), and the next caller waits a
+// full interval from that moment.
 type tokenBucket struct {
 	mu          sync.Mutex
 	interval    time.Duration
-	next        time.Time
+	last        time.Time // when the previous request was sent (zero: none yet)
 	pausedUntil time.Time
+	turn        chan struct{} // held from the end of Wait until the request is sent
 }
+
+// maxSendHold caps how long a caller may hold a bucket's turn without
+// reporting its request as sent (a hung dial, a caller that forgot to call
+// sent). After it the turn is released as if the request went out then.
+var maxSendHold = 10 * time.Second
 
 func newTokenBucket(interval time.Duration) *tokenBucket {
-	return &tokenBucket{interval: interval, next: time.Now()}
+	return &tokenBucket{interval: interval, turn: make(chan struct{}, 1)}
 }
 
-// Wait blocks until the next request slot is available.
-// Callers are serialized: each gets a slot spaced by interval.
-func (tb *tokenBucket) Wait(ctx context.Context) {
-	tb.mu.Lock()
-	now := time.Now()
-	start := now
-	if tb.next.After(start) {
-		start = tb.next
-	}
-	if tb.pausedUntil.After(start) {
-		start = tb.pausedUntil
-	}
-	tb.next = start.Add(tb.interval)
-	tb.mu.Unlock()
+func noopSent() {}
 
-	if wait := time.Until(start); wait > 0 {
-		sleepCtx(ctx, wait)
+// Wait blocks until a request may be sent, then returns sent, which the
+// caller must call once the request is on the wire (or was not sent at all).
+// Until then other callers keep waiting, so no request leaves sooner than
+// interval after the previous one, however late that one went out. sent is
+// safe to call more than once.
+func (tb *tokenBucket) Wait(ctx context.Context) (sent func()) {
+	if tb.Interval() <= 0 {
+		// No spacing configured: only honor pauses, callers run in parallel.
+		tb.waitPause(ctx)
+		return noopSent
 	}
-	// A pause may have been set while we slept on a slot reserved earlier.
-	// Honor it so no request slips out during a server-requested backoff.
+	select {
+	case tb.turn <- struct{}{}:
+	case <-ctx.Done():
+		return noopSent
+	}
+	for {
+		tb.mu.Lock()
+		at := tb.last.Add(tb.interval)
+		if tb.pausedUntil.After(at) {
+			at = tb.pausedUntil
+		}
+		tb.mu.Unlock()
+		wait := time.Until(at)
+		if wait <= 0 {
+			break
+		}
+		sleepCtx(ctx, wait)
+		if ctx.Err() != nil {
+			<-tb.turn // nothing sent: last stays as it was
+			return noopSent
+		}
+	}
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			tb.mu.Lock()
+			tb.last = time.Now()
+			tb.mu.Unlock()
+			<-tb.turn
+		})
+	}
+	timer := time.AfterFunc(maxSendHold, release)
+	return func() {
+		timer.Stop()
+		release()
+	}
+}
+
+// waitPause sleeps until any server-requested pause is over.
+func (tb *tokenBucket) waitPause(ctx context.Context) {
 	for ctx.Err() == nil {
 		tb.mu.Lock()
 		paused := tb.pausedUntil
@@ -131,9 +181,34 @@ func (h *hostRateLimiter) bucket(host string) *tokenBucket {
 	return b
 }
 
-// Wait blocks until a request to rawURL's host may be sent.
-func (h *hostRateLimiter) Wait(ctx context.Context, rawURL string) {
-	h.bucket(extractDomain(rawURL)).Wait(ctx)
+// Wait blocks until a request to rawURL's host may be sent. The caller must
+// call sent once the request is on the wire (see tokenBucket.Wait); pace and
+// pacedDo do that for HTTP requests.
+func (h *hostRateLimiter) Wait(ctx context.Context, rawURL string) (sent func()) {
+	return h.bucket(extractDomain(rawURL)).Wait(ctx)
+}
+
+// pace adapts Wait to FetchOptions.Pace.
+func (h *hostRateLimiter) pace(ctx context.Context, rawURL string) func() {
+	return h.Wait(ctx, rawURL)
+}
+
+// pacedDo sends req through client once pace allows it, and reports the
+// request as sent the moment it is written to the connection (or when Do
+// returns, for transports that do not report writes). With pace nil it is
+// client.Do.
+func pacedDo(client *http.Client, req *http.Request, pace func(context.Context, string) func()) (*http.Response, error) {
+	if pace == nil {
+		return client.Do(req)
+	}
+	ctx := req.Context()
+	sent := pace(ctx, req.URL.String())
+	defer sent()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { sent() }}
+	return client.Do(req.WithContext(httptrace.WithClientTrace(ctx, trace)))
 }
 
 // SetHostFloor raises the minimum interval for a host (robots.txt Crawl-delay).

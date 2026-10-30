@@ -37,9 +37,7 @@ func (s *crawlSession) setupSoft404Probe(ctx context.Context) {
 	if s.robots != nil && !s.robots.IsAllowed(ctx, probeURL) {
 		probe.Error = "blocked by robots.txt"
 	} else {
-		if s.hostRL != nil {
-			s.hostRL.Wait(ctx, probeURL) // counts against the host's delay like any request
-		}
+		// s.fetchOpts.Pace counts it against the host's delay like any request.
 		res := FetchPage(ctx, probeURL, s.fetchOpts)
 		probe.StatusCode, probe.FinalURL, probe.Error = res.StatusCode, res.FinalURL, res.Error
 		if res.StatusCode == 200 && res.HTML != "" {

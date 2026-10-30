@@ -23,6 +23,23 @@ func DefaultPageRankOptions() PageRankOptions {
 	}
 }
 
+// withPageRankDefaults fills the zero fields of opts with the defaults.
+// Replacing opts only when Damping was zero let {Damping: 0.85} run with 0
+// iterations, which returns a flat PageRank.
+func withPageRankDefaults(opts PageRankOptions) PageRankOptions {
+	d := DefaultPageRankOptions()
+	if opts.Damping == 0 {
+		opts.Damping = d.Damping
+	}
+	if opts.MaxIterations == 0 {
+		opts.MaxIterations = d.MaxIterations
+	}
+	if opts.Epsilon == 0 {
+		opts.Epsilon = d.Epsilon
+	}
+	return opts
+}
+
 // ComputePageRank computes internal PageRank scores for crawled pages.
 //
 // Uses the standard iterative PageRank algorithm:
@@ -38,9 +55,7 @@ func ComputePageRank(pages []*types.PageData, opts PageRankOptions) map[string]f
 		return make(map[string]float64)
 	}
 
-	if opts.Damping == 0 {
-		opts = DefaultPageRankOptions()
-	}
+	opts = withPageRankDefaults(opts)
 
 	// Build URL → index mapping
 	urlIndex := make(map[string]int, n)
@@ -79,9 +94,7 @@ func ComputePageRankGraph(g *AdjacencyGraph, opts PageRankOptions) map[string]fl
 	if g == nil || g.N == 0 {
 		return make(map[string]float64)
 	}
-	if opts.Damping == 0 {
-		opts = DefaultPageRankOptions()
-	}
+	opts = withPageRankDefaults(opts)
 	// Drop self-links so a page cannot boost itself.
 	offsets := make([]int32, g.N+1)
 	edges := make([]int32, 0, len(g.Edges))

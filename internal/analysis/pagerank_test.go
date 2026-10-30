@@ -152,3 +152,23 @@ func TestGenerateReportUsesDiskLinksForPageRank(t *testing.T) {
 		t.Errorf("expected /b (2 inlinks) above / (0 inlinks): %v", stats.PageRankScores)
 	}
 }
+
+// Options with only some fields set take the defaults for the rest
+// (from github.com/jlhernando/micelio-crawler/pull/3).
+func TestPageRankPartialOptionsUseDefaults(t *testing.T) {
+	pages := []*types.PageData{
+		{URL: "https://example.com/a", InternalLinks: []string{"https://example.com/b"}},
+		{URL: "https://example.com/b"},
+	}
+	result := ComputePageRank(pages, PageRankOptions{Damping: 0.85})
+	if result["https://example.com/b"] != 10 {
+		t.Errorf("B score = %f, want 10", result["https://example.com/b"])
+	}
+	if result["https://example.com/a"] >= result["https://example.com/b"] {
+		t.Errorf("A (%f) should be < B (%f)", result["https://example.com/a"], result["https://example.com/b"])
+	}
+	g := BuildAdjacencyList(pages)
+	if got := ComputePageRankGraph(g, PageRankOptions{Damping: 0.85}); got["https://example.com/a"] >= got["https://example.com/b"] {
+		t.Errorf("graph: A (%f) should be < B (%f)", got["https://example.com/a"], got["https://example.com/b"])
+	}
+}

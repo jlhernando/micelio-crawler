@@ -440,6 +440,14 @@ func (s *crawlSession) setupBrowser() {
 	}
 	cfg := browser.RenderConfig{
 		BlockResources: s.config.RenderBlockRes,
+		// Documents the browser loads itself (iframes, JS navigations) wait
+		// their turn like crawler requests. hostRL is set up after this.
+		Pace: func(ctx context.Context, u string) func() {
+			if s.hostRL == nil {
+				return func() {}
+			}
+			return s.hostRL.Wait(ctx, u)
+		},
 	}
 	if s.config.RenderTimeoutSec > 0 {
 		cfg.Timeout = time.Duration(s.config.RenderTimeoutSec) * time.Second

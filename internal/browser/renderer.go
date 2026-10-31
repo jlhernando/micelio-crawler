@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -50,6 +51,18 @@ type RenderResult struct {
 type RenderConfig struct {
 	Timeout        time.Duration
 	BlockResources bool
+	// Pace, if set, is called before the browser sends a document request
+	// (iframes, JS navigations) and returns a func to call once it is sent:
+	// the crawler's per-host limiter, so Crawl-delay holds for the browser too.
+	Pace func(ctx context.Context, url string) (sent func())
+}
+
+// Prefetched is a page the crawler already downloaded. The browser is served
+// this response for the page's own URL instead of fetching it again, so the
+// server sees one request per page, not two.
+type Prefetched struct {
+	HTML    string
+	Headers map[string]string
 }
 
 // Renderer manages a headless Chrome instance.
@@ -82,6 +95,7 @@ func NewRenderer(proxy string, cfg ...RenderConfig) *Renderer {
 			rc.Timeout = c.Timeout
 		}
 		rc.BlockResources = c.BlockResources
+		rc.Pace = c.Pace
 	}
 
 	return &Renderer{
@@ -142,15 +156,25 @@ func waitForDOMStability() chromedp.Action[chromedp.Void] {
 	})
 }
 
-// setupResourceBlocking enables fetch domain interception to block images/fonts/analytics.
-func setupResourceBlocking() chromedp.Action[chromedp.Void] {
+// setupInterception pauses every browser request. It serves pre for the
+// page's own URL (no second request to the server), paces other documents
+// through cfg.Pace and, with cfg.BlockResources, blocks images, fonts, media
+// and analytics. Without any of the three it does nothing.
+func setupInterception(cfg RenderConfig, pageURL string, pre *Prefetched) chromedp.Action[chromedp.Void] {
 	return chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+		if !cfg.BlockResources && pre == nil && cfg.Pace == nil {
+			return nil
+		}
 		// Subscribe before enabling so no paused request is missed.
 		events := cdp.Events(ctx, t, fetch.RequestPaused)
 		if _, err := cdp.Call(ctx, t, fetch.Enable, fetch.EnableParams{
 			Patterns: []*fetch.RequestPattern{{RequestStage: fetch.RequestStageRequest}},
 		}); err != nil {
 			return nil // non-fatal
+		}
+		var served atomic.Bool
+		cont := func(req *fetch.EventRequestPaused) {
+			_, _ = cdp.Call(ctx, t, fetch.ContinueRequest, fetch.ContinueRequestParams{RequestID: req.RequestID})
 		}
 		go func() {
 			for req, err := range events {
@@ -159,44 +183,85 @@ func setupResourceBlocking() chromedp.Action[chromedp.Void] {
 				}
 				go func() {
 					defer func() { recover() }()
-					blocked := false
-					rt := req.ResourceType
-					if rt == network.ResourceTypeImage || rt == network.ResourceTypeFont || rt == network.ResourceTypeMedia {
-						blocked = true
-					}
-					if !blocked {
-						lower := strings.ToLower(req.Request.URL)
-						pathEnd := lower
-						if idx := strings.IndexByte(pathEnd, '?'); idx >= 0 {
-							pathEnd = pathEnd[:idx]
-						}
-						for _, ext := range blockedResourceExts {
-							if strings.HasSuffix(pathEnd, ext) {
-								blocked = true
-								break
-							}
-						}
-						if !blocked {
-							for _, domain := range blockedDomains {
-								if strings.Contains(lower, domain) {
-									blocked = true
-									break
-								}
-							}
-						}
-					}
-					if blocked {
+					isDoc := req.ResourceType == network.ResourceTypeDocument
+					switch {
+					case cfg.BlockResources && blockedResource(&req):
 						_, _ = cdp.Call(ctx, t, fetch.FailRequest, fetch.FailRequestParams{
 							RequestID: req.RequestID, ErrorReason: network.ErrorReasonBlockedByClient,
 						})
-					} else {
-						_, _ = cdp.Call(ctx, t, fetch.ContinueRequest, fetch.ContinueRequestParams{RequestID: req.RequestID})
+					case pre != nil && isDoc && sameDocURL(req.Request.URL, pageURL) && served.CompareAndSwap(false, true):
+						_, _ = cdp.Call(ctx, t, fetch.FulfillRequest, fetch.FulfillRequestParams{
+							RequestID: req.RequestID, ResponseCode: 200,
+							ResponseHeaders: prefetchedHeaders(pre.Headers), Body: []byte(pre.HTML),
+						})
+					case cfg.Pace != nil && isDoc:
+						sent := cfg.Pace(ctx, req.Request.URL)
+						cont(&req)
+						sent()
+					default:
+						cont(&req)
 					}
 				}()
 			}
 		}()
 		return nil
 	})
+}
+
+// blockedResource reports images, fonts, media and analytics requests.
+func blockedResource(req *fetch.EventRequestPaused) bool {
+	rt := req.ResourceType
+	if rt == network.ResourceTypeImage || rt == network.ResourceTypeFont || rt == network.ResourceTypeMedia {
+		return true
+	}
+	lower := strings.ToLower(req.Request.URL)
+	pathEnd := lower
+	if idx := strings.IndexByte(pathEnd, '?'); idx >= 0 {
+		pathEnd = pathEnd[:idx]
+	}
+	for _, ext := range blockedResourceExts {
+		if strings.HasSuffix(pathEnd, ext) {
+			return true
+		}
+	}
+	for _, domain := range blockedDomains {
+		if strings.Contains(lower, domain) {
+			return true
+		}
+	}
+	return false
+}
+
+// sameDocURL compares two URLs ignoring the fragment (never sent).
+func sameDocURL(a, b string) bool {
+	strip := func(u string) string {
+		if i := strings.IndexByte(u, '#'); i >= 0 {
+			return u[:i]
+		}
+		return u
+	}
+	return strip(a) == strip(b)
+}
+
+// prefetchedHeaders keeps the headers that matter to the browser. The body
+// is already decoded and its length differs, so Content-Encoding and
+// Content-Length go.
+func prefetchedHeaders(h map[string]string) []*fetch.HeaderEntry {
+	out := []*fetch.HeaderEntry{}
+	hasType := false
+	for k, v := range h {
+		switch strings.ToLower(k) {
+		case "content-encoding", "content-length", "transfer-encoding", "set-cookie":
+			continue
+		case "content-type":
+			hasType = true
+		}
+		out = append(out, &fetch.HeaderEntry{Name: k, Value: v})
+	}
+	if !hasType {
+		out = append(out, &fetch.HeaderEntry{Name: "Content-Type", Value: "text/html; charset=utf-8"})
+	}
+	return out
 }
 
 // setUserAgent overrides the tab's user agent when one is given.
@@ -242,8 +307,9 @@ func collectJSErrors(errors *[]string, mu *sync.Mutex) chromedp.Action[chromedp.
 	})
 }
 
-// RenderPage navigates to a URL and returns the rendered HTML after JS execution.
-func (r *Renderer) RenderPage(ctx context.Context, pageURL, userAgent string) (*RenderResult, error) {
+// RenderPage navigates to a URL and returns the rendered HTML after JS
+// execution. With pre, the page itself is served from pre (see Prefetched).
+func (r *Renderer) RenderPage(ctx context.Context, pageURL, userAgent string, pre *Prefetched) (*RenderResult, error) {
 	taskCtx, cancel := chromedp.NewContext(r.allocCtx)
 	defer cancel()
 
@@ -257,9 +323,7 @@ func (r *Renderer) RenderPage(ctx context.Context, pageURL, userAgent string) (*
 		chromedp.EmulateViewport(1920, 1080),
 		setUserAgent(userAgent),
 		collectJSErrors(&jsErrors, &errorMu),
-	}
-	if r.config.BlockResources {
-		actions = append(actions, setupResourceBlocking())
+		setupInterception(r.config, pageURL, pre),
 	}
 
 	actions = append(actions,
@@ -283,8 +347,9 @@ func (r *Renderer) RenderPage(ctx context.Context, pageURL, userAgent string) (*
 	return &RenderResult{HTML: html, JSErrors: errs}, nil
 }
 
-// RunSnippet executes a JavaScript snippet on a rendered page and returns the result.
-func (r *Renderer) RunSnippet(ctx context.Context, pageURL, userAgent, jsCode string) (any, error) {
+// RunSnippet executes a JavaScript snippet on a rendered page and returns the
+// result. With pre, the page itself is served from pre (see Prefetched).
+func (r *Renderer) RunSnippet(ctx context.Context, pageURL, userAgent, jsCode string, pre *Prefetched) (any, error) {
 	taskCtx, cancel := chromedp.NewContext(r.allocCtx)
 	defer cancel()
 
@@ -293,9 +358,7 @@ func (r *Renderer) RunSnippet(ctx context.Context, pageURL, userAgent, jsCode st
 
 	actions := []chromedp.Action[chromedp.Void]{
 		setUserAgent(userAgent),
-	}
-	if r.config.BlockResources {
-		actions = append(actions, setupResourceBlocking())
+		setupInterception(r.config, pageURL, pre),
 	}
 
 	actions = append(actions,
@@ -423,7 +486,7 @@ func CompareRender(rawHTML, renderedHTML string) ([]types.RenderDiff, error) {
 	renderedLinkCount := countInternalLinks(renderedDoc)
 	if rawLinkCount != renderedLinkCount {
 		diffs = append(diffs, types.RenderDiff{
-			Field: "internal_links_count",
+			Field:    "internal_links_count",
 			Original: fmt.Sprintf("%d", rawLinkCount),
 			Rendered: fmt.Sprintf("%d", renderedLinkCount),
 		})
@@ -436,7 +499,7 @@ func CompareRender(rawHTML, renderedHTML string) ([]types.RenderDiff, error) {
 		ratio := math.Abs(float64(renderedWords-rawWords)) / float64(max(rawWords, 1))
 		if ratio > 0.2 {
 			diffs = append(diffs, types.RenderDiff{
-				Field: "word_count",
+				Field:    "word_count",
 				Original: fmt.Sprintf("%d", rawWords),
 				Rendered: fmt.Sprintf("%d", renderedWords),
 			})
@@ -452,7 +515,7 @@ func CompareRender(rawHTML, renderedHTML string) ([]types.RenderDiff, error) {
 	renderedJsonLd := renderedDoc.Find(`script[type="application/ld+json"]`).Length()
 	if rawJsonLd != renderedJsonLd {
 		diffs = append(diffs, types.RenderDiff{
-			Field: "json_ld_count",
+			Field:    "json_ld_count",
 			Original: fmt.Sprintf("%d", rawJsonLd),
 			Rendered: fmt.Sprintf("%d", renderedJsonLd),
 		})
@@ -542,4 +605,3 @@ func countBodyWords(doc *goquery.Document) int {
 	}
 	return len(strings.Fields(text))
 }
-

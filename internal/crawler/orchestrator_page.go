@@ -415,7 +415,9 @@ func (s *crawlSession) enrichPage(ctx context.Context, e types.QueueEntry, resul
 		if result.FinalURL != "" {
 			renderURL = result.FinalURL
 		}
-		renderResult, renderErr := s.renderer.RenderPage(ctx, renderURL, s.config.UserAgent)
+		// The browser gets the HTML already fetched, so the server is hit once.
+		pre := &browser.Prefetched{HTML: result.HTML, Headers: result.Headers}
+		renderResult, renderErr := s.renderer.RenderPage(ctx, renderURL, s.config.UserAgent, pre)
 		<-s.browserSem
 		if renderErr != nil {
 			fmt.Fprintf(os.Stderr, "\n  [warn] render failed for %s: %v\n", e.URL, renderErr)
@@ -506,7 +508,11 @@ func (s *crawlSession) enrichPage(ctx context.Context, e types.QueueEntry, resul
 				continue
 			}
 			s.browserSem <- struct{}{}
-			val, runErr := s.renderer.RunSnippet(ctx, pageURL, s.config.UserAgent, string(code))
+			var pre *browser.Prefetched
+			if result.HTML != "" {
+				pre = &browser.Prefetched{HTML: result.HTML, Headers: result.Headers}
+			}
+			val, runErr := s.renderer.RunSnippet(ctx, pageURL, s.config.UserAgent, string(code), pre)
 			<-s.browserSem
 			if runErr != nil {
 				fmt.Fprintf(os.Stderr, "\n  [warn] snippet %s on %s: %v\n", sp, e.URL, runErr)

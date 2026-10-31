@@ -2,6 +2,17 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [Unreleased]
+
+### Added
+
+- **The CLI has every crawl option the dashboard has.** `micelio crawl`, `micelio list` and `micelio sitemap` now share the same ~80 flags, so a list or sitemap crawl can use n-grams, link intelligence, the HTML report, JS rendering, PSI/CrUX/GSC/GA4, custom extraction and the rest. New flags on all three: `--retries`, `--save-html`, `--save-rendered`, `--path-only-filters` (off by default, so existing scripts behave as before) and `--config <file>`.
+- **`--config` reads a crawl config saved from the dashboard** (the same JSON the New Crawl page sends). Flags you type win over the file. Keys the file leaves out keep the CLI defaults, so a file without `respectRobots` or `delay` still respects robots.txt and waits between requests.
+
+### Changed
+
+- `micelio list` and `micelio sitemap` now run the post-crawl analysis, write a crawl database and respect robots.txt, like `micelio crawl`. Use `--no-analysis`, `--no-db` or `--no-robots` for the old behaviour. Without `-o` or `--db` the database is named `<host>-list.db` or `<host>-sitemap.db`, so crawls of different sites never share one file.
+
 ## [1.8.7] - 2026-10-30
 
 ### Fixed

@@ -8,8 +8,8 @@ This reference matches the commands and flags in the current source tree. Run
 | Command | Purpose |
 |---|---|
 | `crawl <url>` | Discover a site from a seed URL and run the full analysis pipeline |
-| `list <file>` | Crawl a newline-delimited list of URLs |
-| `sitemap <url...>` | Resolve XML sitemaps and crawl exactly their listed URLs |
+| `list <file>` | Crawl a newline-delimited list of URLs, with the same analysis flags as `crawl` |
+| `sitemap <url...>` | Resolve XML sitemaps and crawl exactly their listed URLs, with the same analysis flags as `crawl` |
 | `head <file>` | Make lightweight HEAD requests for status and header checks |
 | `robots-test <url>` | Test robots.txt rules against major crawler user agents |
 | `verify-bot <ip...>` | Check IPs against Google's official crawler ranges |
@@ -39,7 +39,26 @@ The memory limit is global and can be combined with any subcommand.
 
 ```bash
 micelio crawl <url> [flags]
+micelio crawl --config crawl.json [flags]
 ```
+
+`crawl`, `list` and `sitemap` share every flag below, so the CLI has every option
+of the dashboard's New Crawl page. Only `--depth` and `--max-pages` are
+`crawl`-only; `list` and `sitemap` keep their own defaults (see their sections).
+
+### Config file
+
+| Flag | Default | Meaning |
+|---|---:|---|
+| `--config <file>` | | Crawl config JSON in the dashboard format: the body of `POST /api/crawl/start` or a schedule's `crawlConfig` |
+
+The file uses the dashboard keys (`url`, `limit`, `depth`, `delay`, `urlList`,
+`sitemapUrls`, `retries`, `pathOnlyFilters`, ...). Flags you set on the command
+line override the file; flags left at their default never do. The URL argument
+overrides `url` (`crawl`), the file argument overrides `urlList` (`list`) and
+the URL arguments override `sitemapUrls` (`sitemap`). Each command keeps its own
+mode whatever the file says. Without an argument the target must come from the
+file, otherwise the command fails.
 
 ### Discovery, limits, and output
 
@@ -54,6 +73,8 @@ micelio crawl <url> [flags]
 | `--allowed-domains <domain>` | | Add an allowed domain; repeat the flag for more |
 | `--include <regex>` | | Include matching URLs; repeatable |
 | `--exclude <regex>` | | Exclude matching URLs; repeatable |
+| `--path-only-filters` | off | Match `--include`/`--exclude` against the URL path only, without the query string |
+| `--retries <n>` | `2` | Retries per failed URL (network error, timeout, 408, 429, 5xx); `0` disables them |
 | `--discover-sitemaps` | off | Add sitemap-listed URLs to a Spider crawl |
 | `-o, --output <path>` | | Page-data output path |
 | `-f, --format <format>` | | `jsonl` or `csv` |
@@ -64,6 +85,8 @@ micelio crawl <url> [flags]
 | `--no-db` | off | Disable automatic database creation |
 | `--resume` | off | Resume an interrupted crawl from `--db` |
 | `--full-anchors` | off | Preserve full anchor detail in page output |
+| `--save-html` | off | Store each page's raw HTML in the crawl database (zstd compressed) |
+| `--save-rendered` | off | Store each page's rendered HTML in the crawl database (with `--js`) |
 | `--no-analysis` | off | Only crawl and save; skip post-crawl analysis (run it later with `micelio import`) |
 | `--db-only` | off | Write only the crawl database, no JSONL/CSV output |
 | `--no-soft404-probe` | off | Skip the one request for a URL that cannot exist (soft-404 check) |
@@ -72,7 +95,8 @@ When no database path is supplied, the CLI derives one from the output path or
 seed domain. `--resume` cannot be combined with `--no-db`.
 
 `--max-errors` exists on the CLI only. Dashboard crawls retry failed URLs instead
-(New Crawl > Retries per URL) and never stop because of failures.
+(New Crawl > Retries per URL, `--retries` on the CLI) and never stop because of
+failures.
 
 ### HTTP, robots, rendering, and safety
 
@@ -244,29 +268,38 @@ micelio crawl https://example.com -f csv -o crawl.csv
 
 # Lean crawl for a small cloud server (analyse later with micelio import)
 micelio crawl https://example.com --max-pages 50000 --no-analysis --db-only --db example.db
+
+# Dashboard config, with a smaller page limit for a quick test
+micelio crawl --config crawl.json --max-pages 200
+
+# Keep the raw HTML and retry each failed URL up to 5 times
+micelio crawl https://example.com --save-html --retries 5
 ```
 
 ## `list`: Crawl a URL file
 
 ```bash
 micelio list urls.txt [flags]
+micelio list --config crawl.json [flags]
 ```
 
 Input is one URL per line. This mode does not spider links from downloaded pages.
+It takes every `crawl` flag except `--depth` and `--max-pages` (the page limit is
+the number of URLs) and runs the same post-crawl analysis, with a crawl database,
+unless you pass `--no-analysis` or `--no-db`. Only these defaults differ:
 
 | Flag | Default |
 |---|---:|
 | `-c, --concurrency` | `3` |
 | `--delay` | `100` ms |
-| `-u, --user-agent` | `Micelio/1.0` |
 | `-o, --output` | `output.jsonl` |
-| `-f, --format` | inferred/JSONL |
-| `--proxy`, `--cookies`, `-H, --header` | unset |
-| `--stealth` | off |
-| `--max-errors`, `--timeout` | `0` (unlimited) |
+
+Without `-o` or `--db`, the database is named after the first URL's host and the
+mode, for example `example.com-list.db`.
 
 ```bash
 micelio list migration-urls.txt -c 10 --delay 100 -o migration.jsonl
+micelio list migration-urls.txt --js --link-intelligence --html
 ```
 
 ## `sitemap`: Crawl listed sitemap URLs
@@ -278,18 +311,20 @@ micelio sitemap <url...> [flags]
 Micelio supports standard sitemap files, nested `<sitemapindex>` documents, gzip
 compression, and news/video/image extensions. The sitemap host may differ from
 the listed page hosts. This mode crawls the listed pages and does not spider their
-links.
+links. It takes every `crawl` flag except `--depth` and `--max-pages` and runs the
+same post-crawl analysis, with a crawl database, unless you pass `--no-analysis`
+or `--no-db`. Only these flags and defaults differ:
 
 | Flag | Default |
 |---|---:|
-| `-l, --limit` | `0` (unlimited) |
+| `-l, --limit` | `0` (100,000 pages) |
 | `-c, --concurrency` | `3` |
 | `--delay` | `200` ms |
-| `-u, --user-agent` | `Micelio/1.0` |
 | `-o, --output` | `output.jsonl` |
-| `-f, --format` | inferred/JSONL |
-| `--proxy`, `--cookies`, `-H, --header` | unset |
-| `--stealth` | off |
+
+Without `-o` or `--db`, the database is named after the first sitemap's host and
+the mode, for example `example.com-sitemap.db`. With `--config` and no `--limit`,
+the file's `limit` applies.
 
 ```bash
 micelio sitemap https://example.com/sitemap.xml

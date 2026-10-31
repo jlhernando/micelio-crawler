@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -115,398 +116,76 @@ func main() {
 // ── Spider Crawl ──
 
 func crawlCmd() *cobra.Command {
-	var (
-		noAnalysis          bool
-		noSoft404Probe      bool
-		dbOnly              bool
-		concurrency         int
-		maxPages            int
-		maxDepth            int
-		delayMs             int
-		userAgent           string
-		outputPath          string
-		outputFormat        string
-		proxy               string
-		maxErrors           int
-		timeout             int
-		headers             []string
-		cookies             string
-		includePattern      []string
-		excludePattern      []string
-		allowedDomains      []string
-		noRobots            bool
-		showBlockedInternal bool
-		jsRendering         bool
-		ngrams              bool
-		language            string
-		linkIntelligence    bool
-		liNoCentrality      bool
-		liMaxSuggestions    int
-		embeddings          bool
-		embeddingModel      string
-		embeddingProvider   string
-		embeddingKey        string
-		similarityThreshold float64
-		segments            []string
-		psi                 bool
-		psiKey              string
-		aiPrompt            string
-		aiProvider          string
-		aiModel             string
-		aiKey               string
-		gsc                 bool
-		gscProperty         string
-		gscKeyFile          string
-		gscDays             int
-		gscBqDataset        string
-		ga4                 bool
-		ga4Property         string
-		ga4KeyFile          string
-		ga4Days             int
-		crux                bool
-		cruxKey             string
-		cruxFormFactor      string
-		plausible           bool
-		plausibleSiteID     string
-		plausibleAPIKey     string
-		plausibleDays       int
-		plausibleHost       string
-		customExtractions   []string
-		customSearches      []string
-		snippetPaths        []string
-		checkExternal       bool
-		pageWeight          bool
-		fullAnchors         bool
-		fullPageWeight      bool
-		htmlReport          bool
-		htmlOpen            bool
-		sitemapOut          bool
-		dbPath              string
-		noDb                bool
-		resumeCrawl         bool
-		adaptiveRate        bool
-		delayFactor         float64
-		stealth             bool
-		discoverSitemaps    bool
-		torControlPort      string
-		torPassword         string
-		torRotateEvery      int
-		renderBlockRes      bool
-		renderTimeout       int
-	)
-
+	var o crawlOptions
 	cmd := &cobra.Command{
-		Use:   "crawl <url>",
+		Use:   "crawl [url]",
 		Short: "Spider crawl a website with SEO analysis",
-		Args:  cobra.ExactArgs(1),
+		Long: "Spider crawl a website with SEO analysis. The URL can come from the\n" +
+			"argument or from --config; the argument wins.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			seedURL := ensureScheme(args[0])
-			customHeaders := parseHeaders(headers)
-			format := resolveFormat(outputFormat, outputPath)
-
-			// Fix #9: Validate cruxFormFactor
-			if cruxFormFactor != "" {
-				switch types.CrUXFormFactor(cruxFormFactor) {
-				case types.FormFactorPhone, types.FormFactorDesktop, types.FormFactorAll:
-					// valid
-				default:
-					return fmt.Errorf("invalid crux-form-factor %q: must be PHONE, DESKTOP, or ALL", cruxFormFactor)
-				}
+			config, _, err := o.resolveConfig(cmd)
+			if err != nil {
+				return err
 			}
-
-			// Parse custom extraction rules
-			var parsedExtractions []types.CustomExtractionRule
-			for _, raw := range customExtractions {
-				rule, err := extract.ParseExtractionRule(raw)
-				if err != nil {
-					return err
-				}
-				parsedExtractions = append(parsedExtractions, rule)
+			config.Mode = types.ModeSpider
+			if len(args) == 1 {
+				config.SeedURL = ensureScheme(args[0])
+			} else if config.SeedURL != "" {
+				config.SeedURL = ensureScheme(config.SeedURL)
 			}
-			var parsedSearches []types.CustomSearchRule
-			for _, raw := range customSearches {
-				rule, err := extract.ParseSearchRule(raw)
-				if err != nil {
-					return err
-				}
-				parsedSearches = append(parsedSearches, rule)
+			if config.SeedURL == "" {
+				return errors.New("no URL to crawl: pass <url> or a --config file with \"url\"")
 			}
-
-			// Fix #8: Env var fallbacks for API keys
-			psiKeyResolved := envFallback(psiKey, "PSI_API_KEY")
-			aiKeyResolved := envFallback(aiKey, "OPENAI_API_KEY", "ANTHROPIC_API_KEY")
-			embeddingKeyResolved := envFallback(embeddingKey, "OPENAI_API_KEY")
-			cruxKeyResolved := envFallback(cruxKey, "CRUX_API_KEY")
-			plausibleAPIKeyResolved := envFallback(plausibleAPIKey, "PLAUSIBLE_API_KEY")
-
-			config := types.CrawlConfig{
-				SeedURL:             seedURL,
-				Mode:                types.ModeSpider,
-				MaxDepth:            maxDepth,
-				MaxPages:            maxPages,
-				Concurrency:         concurrency,
-				DelayMs:             delayMs,
-				DelayExplicit:       cmd.Flags().Changed("delay"),
-				UserAgent:           userAgent,
-				OutputPath:          outputPath,
-				OutputFormat:        format,
-				CustomHeaders:       customHeaders,
-				Cookies:             cookies,
-				IncludePatterns:     includePattern,
-				ExcludePatterns:     excludePattern,
-				Proxy:               proxy,
-				MaxErrors:           maxErrors,
-				TimeoutSeconds:      timeout,
-				AllowedDomains:      allowedDomains,
-				RespectRobots:       !noRobots,
-				ShowBlockedInternal: showBlockedInternal,
-				JSRendering:         jsRendering,
-				RenderBlockRes:      renderBlockRes,
-				RenderTimeoutSec:    renderTimeout,
-				Ngrams:              ngrams,
-				Language:            language,
-				LinkIntelligence:    linkIntelligence,
-				LINoCentrality:      liNoCentrality,
-				LIMaxSuggestions:    liMaxSuggestions,
-				Embeddings:          embeddings,
-				EmbeddingModel:      embeddingModel,
-				EmbeddingProvider:   embeddingProvider,
-				EmbeddingKey:        embeddingKeyResolved,
-				SimilarityThreshold: similarityThreshold,
-				SegmentRules:        parseSegmentFlags(segments),
-				PSI:                 psi,
-				PSIKey:              psiKeyResolved,
-				AIPrompt:            aiPrompt,
-				AIProvider:          types.AIProvider(aiProvider),
-				AIModel:             aiModel,
-				AIKey:               aiKeyResolved,
-				GSC:                 gsc,
-				GSCProperty:         gscProperty,
-				GSCKeyFile:          gscKeyFile,
-				GSCDays:             gscDays,
-				GSCBqDataset:        gscBqDataset,
-				GA4:                 ga4,
-				GA4Property:         ga4Property,
-				GA4KeyFile:          ga4KeyFile,
-				GA4Days:             ga4Days,
-				CrUX:                crux,
-				CrUXKey:             cruxKeyResolved,
-				CrUXFormFactor:      types.CrUXFormFactor(cruxFormFactor),
-				Plausible:           plausible,
-				PlausibleSiteID:     plausibleSiteID,
-				PlausibleAPIKey:     plausibleAPIKeyResolved,
-				PlausibleDays:       plausibleDays,
-				PlausibleHost:       plausibleHost,
-				CustomExtractions:   parsedExtractions,
-				CustomSearches:      parsedSearches,
-				SnippetPaths:        snippetPaths,
-				CheckExternal:       checkExternal,
-				PageWeight:          pageWeight,
-				FullAnchors:         fullAnchors,
-				FullPageWeight:      fullPageWeight,
-				HTMLReport:          htmlReport,
-				HTMLOpen:            htmlOpen,
-				SitemapOut:          sitemapOut,
-				DBPath:              dbPath,
-				NoDB:                noDb,
-				Resume:              resumeCrawl,
-				NoSoft404Probe:      noSoft404Probe,
-				AdaptiveRate:        adaptiveRate,
-				DelayFactor:         delayFactor,
-				Stealth:             stealth,
-				DiscoverSitemaps:    discoverSitemaps,
-				TorControlPort:      torControlPort,
-				TorPassword:         torPassword,
-				TorRotateEvery:      torRotateEvery,
-			}
-
-			if dbOnly {
-				if config.NoDB {
-					return fmt.Errorf("--db-only is incompatible with --no-db")
-				}
-				config.DBPath = defaultDBPath(config) // named after -o, before it is cleared
-				config.OutputPath = ""
-			}
-
-			// Validate --resume requires a DB (explicit or auto-derived)
-			if config.Resume && config.NoDB {
-				return fmt.Errorf("--resume is incompatible with --no-db")
-			}
-
-			// Warn if both --gsc and --gsc-bq are set
-			if config.GSC && config.GSCBqDataset != "" {
-				fmt.Fprintf(os.Stderr, "  [warn] --gsc and --gsc-bq both set; using GSC API (--gsc takes precedence)\n")
-			}
-
-			// Open SQLite crawl store if --db specified
-			var crawlStore *storage.CrawlStore
-			if config.DBPath != "" {
-				var err error
-				crawlStore, err = storage.NewCrawlStore(config.DBPath)
-				if err != nil {
-					return fmt.Errorf("open crawl database: %w", err)
-				}
-				defer crawlStore.Close()
-			}
-
-			// --no-analysis: crawl and store only; `micelio import` analyses
-			// the database on another machine.
-			if noAnalysis {
-				if config.HTMLReport || config.SitemapOut {
-					fmt.Fprintf(os.Stderr, "  [warn] --no-analysis skips the HTML report and sitemap\n")
-					config.HTMLReport, config.HTMLOpen, config.SitemapOut = false, false, false
-				}
-				return runCrawlWithProgress(config, nil, crawlStore)
-			}
-			// Fix #5: Derive PostProcessConfig from CrawlConfig (no field duplication)
-			ppCfg := analysis.PostProcessConfigFromCrawl(config)
-			return runCrawlWithProgress(config, &ppCfg, crawlStore)
+			return o.run(cmd, config)
 		},
 	}
-
-	addCommonCrawlFlags(cmd, &concurrency, &maxPages, &maxDepth, &delayMs,
-		&userAgent, &outputPath, &outputFormat, &proxy, &maxErrors, &timeout,
-		&headers, &cookies, &includePattern, &excludePattern, &allowedDomains)
-	cmd.Flags().BoolVar(&noRobots, "no-robots", false, "Ignore robots.txt restrictions")
-	cmd.Flags().BoolVar(&showBlockedInternal, "show-blocked-internal", false, "Include robots-blocked URLs in output")
-	cmd.Flags().BoolVar(&jsRendering, "js", false, "Enable JS rendering with headless Chrome")
-	cmd.Flags().BoolVar(&renderBlockRes, "render-block-resources", true, "Block images/fonts/analytics during JS rendering")
-	cmd.Flags().IntVar(&renderTimeout, "render-timeout", 0, "JS render timeout in seconds (default 30)")
-	cmd.Flags().BoolVar(&ngrams, "ngrams", false, "Enable n-gram analysis")
-	cmd.Flags().StringVar(&language, "language", "en", "Language for n-gram stopword filtering")
-	cmd.Flags().BoolVar(&linkIntelligence, "link-intelligence", false, "Enable link graph analysis (click depth, centrality, suggestions)")
-	cmd.Flags().BoolVar(&liNoCentrality, "li-no-centrality", false, "Skip centrality computation (faster for large sites)")
-	cmd.Flags().IntVar(&liMaxSuggestions, "li-max-suggestions", 20, "Max internal link suggestions")
-	cmd.Flags().BoolVar(&embeddings, "embeddings", false, "Enable embedding-based similarity analysis")
-	cmd.Flags().StringVar(&embeddingModel, "embedding-model", "", "Embedding model name")
-	cmd.Flags().StringVar(&embeddingProvider, "embedding-provider", "openai", "Embedding provider (openai or ollama)")
-	cmd.Flags().StringVar(&embeddingKey, "embedding-key", "", "Embedding API key")
-	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.9, "Similarity threshold for embeddings")
-	cmd.Flags().StringArrayVar(&segments, "segment", nil, "URL segment rule (name:pattern)")
-	// PageSpeed Insights
-	cmd.Flags().BoolVar(&psi, "psi", false, "Enable PageSpeed Insights per-page analysis")
-	cmd.Flags().StringVar(&psiKey, "psi-key", "", "PageSpeed Insights API key")
-	// AI analysis
-	cmd.Flags().StringVar(&aiPrompt, "ai-prompt", "", "AI analysis prompt (enables AI per-page analysis)")
-	cmd.Flags().StringVar(&aiProvider, "ai-provider", "openai", "AI provider (openai, anthropic, ollama)")
-	cmd.Flags().StringVar(&aiModel, "ai-model", "", "AI model name")
-	cmd.Flags().StringVar(&aiKey, "ai-key", "", "AI API key (or use env: OPENAI_API_KEY, ANTHROPIC_API_KEY)")
-	// Google Search Console
-	cmd.Flags().BoolVar(&gsc, "gsc", false, "Enable Google Search Console data enrichment")
-	cmd.Flags().StringVar(&gscProperty, "gsc-property", "", "GSC property URL")
-	cmd.Flags().StringVar(&gscKeyFile, "gsc-key-file", "", "Path to GSC service account JSON key file")
-	cmd.Flags().IntVar(&gscDays, "gsc-days", 90, "GSC data lookback days")
-	cmd.Flags().StringVar(&gscBqDataset, "gsc-bq", "", "Use BigQuery bulk export (project.dataset format)")
-	// Google Analytics 4
-	cmd.Flags().BoolVar(&ga4, "ga4", false, "Enable Google Analytics 4 data enrichment")
-	cmd.Flags().StringVar(&ga4Property, "ga4-property", "", "GA4 property ID")
-	cmd.Flags().StringVar(&ga4KeyFile, "ga4-key-file", "", "Path to GA4 service account JSON key file")
-	cmd.Flags().IntVar(&ga4Days, "ga4-days", 90, "GA4 data lookback days")
-	// Chrome UX Report
-	cmd.Flags().BoolVar(&crux, "crux", false, "Enable Chrome UX Report data enrichment")
-	cmd.Flags().StringVar(&cruxKey, "crux-key", "", "CrUX API key")
-	cmd.Flags().StringVar(&cruxFormFactor, "crux-form-factor", "ALL", "CrUX form factor (PHONE, DESKTOP, ALL)")
-	// Plausible Analytics
-	cmd.Flags().BoolVar(&plausible, "plausible", false, "Enable Plausible Analytics data enrichment")
-	cmd.Flags().StringVar(&plausibleSiteID, "plausible-site-id", "", "Plausible site ID")
-	cmd.Flags().StringVar(&plausibleAPIKey, "plausible-api-key", "", "Plausible API key")
-	cmd.Flags().IntVar(&plausibleDays, "plausible-days", 30, "Plausible data lookback days")
-	cmd.Flags().StringVar(&plausibleHost, "plausible-host", "", "Custom Plausible host URL")
-	// Custom data extraction
-	cmd.Flags().StringArrayVar(&customExtractions, "extract", nil, "Custom CSS extraction (name:selector)")
-	cmd.Flags().StringArrayVar(&customSearches, "search", nil, "Search for text or /regex/ in source")
-	cmd.Flags().StringArrayVar(&snippetPaths, "snippet", nil, "JS snippet to run in headless Chrome (requires --js)")
-	// Output features
-	cmd.Flags().BoolVar(&checkExternal, "check-external", false, "Check external links for broken URLs")
-	cmd.Flags().BoolVar(&pageWeight, "page-weight", false, "Analyze page weight by fetching resource sizes via HEAD requests")
-	cmd.Flags().BoolVar(&fullAnchors, "full-anchors", false, "Include full anchor data in output (default: stripped to save space)")
-	cmd.Flags().BoolVar(&fullPageWeight, "full-page-weight", false, "Include per-resource detail in page weight (default: aggregate only)")
-	cmd.Flags().BoolVar(&htmlReport, "html", false, "Generate interactive HTML report")
-	cmd.Flags().BoolVar(&htmlOpen, "html-open", false, "Auto-open HTML report in browser")
-	cmd.Flags().BoolVar(&sitemapOut, "sitemap-out", false, "Generate XML sitemap from crawled indexable pages")
-	// SQLite persistence
-	cmd.Flags().StringVar(&dbPath, "db", "", "SQLite database path for crawl persistence (auto-derived if not set)")
-	cmd.Flags().BoolVar(&noDb, "no-db", false, "Disable automatic crawl database creation")
-	cmd.Flags().BoolVar(&noAnalysis, "no-analysis", false, "Only crawl and save; skip post-crawl analysis (run it later with micelio import)")
-	cmd.Flags().BoolVar(&dbOnly, "db-only", false, "Write only the crawl database, no JSONL/CSV output")
-	cmd.Flags().BoolVar(&noSoft404Probe, "no-soft404-probe", false, "Skip the one request for a page that cannot exist (soft-404 check)")
-	cmd.Flags().BoolVar(&resumeCrawl, "resume", false, "Resume an interrupted crawl (requires --db)")
-	// Performance
-	cmd.Flags().BoolVar(&adaptiveRate, "adaptive-rate", false, "Dynamically adjust request rate based on server feedback")
-	cmd.Flags().Float64Var(&delayFactor, "delay-factor", 0, "Heritrix-style delay: factor * avg response time (e.g., 5 = 5x response time gap). Requires --adaptive-rate")
-	cmd.Flags().BoolVar(&stealth, "stealth", false, "Mimic Chrome TLS/HTTP fingerprint to evade bot detection")
-	cmd.Flags().BoolVar(&discoverSitemaps, "discover-sitemaps", false, "Parse XML sitemaps to discover and crawl orphan pages")
-	// Tor
-	cmd.Flags().StringVar(&torControlPort, "tor-control-port", "", "Tor control port address (default 127.0.0.1:9051)")
-	cmd.Flags().StringVar(&torPassword, "tor-password", "", "Tor control port password")
-	cmd.Flags().IntVar(&torRotateEvery, "tor-rotate", 0, "Rotate Tor circuit every N requests (default 50)")
-
+	registerCrawlFlags(cmd, &o, crawlDefaults{concurrency: 5, delayMs: 200, output: "", spider: true})
 	return cmd
 }
 
 // ── List Crawl ──
 
 func listCmd() *cobra.Command {
-	var (
-		concurrency  int
-		delayMs      int
-		userAgent    string
-		outputPath   string
-		outputFormat string
-		proxy        string
-		maxErrors    int
-		timeout      int
-		headers      []string
-		cookies      string
-		stealth      bool
-	)
-
+	var o crawlOptions
 	cmd := &cobra.Command{
-		Use:   "list <file>",
+		Use:   "list [file]",
 		Short: "Crawl a list of URLs from a file",
-		Args:  cobra.ExactArgs(1),
+		Long: "Crawl a list of URLs from a file (one per line). The URLs can come from\n" +
+			"the file argument or from --config (\"urlList\"); the argument wins.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			urls, err := readURLsFromFile(args[0])
+			config, fileLimit, err := o.resolveConfig(cmd)
 			if err != nil {
 				return err
 			}
-			format := resolveFormat(outputFormat, outputPath)
-
-			config := types.CrawlConfig{
-				SeedURL:        urls[0],
-				Mode:           types.ModeList,
-				URLs:           urls,
-				MaxDepth:       0,
-				MaxPages:       len(urls),
-				Concurrency:    concurrency,
-				DelayMs:        delayMs,
-				UserAgent:      userAgent,
-				OutputPath:     outputPath,
-				OutputFormat:   format,
-				CustomHeaders:  parseHeaders(headers),
-				Cookies:        cookies,
-				Proxy:          proxy,
-				MaxErrors:      maxErrors,
-				TimeoutSeconds: timeout,
-				Stealth:        stealth,
+			config.Mode = types.ModeList
+			config.MaxDepth = 0
+			if len(args) == 1 {
+				urls, err := readURLsFromFile(args[0])
+				if err != nil {
+					return err
+				}
+				config.URLs = urls
+				config.MaxPages = len(urls)
+			} else {
+				if len(config.URLs) == 0 {
+					return errors.New("no URLs to crawl: pass <file> or a --config file with \"urlList\"")
+				}
+				for i, u := range config.URLs {
+					config.URLs[i] = ensureScheme(u)
+				}
+				// A config limit below the list size caps the crawl.
+				config.MaxPages = len(config.URLs)
+				if fileLimit > 0 && fileLimit < len(config.URLs) {
+					config.MaxPages = fileLimit
+				}
 			}
-
-			return runCrawlWithProgress(config, nil, nil)
+			config.SeedURL = config.URLs[0]
+			return o.run(cmd, config)
 		},
 	}
-
-	cmd.Flags().IntVarP(&concurrency, "concurrency", "c", 3, "Concurrent requests")
-	cmd.Flags().IntVar(&delayMs, "delay", 100, "Delay between requests (ms)")
-	cmd.Flags().StringVarP(&userAgent, "user-agent", "u", "Micelio/1.0", "User-Agent")
-	cmd.Flags().StringVarP(&outputPath, "output", "o", "output.jsonl", "Output file path")
-	cmd.Flags().StringVarP(&outputFormat, "format", "f", "", "Output format (jsonl or csv)")
-	cmd.Flags().StringVar(&proxy, "proxy", "", "HTTP/SOCKS5 proxy URL (use 'tor' for Tor)")
-	cmd.Flags().IntVar(&maxErrors, "max-errors", 0, "Stop after N errors")
-	cmd.Flags().IntVar(&timeout, "timeout", 0, "Stop after N seconds")
-	cmd.Flags().StringArrayVarP(&headers, "header", "H", nil, "Custom header")
-	cmd.Flags().StringVar(&cookies, "cookies", "", "Cookie string")
-	cmd.Flags().BoolVar(&stealth, "stealth", false, "Mimic Chrome TLS/HTTP fingerprint to evade bot detection")
-
+	registerCrawlFlags(cmd, &o, crawlDefaults{concurrency: 3, delayMs: 100, output: "output.jsonl"})
 	return cmd
 }
 
@@ -514,61 +193,42 @@ func listCmd() *cobra.Command {
 
 func sitemapCmd() *cobra.Command {
 	var (
-		concurrency  int
-		maxPages     int
-		delayMs      int
-		userAgent    string
-		outputPath   string
-		outputFormat string
-		proxy        string
-		headers      []string
-		cookies      string
-		stealth      bool
+		o     crawlOptions
+		limit int
 	)
-
 	cmd := &cobra.Command{
-		Use:   "sitemap <url...>",
+		Use:   "sitemap [url...]",
 		Short: "Crawl all URLs from XML sitemap(s)",
-		Args:  cobra.MinimumNArgs(1),
+		Long: "Crawl all URLs from XML sitemap(s). The sitemaps can come from the\n" +
+			"arguments or from --config (\"sitemapUrls\"); the arguments win.",
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			limit := maxPages
-			if limit == 0 {
-				limit = 100000
+			config, fileLimit, err := o.resolveConfig(cmd)
+			if err != nil {
+				return err
 			}
-			format := resolveFormat(outputFormat, outputPath)
-
-			config := types.CrawlConfig{
-				SeedURL:       args[0],
-				Mode:          types.ModeSitemap,
-				SitemapURLs:   args,
-				MaxDepth:      0,
-				MaxPages:      limit,
-				Concurrency:   concurrency,
-				DelayMs:       delayMs,
-				UserAgent:     userAgent,
-				OutputPath:    outputPath,
-				OutputFormat:  format,
-				CustomHeaders: parseHeaders(headers),
-				Cookies:       cookies,
-				Proxy:         proxy,
-				Stealth:       stealth,
+			config.Mode = types.ModeSitemap
+			config.MaxDepth = 0
+			if len(args) > 0 {
+				config.SitemapURLs = args
 			}
-
-			return runCrawlWithProgress(config, nil, nil)
+			if len(config.SitemapURLs) == 0 {
+				return errors.New("no sitemap to crawl: pass <url...> or a --config file with \"sitemapUrls\"")
+			}
+			config.SeedURL = config.SitemapURLs[0]
+			if cmd.Flags().Changed("limit") || o.configPath == "" {
+				config.MaxPages = limit
+			} else {
+				config.MaxPages = fileLimit
+			}
+			if config.MaxPages <= 0 {
+				config.MaxPages = 100000
+			}
+			return o.run(cmd, config)
 		},
 	}
-
-	cmd.Flags().IntVarP(&concurrency, "concurrency", "c", 3, "Concurrent requests")
-	cmd.Flags().IntVarP(&maxPages, "limit", "l", 0, "Max pages (0 = unlimited)")
-	cmd.Flags().IntVar(&delayMs, "delay", 200, "Delay between requests (ms)")
-	cmd.Flags().StringVarP(&userAgent, "user-agent", "u", "Micelio/1.0", "User-Agent")
-	cmd.Flags().StringVarP(&outputPath, "output", "o", "output.jsonl", "Output file path")
-	cmd.Flags().StringVarP(&outputFormat, "format", "f", "", "Output format")
-	cmd.Flags().StringVar(&proxy, "proxy", "", "HTTP/SOCKS5 proxy URL (use 'tor' for Tor)")
-	cmd.Flags().StringArrayVarP(&headers, "header", "H", nil, "Custom header")
-	cmd.Flags().StringVar(&cookies, "cookies", "", "Cookie string")
-	cmd.Flags().BoolVar(&stealth, "stealth", false, "Mimic Chrome TLS/HTTP fingerprint to evade bot detection")
-
+	registerCrawlFlags(cmd, &o, crawlDefaults{concurrency: 3, delayMs: 200, output: "output.jsonl"})
+	cmd.Flags().IntVarP(&limit, "limit", "l", 0, "Max pages (0 = unlimited)")
 	return cmd
 }
 
@@ -1681,27 +1341,6 @@ The source directory is embedded at compile time. Use --skip-dashboard to only r
 }
 
 // ── Shared Helpers ──
-
-func addCommonCrawlFlags(cmd *cobra.Command, concurrency, maxPages, maxDepth, delayMs *int,
-	userAgent, outputPath, outputFormat, proxy *string, maxErrors, timeout *int,
-	headers *[]string, cookies *string, includePattern, excludePattern, allowedDomains *[]string) {
-
-	cmd.Flags().IntVarP(concurrency, "concurrency", "c", 5, "Concurrent requests")
-	cmd.Flags().IntVar(maxPages, "max-pages", 1000, "Maximum pages")
-	cmd.Flags().IntVarP(maxDepth, "depth", "d", 10, "Maximum crawl depth")
-	cmd.Flags().IntVar(delayMs, "delay", 200, "Delay between requests (ms)")
-	cmd.Flags().StringVarP(userAgent, "user-agent", "u", "Micelio/1.0", "User-Agent")
-	cmd.Flags().StringVarP(outputPath, "output", "o", "", "Output file path")
-	cmd.Flags().StringVarP(outputFormat, "format", "f", "", "Output format (jsonl or csv)")
-	cmd.Flags().StringVar(proxy, "proxy", "", "HTTP/SOCKS5 proxy URL (use 'tor' for Tor)")
-	cmd.Flags().IntVar(maxErrors, "max-errors", 0, "Stop after N errors")
-	cmd.Flags().IntVar(timeout, "timeout", 0, "Stop after N seconds")
-	cmd.Flags().StringArrayVarP(headers, "header", "H", nil, "Custom header (Name: Value)")
-	cmd.Flags().StringVar(cookies, "cookies", "", "Cookie string")
-	cmd.Flags().StringArrayVar(includePattern, "include", nil, "Include URL pattern (regex)")
-	cmd.Flags().StringArrayVar(excludePattern, "exclude", nil, "Exclude URL pattern (regex)")
-	cmd.Flags().StringArrayVar(allowedDomains, "allowed-domains", nil, "Additional allowed domains")
-}
 
 func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessConfig, crawlStore *storage.CrawlStore) error {
 	ctx, cancel := context.WithCancel(context.Background())

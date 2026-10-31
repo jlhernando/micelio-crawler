@@ -2,7 +2,9 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
-## [Unreleased]
+## [1.9.0] - 2026-10-31
+
+The CLI can do every crawl the dashboard can, and JS rendering asks each page once.
 
 ### Added
 
@@ -12,6 +14,10 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 ### Changed
 
 - `micelio list` and `micelio sitemap` now run the post-crawl analysis, write a crawl database and respect robots.txt, like `micelio crawl`. Use `--no-analysis`, `--no-db` or `--no-robots` for the old behaviour. Without `-o` or `--db` the database is named `<host>-list.db` or `<host>-sitemap.db`, so crawls of different sites never share one file.
+
+### Fixed
+
+- **JS rendering requests each page once.** The headless browser now gets the HTML the crawler already downloaded instead of fetching the page a second time, so the site sees one request per page, not two. Files the browser still loads itself wait their turn in the per-site delay, so rendering no longer goes faster than the delay or robots.txt Crawl-delay allow.
 
 ## [1.8.7] - 2026-10-30
 

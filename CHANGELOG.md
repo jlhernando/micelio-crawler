@@ -2,6 +2,12 @@
 
 All notable changes to Micelio. Versions follow [semantic versioning](https://semver.org/). The version shown in the app and used by the in-app updater comes from the git tag.
 
+## [Unreleased]
+
+### Fixed
+
+- **A URL list that mixes sites crawls every URL.** List mode (`micelio list` and List on New Crawl) only crawled URLs on the first URL's site and silently dropped the rest: a list with example.com, example.org and iana.org gave 1 page of 3. Every site in the list is now crawled. `--allowed-domains` still limits the sites when set, and the log says how many URLs were skipped.
+
 ## [1.9.0] - 2026-10-31
 
 The CLI can do every crawl the dashboard can, and JS rendering asks each page once.

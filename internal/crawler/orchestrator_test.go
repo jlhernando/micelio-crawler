@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -312,5 +313,42 @@ func TestCrawlMaxErrors(t *testing.T) {
 	// Shouldn't crawl all 20 error pages
 	if len(result.Pages) > 10 {
 		t.Errorf("expected fewer pages due to MaxErrors, got %d", len(result.Pages))
+	}
+}
+
+// A URL list may mix sites: every listed URL is crawled, not only the ones
+// on the first URL's host.
+func TestCrawlListModeSeveralHosts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, "<html><head><title>%s</title></head><body>OK</body></html>", r.Host)
+	}))
+	defer srv.Close()
+
+	// Same server under two host names: 127.0.0.1 and localhost.
+	other := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+	urls := []string{srv.URL + "/a", other + "/b", other + "/c"}
+
+	config := types.CrawlConfig{
+		SeedURL:     urls[0],
+		Mode:        types.ModeList,
+		URLs:        urls,
+		MaxPages:    10,
+		Concurrency: 2,
+		UserAgent:   "TestBot/1.0",
+		SkipSSRF:    true,
+	}
+	result, err := Crawl(context.Background(), config, nil)
+	if err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+	got := map[string]bool{}
+	for _, p := range result.Pages {
+		got[p.URL] = true
+	}
+	for _, u := range urls {
+		if !got[u] {
+			t.Errorf("%s not crawled; got %v", u, got)
+		}
 	}
 }

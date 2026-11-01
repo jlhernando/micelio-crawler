@@ -10,14 +10,6 @@ export default defineConfig({
   build: {
     outDir: '../dist/dashboard',
     emptyOutDir: true,
-    rollupOptions: {
-      output: {
-        // Vite 8 (Rolldown) only accepts the function form.
-        manualChunks(id) {
-          if (/[\\/]node_modules[\\/](sigma|graphology|graphology-layout-forceatlas2)[\\/]/.test(id)) return 'sigma';
-        },
-      },
-    },
   },
   server: {
     proxy: {

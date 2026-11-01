@@ -11,8 +11,7 @@ This page is for people who read or change the code. To use Micelio, see the
   updates over WebSocket.
 - **Frontend**: Svelte 5 (runes), Tailwind CSS 4 and Vite 8. The built dashboard
   is embedded in the binary with `go:embed`, so no separate web server is needed.
-- **Graphs**: Sigma.js 3, graphology and ForceAtlas2 for Graph Explorer;
-  three.js for Universe.
+- **Graphs**: three.js for Universe.
 - **Storage**: pure Go SQLite (zombiezen.com/go/sqlite) for dashboard state and
   crawl databases. gzip/zstd for JSONL output; zstd for SQLite blobs such as raw
   HTML.
@@ -142,7 +141,7 @@ internal/
   webhook/            HTTP webhook dispatch with retry
 dashboard/            Svelte 5 dashboard source
   src/routes/         Pages (Setup, Monitor, Results, History, Diff, Logs, LogResults, Schedules, Settings)
-  src/lib/components/ UI components (GraphExplorer, UniverseGraph, PagesTable, DirectoryTree...)
+  src/lib/components/ UI components (UniverseGraph, PagesTable, DirectoryTree...)
   tests/              Playwright UI tests
 src/                  TypeScript crawler engine (the original implementation)
 docs/                 User docs; docs/specs/ holds design specs

@@ -53,8 +53,7 @@
 
   // Active tab
   let activeTab = $state<'overview' | 'pages' | 'segments' | 'issues' | 'performance' | 'content' | 'links' | 'signals' | 'ai-visibility'>('overview');
-  let graphSubTab = $state<'explorer' | 'universe' | 'treemap'>('universe'); // Universe first: the map of the site
-  let explorerFocus = $state<string | null>(null); // page URL Universe asked Explorer to open
+  let graphSubTab = $state<'universe' | 'treemap'>('universe'); // Universe first: the map of the site
 
   // Filters passed from SummaryHeader clicks
   let initialFilterStatus = $state('all');
@@ -515,31 +514,19 @@
               Universe
             </button>
             <button
-              class="px-3 py-1 text-xs rounded-lg {graphSubTab === 'explorer' ? 'bg-accent text-white' : 'bg-surface-3 text-fg-2 hover:bg-surface-1'}"
-              onclick={() => graphSubTab = 'explorer'}
-            >
-              Explorer
-            </button>
-            <button
               class="px-3 py-1 text-xs rounded-lg {graphSubTab === 'treemap' ? 'bg-accent text-white' : 'bg-surface-3 text-fg-2 hover:bg-surface-1'}"
               onclick={() => graphSubTab = 'treemap'}
             >
               Treemap
             </button>
             <span class="text-[10px] text-fg-2/50 ml-2">
-              {graphSubTab === 'explorer' ? 'Drill-down — start from homepage, expand one level at a time' : graphSubTab === 'universe' ? '3D map of the link structure: each page hangs from the page that links to it. Click a page for its links and a thumbnail' : 'Full-site overview — directories sized by page count'}
+              {graphSubTab === 'universe' ? '3D map of the link structure: each page hangs from the page that links to it. Click a page for its links and a thumbnail' : 'Full-site overview — directories sized by page count'}
             </span>
           </div>
-          <!-- Graph views load on demand: the Explorer pulls in sigma + graphology. -->
-          {#if graphSubTab === 'explorer'}
-            {#await import('../lib/components/results/GraphExplorer.svelte')}
-              <div class="rounded-xl border border-border bg-surface-2 p-5 text-xs text-fg-2">Loading explorer…</div>
-            {:then { default: GraphExplorer }}
-              <GraphExplorer crawlId={id} focusUrl={explorerFocus} />
-            {/await}
-          {:else if graphSubTab === 'universe'}
+          <!-- Graph views load on demand: Universe pulls in three.js. -->
+          {#if graphSubTab === 'universe'}
             {#await import('../lib/components/results/UniverseGraph.svelte') then { default: UniverseGraph }}
-              <UniverseGraph crawlId={id} onOpenExplorer={(url) => { explorerFocus = url; graphSubTab = 'explorer'; }} />
+              <UniverseGraph crawlId={id} />
             {/await}
           {:else}
             {#await import('../lib/components/results/SiteTreemap.svelte') then { default: SiteTreemap }}

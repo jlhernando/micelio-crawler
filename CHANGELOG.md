@@ -4,6 +4,14 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+### Changed
+
+- **Universe no longer grabs page scroll.** Scrolling with the cursor over the map used to zoom it. Now it works like Figma: plain scroll moves the page (a short hint says how to zoom), ⌘/Ctrl + scroll or a trackpad pinch zooms, and Shift + scroll or right-drag pans. Labels on the map zoom too.
+
+### Removed
+
+- **Link Explorer.** Links now has Universe and Treemap. Explorer's drill-down added little next to Universe, whose page card already lists inlinks and outlinks, and on small sites it drew a tangle. Its three graph libraries (sigma, graphology, ForceAtlas2) are gone too. The `/graph/subgraph` and `/graph/search` API endpoints stay.
+
 ## [1.10.1] - 2026-11-01
 
 ### Fixed

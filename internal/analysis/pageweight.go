@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/micelio/micelio/internal/netguard"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -115,8 +116,16 @@ launch:
 
 // plainHeadSizer is the fallback sizer: a HEAD request with a basic client.
 func plainHeadSizer(userAgent string) ResourceSizer {
+	// Resource URLs come from crawled pages: refuse private addresses at
+	// connect time, redirects included.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Direct connections only: through an environment proxy the dialer
+	// would check the proxy's address, not the resource's.
+	transport.Proxy = nil
+	transport.DialContext = netguard.Dialer(10 * time.Second).DialContext
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout:   10 * time.Second,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return fmt.Errorf("too many redirects")

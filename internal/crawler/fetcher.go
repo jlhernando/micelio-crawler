@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/micelio/micelio/internal/netguard"
 	"github.com/micelio/micelio/internal/types"
 	"golang.org/x/net/publicsuffix"
 )
@@ -73,11 +74,18 @@ func isRetryableFetchErr(ctx context.Context, err error) bool {
 	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 		return false
 	}
+	return !isBlockedErr(err)
+}
+
+// isBlockedErr reports whether err is a refused connection to a private
+// address. Some HTTP stacks (stealth) keep only the message, so the
+// messages are matched too.
+func isBlockedErr(err error) bool {
 	var sb *ssrfBlockedError
-	if errors.As(err, &sb) || strings.Contains(err.Error(), "DNS rebinding blocked") {
-		return false
-	}
-	return true
+	var nb *netguard.BlockedError
+	return errors.As(err, &sb) || errors.As(err, &nb) ||
+		strings.Contains(err.Error(), "DNS rebinding blocked") ||
+		strings.Contains(err.Error(), "blocked connection to private address")
 }
 
 // FetchOptions configures HTTP fetch behavior.
@@ -122,7 +130,7 @@ func ssrfSafeDialer(base *net.Dialer, cache *dnsCache) func(ctx context.Context,
 			return nil, err
 		}
 		for _, ip := range ips {
-			if ip.IP.IsLoopback() || ip.IP.IsPrivate() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsLinkLocalMulticast() {
+			if blockedIP(ip.IP) {
 				return nil, &ssrfBlockedError{msg: fmt.Sprintf("DNS rebinding blocked: %s resolved to private IP %s", host, ip.IP)}
 			}
 		}

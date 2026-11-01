@@ -111,6 +111,14 @@ type CrawlManager struct {
 	cancel      context.CancelFunc
 	mu          sync.RWMutex
 	background  sync.WaitGroup // post-crawl work that outlives the "complete" event
+	// SkipSSRF lets crawls reach loopback and private addresses. Tests
+	// only: no API, flag or setting can turn it on.
+	SkipSSRF bool
+	// testBeforeCache runs just before a crawl's results are cached.
+	testBeforeCache func(crawlID string)
+	// analyzing holds crawls marked completed whose results are not cached
+	// yet (core analysis running). Guarded by mu.
+	analyzing map[string]bool
 }
 
 // NewCrawlManager creates a new crawl manager.
@@ -407,6 +415,39 @@ func (m *CrawlManager) StopCrawl(crawlID string) error {
 	return nil
 }
 
+// setAnalyzing marks a completed crawl whose results are not cached yet.
+func (m *CrawlManager) setAnalyzing(crawlID string, on bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !on {
+		delete(m.analyzing, crawlID)
+		return
+	}
+	if m.analyzing == nil {
+		m.analyzing = map[string]bool{}
+	}
+	m.analyzing[crawlID] = true
+}
+
+// IsAnalyzing reports whether a completed crawl is still being analysed, so
+// its results are not available yet.
+func (m *CrawlManager) IsAnalyzing(crawlID string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.analyzing[crawlID]
+}
+
+// activeCounters returns the queue counters of the active crawl, read under
+// the lock the crawl updates them with (zero if crawlID is not active).
+func (m *CrawlManager) activeCounters(crawlID string) (queued, totalSeen, excluded int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.active == nil || m.active.ID != crawlID {
+		return 0, 0, 0
+	}
+	return m.active.Queued, m.active.TotalSeen, m.active.Excluded
+}
+
 // GetStatus returns the active crawl status or nil.
 func (m *CrawlManager) GetStatus() *ActiveCrawl {
 	m.mu.RLock()
@@ -443,6 +484,7 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 
 	// Convert map config to CrawlConfig
 	crawlConfig := configFromMap(config)
+	crawlConfig.SkipSSRF = m.SkipSSRF
 
 	// Memory optimization: use SQLite crawl DB so the crawler keeps only
 	// lightweight LinkEntry structs in memory instead of full PageData.
@@ -641,6 +683,9 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 	if success {
 		pages = result.Pages
 		pageCount = len(pages)
+		// "completed" comes before the analysis: say results are not ready.
+		m.setAnalyzing(crawlID, true)
+		defer m.setAnalyzing(crawlID, false)
 		if err2 := m.store.UpdateCrawlJob(crawlID, map[string]interface{}{
 			"status": "completed", "completedAt": now,
 			"pageCount": pageCount, "durationMs": elapsed,
@@ -848,9 +893,13 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 	}
 	newResult.loadingProgress.Store(100)
 
+	if m.testBeforeCache != nil {
+		m.testBeforeCache(crawlID)
+	}
 	m.mu.Lock()
 	// Replaces (and cancels the background load of) any older entry.
 	m.cacheResultLocked(crawlID, newResult, pageCount)
+	delete(m.analyzing, crawlID)
 	m.mu.Unlock()
 
 	// Clear active before emitting complete so listeners see no active crawl.

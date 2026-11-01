@@ -106,6 +106,7 @@ func main() {
 		logsCmd(),
 		buildCmd(),
 		importCmd(),
+		mcpCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {

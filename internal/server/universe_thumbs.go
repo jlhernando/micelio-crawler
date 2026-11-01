@@ -69,7 +69,10 @@ func (s *thumbService) acquireRenderer() *browser.Renderer {
 		s.idle.Stop()
 	}
 	if s.renderer == nil {
-		s.renderer = browser.NewRenderer("", browser.RenderConfig{Timeout: 20 * time.Second, BlockResources: false})
+		s.renderer = browser.NewRenderer("", browser.RenderConfig{Timeout: 20 * time.Second, BlockResources: false,
+			// Thumbnails load crawled pages: never let one reach this computer.
+			GuardNetwork: true,
+		})
 	}
 	s.active++
 	return s.renderer

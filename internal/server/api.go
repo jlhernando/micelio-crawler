@@ -90,6 +90,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 	mux := http.NewServeMux()
 	registerUpdateRoutes(mux, upd)
 	registerUniverseRoutes(mux, store, manager)
+	registerPageRoute(mux, manager)
 
 	mux.HandleFunc("POST /api/crawl/start", func(w http.ResponseWriter, r *http.Request) {
 		config, err := readJSON(r)
@@ -98,7 +99,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			return
 		}
 		// Validate seed URL against SSRF
-		if seedURL, ok := config["seedUrl"].(string); ok && crawler.IsPrivateURL(seedURL) {
+		if seedURL, ok := config["seedUrl"].(string); ok && !manager.SkipSSRF && crawler.IsPrivateURL(seedURL) {
 			jsonError(w, "seed URL targets a private/loopback address", http.StatusBadRequest)
 			return
 		}
@@ -125,6 +126,9 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, "crawl not found", http.StatusNotFound)
 			return
 		}
+		// A crawl is marked completed before its analysis runs: "analyzing"
+		// says its results are not available yet (crawls and imports).
+		analyzing := job.Status == "completed" && manager.IsAnalyzing(id)
 		// Include live stats for active crawls
 		if codes := manager.GetActiveStatusCodes(id); codes != nil {
 			type jobWithLiveStats struct {
@@ -133,15 +137,18 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 				Queued      int            `json:"queued"`
 				TotalSeen   int            `json:"totalSeen"`
 				Excluded    int            `json:"excluded"`
+				Analyzing   bool           `json:"analyzing,omitempty"`
 			}
-			active := manager.GetStatus()
-			resp := jobWithLiveStats{CrawlJob: job, StatusCodes: codes}
-			if active != nil && active.ID == id {
-				resp.Queued = active.Queued
-				resp.TotalSeen = active.TotalSeen
-				resp.Excluded = active.Excluded
-			}
+			resp := jobWithLiveStats{CrawlJob: job, StatusCodes: codes, Analyzing: analyzing}
+			resp.Queued, resp.TotalSeen, resp.Excluded = manager.activeCounters(id)
 			jsonOK(w, resp)
+			return
+		}
+		if analyzing {
+			jsonOK(w, struct {
+				*CrawlJob
+				Analyzing bool `json:"analyzing"`
+			}{job, true})
 			return
 		}
 		jsonOK(w, job)

@@ -4,6 +4,19 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-01
+
+AI agents can read and run crawls through MCP, and no crawl request can reach a private address.
+
+### Added
+
+- **`micelio mcp`: an MCP server for AI agents.** Claude, Cursor and other MCP clients can list crawls, read a short summary (4 KB max), query pages, explain a URL and see its links. It talks to the dashboard over HTTP and starts `micelio ui` in the background if none is running (`--no-autostart` to fail instead). `--allow-crawl` lets the agent start, wait for and stop crawls, with fixed limits: 10,000 pages max, concurrency 5 max, at least 500 ms between requests, robots.txt always on, no JS rendering. New endpoint `GET /api/crawl/{id}/page`. See [docs/MCP.md](docs/MCP.md).
+
+### Security
+
+- **Every crawl request refuses private addresses.** One rule now covers loopback, private ranges, link-local (cloud metadata), CGNAT 100.64.0.0/10, 0.0.0.0/8, multicast and broadcast, IPv4-mapped IPv6 included. Before, stealth mode, page-weight checks and the sitemap fallback could reach a host name that resolved to 127.0.0.1. Host names that only start with `fc` or `fd` (like fdic.gov) are no longer blocked by mistake. Refused connections are not retried.
+- **Headless Chrome goes through a guarded local proxy.** JS rendering and Universe thumbnails send every request, redirect, WebSocket and service worker through it, so a page cannot make the browser load a private address. If the proxy cannot start, Chrome gets no network at all.
+
 ### Fixed
 
 - **A URL list that mixes sites crawls every URL.** List mode (`micelio list` and List on New Crawl) only crawled URLs on the first URL's site and silently dropped the rest: a list with example.com, example.org and iana.org gave 1 page of 3. Every site in the list is now crawled. `--allowed-domains` still limits the sites when set, and the log says how many URLs were skipped.

@@ -114,7 +114,10 @@ A typical session: `crawl_start` → `crawl_wait` until `done` → `crawl_summar
 - **Crawl caps the agent cannot raise.** `crawl_start` uses at most 10,000
   pages (default 500), 5 parallel requests (default 3) and at least 500 ms
   between requests (default 1,000 ms). robots.txt is always respected,
-  adaptive rate limiting is on and JavaScript rendering is off. The dashboard
+  adaptive rate limiting is on and JavaScript rendering is off. When a value
+  is changed to fit a cap, the answer lists it in `adjusted` (for example
+  `limit 50000 -> 10000 (max 10000)`) and the message asks the agent to tell
+  you. The dashboard
   runs one crawl at a time: if one is running, `crawl_start` says so and gives
   its id.
 - **No secrets.** The tools never call the settings API and never return a

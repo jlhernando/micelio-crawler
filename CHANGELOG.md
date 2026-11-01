@@ -4,6 +4,10 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+### Fixed
+
+- **`micelio mcp` says when it changes a crawl to fit the caps.** `crawl_start` used to cut a request for 50,000 pages, concurrency 20 and no delay down to 10,000, 5 and 500 ms without a word. The answer now lists every changed value in `adjusted` (for example `limit 50000 -> 10000 (max 10000)`), and the message asks the agent to tell you.
+
 ## [1.10.0] - 2026-11-01
 
 AI agents can read and run crawls through MCP, and no crawl request can reach a private address.

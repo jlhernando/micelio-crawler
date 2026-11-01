@@ -77,73 +77,18 @@ func NormalizeURLForComparison(rawURL string) string {
 	return urlutil.ComparisonKey(rawURL, true)
 }
 
-// IsPrivateURL checks whether a URL points to a private/internal network address.
-// Used for SSRF protection.
+// IsPrivateURL checks whether a URL's host is a literal private address or
+// a name for this computer (localhost). Host names are checked again when
+// they are resolved (SafeDialer, ssrfSafeDialer). Used for SSRF protection.
 func IsPrivateURL(rawURL string) bool {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return false
 	}
-
-	host := parsed.Hostname()
-
-	// Common loopback aliases
-	if host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0" {
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return true
 	}
-	// IPv6 loopback
-	if host == "::1" || host == "[::1]" {
-		return true
-	}
-
-	// Cloud metadata endpoint
-	if host == "169.254.169.254" {
-		return true
-	}
-
-	// Try parsing as IP
 	ip := net.ParseIP(host)
-	if ip != nil {
-		// IPv4 private ranges
-		if ip4 := ip.To4(); ip4 != nil {
-			// 10.0.0.0/8
-			if ip4[0] == 10 {
-				return true
-			}
-			// 172.16.0.0/12
-			if ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31 {
-				return true
-			}
-			// 192.168.0.0/16
-			if ip4[0] == 192 && ip4[1] == 168 {
-				return true
-			}
-			// 127.0.0.0/8
-			if ip4[0] == 127 {
-				return true
-			}
-			// 169.254.0.0/16 (link-local)
-			if ip4[0] == 169 && ip4[1] == 254 {
-				return true
-			}
-			return false
-		}
-		// IPv6 checks
-		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-			return true
-		}
-		// IPv6 unique-local (fc00::/7)
-		hostLower := strings.ToLower(host)
-		if strings.HasPrefix(hostLower, "fc") || strings.HasPrefix(hostLower, "fd") {
-			return true
-		}
-	}
-
-	// String-based checks for bracketed IPv6
-	hostLower := strings.ToLower(strings.Trim(host, "[]"))
-	if strings.HasPrefix(hostLower, "fe80:") || strings.HasPrefix(hostLower, "fc") || strings.HasPrefix(hostLower, "fd") {
-		return true
-	}
-
-	return false
+	return ip != nil && blockedIP(ip)
 }

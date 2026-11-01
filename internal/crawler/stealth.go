@@ -52,6 +52,11 @@ func StealthClient(timeout time.Duration, proxy *url.URL) (*http.Client, error) 
 		tls_client.WithRandomTLSExtensionOrder(),
 		tls_client.WithNotFollowRedirects(),
 	}
+	if proxy == nil {
+		// Without a proxy the client connects to the site itself: refuse
+		// private addresses at connect time, like DefaultClient.
+		opts = append(opts, tls_client.WithDialer(*SafeDialer(30*time.Second)))
+	}
 	if proxy != nil {
 		opts = append(opts, tls_client.WithProxyUrl(proxy.String()))
 	}

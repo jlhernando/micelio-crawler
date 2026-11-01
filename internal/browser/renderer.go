@@ -19,6 +19,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
+	"github.com/micelio/micelio/internal/netguard"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -55,6 +56,9 @@ type RenderConfig struct {
 	// (iframes, JS navigations) and returns a func to call once it is sent:
 	// the crawler's per-host limiter, so Crawl-delay holds for the browser too.
 	Pace func(ctx context.Context, url string) (sent func())
+	// GuardNetwork sends all of Chrome's traffic through a local proxy that
+	// refuses private addresses (netguard), loopback included.
+	GuardNetwork bool
 }
 
 // Prefetched is a page the crawler already downloaded. The browser is served
@@ -73,6 +77,7 @@ type Renderer struct {
 	allocCancel context.CancelFunc
 	proxy       string
 	config      RenderConfig
+	guard       *netguard.Proxy // set with GuardNetwork
 }
 
 // NewRenderer creates a new browser renderer.
@@ -83,8 +88,23 @@ func NewRenderer(proxy string, cfg ...RenderConfig) *Renderer {
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 	)
+	var guard *netguard.Proxy
 	if proxy != "" {
 		opts = append(opts, chromedp.ProxyServer(proxy))
+	} else if len(cfg) > 0 && cfg[0].GuardNetwork {
+		// Chrome resolves names and connects on its own, so a check made
+		// before its requests could be fooled by DNS that changes answers,
+		// and WebSockets skip request interception. All its traffic goes
+		// through the guarded proxy instead, loopback included.
+		if g, err := netguard.StartProxy(nil); err == nil {
+			guard = g
+			opts = append(opts, chromedp.ProxyServer("http://"+g.Addr()),
+				chromedp.Flag("proxy-bypass-list", "<-loopback>"))
+		} else {
+			// Fail closed: a proxy that does not exist refuses everything.
+			opts = append(opts, chromedp.ProxyServer("http://127.0.0.1:9"),
+				chromedp.Flag("proxy-bypass-list", "<-loopback>"))
+		}
 	}
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 
@@ -96,6 +116,7 @@ func NewRenderer(proxy string, cfg ...RenderConfig) *Renderer {
 		}
 		rc.BlockResources = c.BlockResources
 		rc.Pace = c.Pace
+		rc.GuardNetwork = c.GuardNetwork
 	}
 
 	return &Renderer{
@@ -103,6 +124,7 @@ func NewRenderer(proxy string, cfg ...RenderConfig) *Renderer {
 		allocCancel: allocCancel,
 		proxy:       proxy,
 		config:      rc,
+		guard:       guard,
 	}
 }
 
@@ -427,6 +449,9 @@ func (r *Renderer) Screenshot(ctx context.Context, pageURL string, width, height
 // Close shuts down the Chrome instance.
 func (r *Renderer) Close() {
 	r.allocCancel()
+	if r.guard != nil {
+		r.guard.Close()
+	}
 }
 
 // ── Render comparison ──

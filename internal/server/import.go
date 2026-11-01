@@ -181,6 +181,9 @@ func (m *CrawlManager) runImport(ctx context.Context, p *pendingImport) error {
 			}
 		}
 	}
+	// "completed" comes before the analysis: say results are not ready.
+	m.setAnalyzing(job.ID, true)
+	defer m.setAnalyzing(job.ID, false)
 	if err := m.store.UpdateCrawlJob(job.ID, updates); err != nil {
 		log.Printf("import %s: update job: %v", job.ID, err)
 	}

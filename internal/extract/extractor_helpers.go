@@ -1287,3 +1287,9 @@ func ExtractResourceRefs(htmlContent, pageURL string) []types.ResourceEntry {
 
 	return resources
 }
+
+// DetermineIndexability is the crawler's indexability verdict, for code
+// that explains it (the MCP server) and must agree with it.
+func DetermineIndexability(statusCode int, metaRobots, xRobotsTag, canonical *string, finalURL string) types.IndexabilityData {
+	return determineIndexability(statusCode, metaRobots, xRobotsTag, canonical, finalURL)
+}

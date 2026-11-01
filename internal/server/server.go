@@ -8,11 +8,13 @@ import (
 	"io/fs"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	_ "net/http/pprof" // register pprof handlers on default mux
 	"os"
 	"os/signal"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -152,7 +154,7 @@ func StartUIServerWithOptions(opts ServerOptions, dashboardFS fs.FS) error {
 	}
 
 	httpServer := &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", host, port),
+		Addr:    net.JoinHostPort(host, strconv.Itoa(port)),
 		Handler: srv.withHeaders(mux),
 	}
 

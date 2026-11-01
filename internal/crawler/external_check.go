@@ -392,9 +392,8 @@ func hostUnreachable(err error, site string) bool {
 		return false
 	}
 	var dnsErr *net.DNSError
-	var blocked *ssrfBlockedError
 	return (errors.As(err, &dnsErr) && dnsErr.IsNotFound) ||
-		errors.Is(err, syscall.ECONNREFUSED) || errors.As(err, &blocked)
+		errors.Is(err, syscall.ECONNREFUSED) || isBlockedErr(err)
 }
 
 func limitRedirects(_ *http.Request, via []*http.Request) error {

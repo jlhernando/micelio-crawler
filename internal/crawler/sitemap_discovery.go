@@ -104,7 +104,7 @@ func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, u
 	}
 
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = DefaultClient(30*time.Second, nil)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sitemapURL, nil)

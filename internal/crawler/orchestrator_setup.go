@@ -468,6 +468,9 @@ func (s *crawlSession) setupBrowser() {
 	if s.config.RenderTimeoutSec > 0 {
 		cfg.Timeout = time.Duration(s.config.RenderTimeoutSec) * time.Second
 	}
+	// Chrome makes its own connections: send them through the guarded
+	// proxy so none reaches this computer or its networks.
+	cfg.GuardNetwork = !s.config.SkipSSRF
 	s.renderer = browser.NewRenderer(s.config.Proxy, cfg)
 	s.browserSem = make(chan struct{}, 4)
 	features := "max 4 tabs"

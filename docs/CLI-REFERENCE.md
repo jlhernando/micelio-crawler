@@ -21,6 +21,7 @@ This reference matches the commands and flags in the current source tree. Run
 | `schedules` | List registered schedules and their state |
 | `gsc-auth` | Manage the local Search Console OAuth token |
 | `ui` | Start the embedded web dashboard |
+| `mcp` | Let AI agents (Claude Code, Claude Desktop...) read crawls over MCP; see [MCP.md](MCP.md) |
 | `build` | Rebuild and install from the source directory embedded in the binary |
 
 Cobra also provides `completion` for shell-completion scripts.
@@ -587,6 +588,29 @@ MICELIO_AUTH_TOKEN='replace-me' micelio ui --host 0.0.0.0
 Use authentication whenever the dashboard is exposed beyond localhost. TLS and
 network access control should be provided by a trusted reverse proxy or host
 firewall.
+
+## `mcp`: Let AI agents read your crawls
+
+```bash
+micelio mcp [flags]
+```
+
+Runs an MCP (Model Context Protocol) server on stdin/stdout. An AI agent such
+as Claude Code can then list crawls, read a crawl summary, query pages and ask
+why a URL is or is not indexable. Every call goes to the dashboard; if none
+answers on this computer, `micelio ui` is started in the background. Full
+guide: [MCP.md](MCP.md).
+
+| Flag | Default | Meaning |
+|---|---:|---|
+| `--server <url>` | `http://127.0.0.1:3100` | Dashboard to read crawls from |
+| `--auth-token <token>` | `MICELIO_AUTH_TOKEN` | Dashboard token, if it was started with `--auth-token` |
+| `--allow-crawl` | off | Also let the agent start, wait for and stop crawls (capped) |
+| `--no-autostart` | off | Fail with a clear error instead of starting the dashboard |
+
+```bash
+claude mcp add micelio -- micelio mcp
+```
 
 ## `build`: Rebuild an installed source build
 

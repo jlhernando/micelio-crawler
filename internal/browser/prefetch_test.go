@@ -73,3 +73,31 @@ func TestRenderUsesPrefetchedPage(t *testing.T) {
 		t.Errorf("paced = %v, want the iframe document only", paced)
 	}
 }
+
+// With GuardNetwork, Chrome reaches the network only through Micelio's
+// guarded proxy: WebSockets, navigations and host names that resolve to
+// this computer are all refused, and Chrome never resolves names itself.
+func TestRenderGuardNetwork(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		fmt.Fprint(w, "secret")
+	}))
+	defer srv.Close()
+	byName := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+	ws := strings.Replace(srv.URL, "http://", "ws://", 1)
+	r := newTestRenderer(t, RenderConfig{Timeout: 20 * time.Second, GuardNetwork: true})
+	pre := &Prefetched{
+		HTML: `<html><body><img src="` + byName + `/img.png">
+<script>try { new WebSocket("` + ws + `/ws") } catch (e) {}
+fetch("` + byName + `/fetch").catch(function(){});
+setTimeout(function(){ location.href = "` + byName + `/nav" }, 100)</script></body></html>`,
+		Headers: map[string]string{"Content-Type": "text/html"},
+	}
+	if _, err := r.RenderPage(context.Background(), "http://public.example/", "Micelio/1.0", pre); err != nil {
+		t.Fatal(err)
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("the browser sent %d requests to a private address", n)
+	}
+}

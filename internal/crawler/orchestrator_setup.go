@@ -277,8 +277,24 @@ func (s *crawlSession) setupQueue() error {
 	s.queue = NewCrawlQueue(s.seedURL, s.config.MaxDepth, s.config.MaxPages, queueOpts)
 
 	if s.config.Mode == types.ModeList && len(s.config.URLs) > 0 {
+		// A list may mix sites: register every listed host as internal, as
+		// sitemap mode does, or the queue drops all but the first URL's host.
+		// AllowedDomains, when set, still limits which hosts are crawled.
+		if len(s.config.AllowedDomains) == 0 {
+			for _, u := range s.config.URLs {
+				if p, err := url.Parse(u); err == nil {
+					s.queue.AddAllowedDomains(p.Hostname())
+				}
+			}
+		}
+		skipped := 0
 		for _, u := range s.config.URLs {
-			s.queue.Enqueue(u, 0, nil)
+			if !s.queue.Enqueue(u, 0, nil) {
+				skipped++
+			}
+		}
+		if skipped > 0 {
+			fmt.Fprintf(os.Stderr, "  [list] %d URL(s) skipped (duplicates, filters or outside AllowedDomains)\n", skipped)
 		}
 	} else if s.config.Mode == types.ModeSitemap {
 		// The seed is a sitemap file, not a crawlable page. The page URLs it

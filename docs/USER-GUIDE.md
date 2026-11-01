@@ -239,7 +239,7 @@ for deeper analysis.
 | **Issues** | What needs attention, how severe is it, and which URLs are affected? |
 | **Performance** | How fast are responses, what do PSI/CrUX show, and where is page weight or HTML size risky? |
 | **Content** | Where are pages thin, duplicated, stale, hard to read, or structurally weak? |
-| **Links** | What does the link architecture look like (Universe, Explorer, Treemap), how is authority distributed, where are dead ends/orphans, and which internal links are missing? |
+| **Links** | What does the link architecture look like (Universe, Treemap), how is authority distributed, where are dead ends/orphans, and which internal links are missing? |
 | **Signals** | Which content and quality signals stand out across the crawl? |
 | **AI Visibility** | What AI-search and citation-readiness signals are available? This tab appears when the crawl produced AI visibility data. |
 
@@ -272,16 +272,10 @@ pages" on New Crawl or `--no-soft404-probe`.
 Enable Link Intelligence before the crawl to compute the complete set of graph
 metrics and suggestions.
 
-The **Links** tab opens with three views. **Universe** is first and selected.
+The **Links** tab opens with two views. **Universe** is first and selected.
 
 - **Universe** draws the site's architecture as a 3D map of its internal links.
   See [Universe](#universe) below.
-- **Explorer** (Graph Explorer) is the secondary, drill-down view. It starts at
-  the home page and expands one level at a time when you click a page. It reads
-  neighbourhoods from SQLite, so it opens at once even on 700K+ page crawls.
-  Search (server-side), breadcrumbs, collapse/expand, a coverage bar (share of
-  the site explored), ForceAtlas2 layout and Depth, Authority, Hub and PageRank
-  colour modes are available.
 - **Treemap** shows directories sized by page count.
 - Below them: the directory tree, dead ends, nofollow usage, links to
   non-indexable pages, orphan pages, and semantic link suggestions. The anchor
@@ -333,6 +327,7 @@ Controls:
 
 | Control | What it does |
 |---|---|
+| **Move around** | Drag to orbit. ⌘ (Ctrl on Windows/Linux) + scroll, or a trackpad pinch, zooms. Shift + scroll or right-drag pans. Plain scroll moves the page, never the map, and a short hint says how to zoom. |
 | **Layout: Link structure / Grouped** | Link structure places pages by links (default). Grouped places each cluster around its own centre, with lines between clusters showing real link counts. |
 | **Colour: Section / Folder / Subfolder / Template** | Colours pages by group. Section finds the folder most of the site shares (for example `/en-US/docs/Web/`) and groups by the folder below it. |
 | **Metric: Depth / PageRank / Authority / Hub** | Colours pages by a metric instead. Depth uses one colour per click level; the others go from grey (low) to gold (high). Authority and hub are shown as percentiles, since a few pages hold most of the score. Click the active metric again to go back to group colours. |
@@ -348,8 +343,7 @@ Controls:
 Click a dot or a table row to select a page. The panel shows its status,
 PageRank, inlinks, outlinks and depth, how many clicks it takes to reach and
 through which page, and a thumbnail. Its inlinks are drawn in green and its
-outlinks in amber. **Open in Explorer** switches to Graph Explorer with that page
-open, to study its links one level at a time.
+outlinks in amber.
 
 <img src="universe-page.png" alt="Selected page with inlinks, outlinks and thumbnail" width="720">
 
@@ -590,7 +584,7 @@ A compact list of what Micelio checks and computes, by area.
 
 ### Links and authority
 
-- Universe and Graph Explorer (see [Link Intelligence](#link-intelligence)).
+- Universe (see [Link Intelligence](#link-intelligence)).
 - Centrality scores: PageRank, authority, hub, betweenness and closeness.
 - Orphan pages, including sitemap-only orphans with Discover Sitemaps.
 - Link suggestions based on semantic similarity.

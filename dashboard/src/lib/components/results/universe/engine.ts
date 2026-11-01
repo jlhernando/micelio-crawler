@@ -203,6 +203,8 @@ export interface EngineEvents {
   onFocus: (index: number | null) => void;
   onSelect: (links: NodeLinks | null) => void;
   onProgress: (p: Progress) => void;
+  /** The wheel turned over the map without a modifier, so the page scrolled instead. */
+  onPlainWheel?: () => void;
 }
 
 function newStatusData() {
@@ -282,6 +284,8 @@ export class UniverseEngine {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
+    // Plain scroll moves the page; the wheel only zooms or pans with a modifier (onWheel).
+    this.controls.enableZoom = false;
     this.controls.addEventListener('change', () => this.request());
 
     this.buildPoints();
@@ -290,6 +294,8 @@ export class UniverseEngine {
     const el = this.renderer.domElement;
     el.addEventListener('pointerdown', this.onDown);
     el.addEventListener('pointerup', this.onUp);
+    // On the host, so labels and chips drawn over the canvas zoom too.
+    host.addEventListener('wheel', this.onWheel, { passive: false });
     this.resizeObs = new ResizeObserver(() => this.resize());
     this.resizeObs.observe(host);
     this.visObs = new IntersectionObserver(([e]) => { this.visible = e.isIntersecting; if (this.visible) this.request(); });
@@ -299,6 +305,42 @@ export class UniverseEngine {
   }
 
   private onVisibility = () => { if (!document.hidden) this.request(); };
+
+  /**
+   * Figma-style wheel: ⌘/Ctrl + scroll (and trackpad pinch, which arrives as
+   * Ctrl + wheel) zooms, Shift + scroll pans, plain scroll is left to the page.
+   */
+  private onWheel = (e: WheelEvent) => {
+    const zoom = e.ctrlKey || e.metaKey;
+    if (!zoom && !e.shiftKey) {
+      this.ev.onPlainWheel?.();
+      return;
+    }
+    e.preventDefault();
+    if (this.fly) return;
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.host.clientHeight : 1;
+    let dx = e.deltaX * unit;
+    let dy = e.deltaY * unit;
+    const target = this.controls.target;
+    const off = this.camera.position.clone().sub(target);
+    if (zoom) {
+      // Pinch sends small deltas, a mouse wheel ~100 per notch.
+      const speed = e.ctrlKey && !e.metaKey && Math.abs(dy) < 50 ? 0.01 : 0.002;
+      const dist = Math.min(Math.max(off.length() * Math.exp(Math.max(-150, Math.min(150, dy)) * speed), 20), this.radius * 6);
+      this.camera.position.copy(target).add(off.setLength(dist));
+    } else {
+      // Shift turns a vertical mouse wheel into deltaX on macOS but not elsewhere.
+      if (dx === 0) [dx, dy] = [dy, 0];
+      const perPx = (2 * off.length() * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2))) / (this.host.clientHeight || 1);
+      const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 0).multiplyScalar(dx * perPx);
+      const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 1).multiplyScalar(-dy * perPx);
+      const move = right.add(up);
+      this.camera.position.add(move);
+      target.add(move);
+    }
+    this.controls.update();
+    this.request();
+  };
 
   // Colour uniforms are shared objects, so every material follows setColorMode.
   private colorUniforms = {
@@ -981,6 +1023,7 @@ export class UniverseEngine {
     document.removeEventListener('visibilitychange', this.onVisibility);
     this.renderer.domElement.removeEventListener('pointerdown', this.onDown);
     this.renderer.domElement.removeEventListener('pointerup', this.onUp);
+    this.host.removeEventListener('wheel', this.onWheel);
     this.controls.dispose();
     this.scene.traverse((o) => {
       const m = o as THREE.Mesh;

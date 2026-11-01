@@ -6,7 +6,7 @@
   // does not pull the lazily loaded engine (three.js) into its chunk.
   import { GRAPH_IN_COLOR, GRAPH_PALETTE } from '../../palette';
 
-  let { crawlId, onOpenExplorer }: { crawlId: string; onOpenExplorer?: (url: string) => void } = $props();
+  let { crawlId }: { crawlId: string } = $props();
 
   const PALETTE = GRAPH_PALETTE;
   const OUT_COLOR = '#f2c46d';
@@ -20,6 +20,15 @@
   let dim = $state('auto');
   let error = $state('');
   let progress = $state<Progress>({ loaded: 0, target: 0, edges: 0, edgeTarget: 0, phase: 'pages', reason: '' });
+  // Plain scroll moves the page; a short hint says how to zoom and pan instead.
+  const zoomKey = typeof navigator !== 'undefined' && /Mac|iP(hone|ad)/.test(navigator.platform) ? '⌘' : 'Ctrl';
+  let wheelHint = $state(false);
+  let wheelHintTimer: ReturnType<typeof setTimeout> | undefined;
+  function showWheelHint() {
+    wheelHint = true;
+    clearTimeout(wheelHintTimer);
+    wheelHintTimer = setTimeout(() => (wheelHint = false), 1500);
+  }
   let focused = $state<number | null>(null);
   let detail = $state<NodeLinks | null>(null);
   let detailThumb = $state<string | null>(null);
@@ -156,6 +165,7 @@
         onFocus: (i) => { focused = i; if (i !== null) loadRows(true); },
         onSelect: (d) => openDetail(d),
         onProgress: (p) => { progress = p; },
+        onPlainWheel: showWheelHint,
       });
       if (highlight) engine.setHighlight(highlight);
       await engine.load();
@@ -475,16 +485,16 @@
         </div>
       {/if}
       <div class="mt-3 flex items-center gap-4 text-[11px] text-fg-2">
-        {#if onOpenExplorer}
-          <button class="order-last ml-auto rounded-md border border-border px-2.5 py-1 text-[11px] text-fg-1 hover:border-[#5a5f66] hover:text-fg" onclick={() => onOpenExplorer?.(d.url)}>Open in Explorer →</button>
-        {/if}
         <span class="flex items-center gap-1.5"><span class="uv-line" style="background:{IN_COLOR}"></span>Inlinks {detail.in.length < detail.inTotal ? `(${detail.in.length.toLocaleString()} drawn)` : ''}</span>
         <span class="flex items-center gap-1.5"><span class="uv-line" style="background:{OUT_COLOR}"></span>Outlinks {detail.out.length < detail.outTotal ? `(${detail.out.length.toLocaleString()} drawn)` : ''}</span>
       </div>
     </div>
   {/if}
 
-  <div class="pointer-events-none absolute bottom-5 right-[476px] z-10 text-[11px] text-[#7d828a]">Click a page · Drag to orbit · Scroll to zoom · Esc to go back</div>
+  {#if wheelHint}
+    <div class="pointer-events-none absolute left-[calc((100%-456px)/2)] top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-[#000c] px-4 py-2.5 text-[13px] text-fg">{zoomKey} + scroll to zoom · Shift + scroll to pan</div>
+  {/if}
+  <div class="pointer-events-none absolute bottom-5 right-[476px] z-10 text-[11px] text-[#7d828a]">Click a page · Drag to orbit · Right-drag or Shift + scroll to pan · {zoomKey} + scroll or pinch to zoom · Esc to go back</div>
 </div>
 
 <style>

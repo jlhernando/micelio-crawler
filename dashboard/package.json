@@ -23,10 +23,7 @@
   },
   "dependencies": {
     "chart.js": "^4.5.1",
-    "graphology": "^0.26.0",
-    "graphology-layout-forceatlas2": "^0.10.1",
     "lucide-svelte": "^0.460.0",
-    "sigma": "^3.0.2",
     "three": "^0.169.0"
   }
 }

@@ -21,6 +21,7 @@
 - **Server log analysis.** Apache, Nginx, CloudFront, Cloudflare, ALB/ELB and W3C/IIS logs. 100+ bot signatures, crawl-budget waste, AI bot trends and a log-to-crawl merge.
 - **Scheduled crawls with reports.** Cron schedules send reports by email, Telegram or Slack, and can check the network before each run.
 - **Compare crawls.** History keeps every crawl; Diff shows added, removed and changed pages between two.
+- **Ask an AI agent about your crawls.** `micelio mcp` is an MCP server: Claude Code, Claude Desktop and other MCP clients can list crawls, read a short summary, query pages and ask why a URL is or is not indexable. With `--allow-crawl` they can also start small, polite crawls.
 - **Integrations.** Google Search Console, GA4, PageSpeed Insights, CrUX, Plausible and AI analysis (OpenAI, Anthropic, Ollama).
 - **Single binary, local data.** No server to run and no account. Crawls live in `~/.micelio` on your computer.
 
@@ -86,6 +87,7 @@ Each release has a `checksums.txt`, and the in-app updater checks it before it i
 | `gsc-auth` | OAuth2 sign-in for Google Search Console |
 | `build` | Rebuild and install Micelio from source |
 | `ui` | Start the web dashboard |
+| `mcp` | MCP server so AI agents can read and run crawls |
 
 ```bash
 micelio crawl https://example.com --max-pages 5000 --link-intelligence --html
@@ -100,6 +102,7 @@ Every command and flag is in the [CLI Reference](docs/CLI-REFERENCE.md).
 
 - [User Guide](docs/USER-GUIDE.md): every screen of the dashboard, by workflow
 - [CLI Reference](docs/CLI-REFERENCE.md): every command, flag and example
+- [Micelio for AI agents (MCP)](docs/MCP.md): connect Claude Code or Claude Desktop to your crawls
 - [Crawl in the cloud](docs/CLOUD-CRAWLS.md): crawl on a small server, analyse on your computer
 - [Memory management](docs/MEMORY-MANAGEMENT.md): how Micelio keeps memory bounded on large crawls
 - [Architecture](docs/ARCHITECTURE.md): stack, project layout and performance internals

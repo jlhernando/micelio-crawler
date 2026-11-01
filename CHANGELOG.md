@@ -4,6 +4,10 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-01
+
+Universe moves like Figma, and the Links tab drops Link Explorer.
+
 ### Changed
 
 - **Universe no longer grabs page scroll.** Scrolling with the cursor over the map used to zoom it. Now it works like Figma: plain scroll moves the page (a short hint says how to zoom), ⌘/Ctrl + scroll or a trackpad pinch zooms, and Shift + scroll or right-drag pans. Labels on the map zoom too.

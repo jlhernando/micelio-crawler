@@ -224,7 +224,10 @@ type crawlStartOut struct {
 	Depth       int    `json:"depth"`
 	Concurrency int    `json:"concurrency"`
 	DelayMs     int    `json:"delayMs"`
-	Message     string `json:"message"`
+	// Adjusted lists every value changed to fit the caps, so the agent
+	// knows the crawl is not exactly the one it asked for.
+	Adjusted []string `json:"adjusted,omitempty" jsonschema:"values changed to fit the safety caps"`
+	Message  string   `json:"message"`
 }
 
 // webURL checks that u is an absolute http(s) URL.
@@ -248,6 +251,17 @@ func startConfig(in crawlStartIn) (map[string]any, crawlStartOut, error) {
 	}
 	if in.DelayMs != nil {
 		out.DelayMs = min(max(*in.DelayMs, minDelayMs), maxDelayMs)
+	}
+	adjust := func(name string, asked, got int, rule string) {
+		if asked > 0 && asked != got {
+			out.Adjusted = append(out.Adjusted, fmt.Sprintf("%s %d -> %d (%s)", name, asked, got, rule))
+		}
+	}
+	adjust("limit", in.Limit, out.Limit, fmt.Sprintf("max %d", maxLimit))
+	adjust("depth", in.Depth, out.Depth, fmt.Sprintf("max %d", maxDepth))
+	adjust("concurrency", in.Concurrency, out.Concurrency, fmt.Sprintf("max %d", maxConcurrency))
+	if in.DelayMs != nil && *in.DelayMs != out.DelayMs {
+		out.Adjusted = append(out.Adjusted, fmt.Sprintf("delayMs %d -> %d (min %d, max %d)", *in.DelayMs, out.DelayMs, minDelayMs, maxDelayMs))
 	}
 	if out.Mode == "" {
 		out.Mode = "spider"
@@ -278,6 +292,7 @@ func startConfig(in crawlStartIn) (map[string]any, crawlStartOut, error) {
 			return nil, out, errors.New("list mode needs urls")
 		}
 		if len(urls) > out.Limit {
+			out.Adjusted = append(out.Adjusted, fmt.Sprintf("urls %d -> %d (limit %d)", len(urls), out.Limit, out.Limit))
 			urls = urls[:out.Limit]
 		}
 		if err := checkURLs(urls); err != nil {
@@ -294,6 +309,7 @@ func startConfig(in crawlStartIn) (map[string]any, crawlStartOut, error) {
 			return nil, out, errors.New("sitemap mode needs url (the sitemap) or urls")
 		}
 		if len(urls) > 50 {
+			out.Adjusted = append(out.Adjusted, fmt.Sprintf("sitemaps %d -> 50 (max 50)", len(urls)))
 			urls = urls[:50]
 		}
 		if err := checkURLs(urls); err != nil {
@@ -345,6 +361,10 @@ func (t *tools) crawlStart(ctx context.Context, _ *mcp.CallToolRequest, in crawl
 	}
 	out.ID, out.Status = resp.ID, resp.Status
 	out.Message = "Crawl started. Call crawl_wait with this id until done is true, then crawl_summary."
+	if len(out.Adjusted) > 0 {
+		out.Message = "Crawl started with safety caps applied: " + strings.Join(out.Adjusted, "; ") +
+			". Tell the user the crawl differs from what they asked. " + out.Message[len("Crawl started. "):]
+	}
 	return nil, out, nil
 }
 

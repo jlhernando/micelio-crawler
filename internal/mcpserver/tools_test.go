@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -367,7 +368,27 @@ func TestCrawlStartCaps(t *testing.T) {
 	if got["id"] != "stub-crawl-1" {
 		t.Errorf("crawl_start = %v", got)
 	}
-	callOK(t, cs, "crawl_start", map[string]any{"url": "https://example.com/"}, nil)
+	// The agent is told what was changed, and the depth it set within the
+	// caps is not listed.
+	wantAdjusted := []any{
+		"limit 1000000 -> 10000 (max 10000)",
+		"concurrency 50 -> 5 (max 5)",
+		"delayMs 0 -> 500 (min 500, max 60000)",
+	}
+	if !reflect.DeepEqual(got["adjusted"], wantAdjusted) {
+		t.Errorf("adjusted = %v, want %v", got["adjusted"], wantAdjusted)
+	}
+	if msg, _ := got["message"].(string); !strings.Contains(msg, "safety caps applied: limit 1000000 -> 10000") {
+		t.Errorf("message does not mention the caps: %q", msg)
+	}
+	var plain map[string]any
+	callOK(t, cs, "crawl_start", map[string]any{"url": "https://example.com/"}, &plain)
+	if _, ok := plain["adjusted"]; ok {
+		t.Errorf("defaults reported as adjusted: %v", plain["adjusted"])
+	}
+	if msg, _ := plain["message"].(string); strings.Contains(msg, "caps") {
+		t.Errorf("defaults message mentions caps: %q", msg)
+	}
 	callOK(t, cs, "crawl_start", map[string]any{"mode": "list", "urls": []string{"https://example.com/x", "https://example.com/y"}}, nil)
 
 	stub.mu.Lock()

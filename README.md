@@ -21,6 +21,7 @@
 - **Server log analysis.** Apache, Nginx, CloudFront, Cloudflare, ALB/ELB and W3C/IIS logs. 100+ bot signatures, crawl-budget waste, AI bot trends and a log-to-crawl merge.
 - **Scheduled crawls with reports.** Cron schedules send reports by email, Telegram or Slack, and can check the network before each run.
 - **Compare crawls.** History keeps every crawl; Diff shows added, removed and changed pages between two.
+- **Crawl as any device, or compare two.** Pick Desktop, Mobile, Tablet, iPhone, Googlebot Smartphone, Googlebot Desktop or Bingbot, portrait or landscape. With JS rendering Chrome renders on that device's screen. Compare two devices in one crawl to find links and content only one of them gets: mobile-first gaps, responsive SPAs, prerendering for bots.
 - **Ask an AI agent about your crawls.** `micelio mcp` is an MCP server: Claude Code, Claude Desktop and other MCP clients can list crawls, read a short summary, query pages and ask why a URL is or is not indexable. With `--allow-crawl` they can also start small, polite crawls.
 - **Integrations.** Google Search Console, GA4, PageSpeed Insights, CrUX, Plausible and AI analysis (OpenAI, Anthropic, Ollama).
 - **Single binary, local data.** No server to run and no account. Crawls live in `~/.micelio` on your computer.
@@ -92,6 +93,7 @@ Each release has a `checksums.txt`, and the in-app updater checks it before it i
 ```bash
 micelio crawl https://example.com --max-pages 5000 --link-intelligence --html
 micelio sitemap https://example.com/sitemap.xml -l 50000 -o sitemap-crawl.jsonl
+micelio crawl https://example.com --device mobile --compare-device googlebot-smartphone --js
 micelio logs access-*.log --output bots.json
 micelio schedule https://example.com --cron "0 2 * * *" --webhook https://hooks.slack.com/...
 ```

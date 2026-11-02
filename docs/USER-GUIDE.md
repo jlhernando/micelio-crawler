@@ -189,6 +189,26 @@ Results get a **Devices** tab:
 Google indexes the mobile version of a page, so links and content only the
 desktop version has may not count.
 
+Which pair to pick:
+
+| Question | Device | Compare with | JavaScript Rendering |
+|---|---|---|---|
+| Does my mobile version miss links or content (mobile-first indexing)? | Googlebot Smartphone | Googlebot Desktop | On for sites built with JavaScript |
+| Does a responsive SPA show other menus or links on phones? | Mobile | Desktop | On |
+| Does the site serve Googlebot something else (prerendering, dynamic rendering, cloaking)? | Mobile | Googlebot Smartphone | Off first (raw HTML), then on |
+
+Keep the same kind of device on both sides when the question is about the
+bot: Mobile against Googlebot Smartphone changes only the agent, so every
+difference comes from what the site serves to Googlebot. Micelio bot against
+Googlebot Smartphone changes the agent **and** the device (Micelio renders a
+desktop screen), and the Devices tab says so.
+
+Example: on a travel site that prerenders for bots, Mobile against Googlebot
+Smartphone without JavaScript showed a home page with 0 internal links for the
+phone and 77 for Googlebot, plus structured data only Googlebot received.
+Sites that check Googlebot's IP answer a crawler using its User-Agent from
+another IP with 403; the Devices tab then shows *different HTTP status*.
+
 New Crawl starts from **Settings > Default Crawl Settings** (delay,
 concurrency, depth, limit, user agent, external links, JS rendering, robots,
 n-grams, embeddings, link intelligence and more). A preset then changes only the

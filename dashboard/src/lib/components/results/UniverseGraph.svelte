@@ -40,15 +40,15 @@
   let showAll = $state(false);
   let allQ = $derived(showAll ? '&all=1' : '');
   // Status pill: 0 none, 1 redirects, 2 errors, 3 blocked by robots.txt.
-  let highlight = $state<0 | 1 | 2 | 3>(0);
+  let highlight = $state<0 | 1 | 2 | 3 | 4>(0); // 4: pages that differ between devices
   const STATUS_PILLS = [
     { kind: 2, key: 'errors', label: 'Errors', title: '4xx/5xx pages', color: 'error', dash: '' },
     { kind: 1, key: 'redirects', label: 'Redirects', title: 'redirects', color: 'redirect', dash: '5 3' },
     { kind: 3, key: 'blocked', label: 'Robots.txt', title: 'URLs blocked by robots.txt', color: 'blocked', dash: '2 3' },
   ] as const;
-  function pickHighlight(kind: 1 | 2 | 3) {
+  function pickHighlight(kind: 1 | 2 | 3 | 4) {
     highlight = highlight === kind ? 0 : kind;
-    if (highlight && !showAll) {
+    if (highlight && highlight !== 4 && !showAll) {
       showAll = true; // these pages are only drawn with the toggle on
       start(dim);
       return;
@@ -298,6 +298,15 @@
           onclick={() => { crossLinks = !crossLinks; engine?.setCrossLinks(crossLinks); }}>
           <span class="uv-switch {crossLinks ? 'on' : ''}"></span>
           Cross links · {compact(Math.max(0, meta.edgesContextual - (progress.treeEdges ?? 0)))}
+        </button>
+      {/if}
+      {#if meta.deviceDiffs}
+        <button class="pointer-events-auto mt-2.5 flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] {highlight === 4 ? 'border-fg-2 bg-[#292b2e] text-fg' : 'border-border bg-[#171819cc] text-fg-2 hover:text-fg'} {focused !== null ? 'uv-fade' : ''}"
+          title="Light up the pages whose links, content, status, redirect, canonical or robots differ between the crawl's two devices; everything else fades. Click again to clear."
+          aria-pressed={highlight === 4}
+          onclick={() => pickHighlight(4)}>
+          <span class="uv-dot" style="background:#f0883e"></span>
+          Device differences · {compact(meta.deviceDiffs)}
         </button>
       {/if}
       {#if meta.hidden && meta.hidden.redirects + meta.hidden.errors + meta.hidden.blocked + (meta.statusCounts?.redirects ?? 0) > 0}

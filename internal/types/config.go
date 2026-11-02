@@ -30,16 +30,25 @@ type PathBudgetRule struct {
 
 // CrawlConfig holds all configuration for a crawl session.
 type CrawlConfig struct {
-	CustomHeaders     map[string]string      `json:"customHeaders"`
-	Cookies           string                 `json:"cookies"`
-	DBPath            string                 `json:"dbPath"`
-	Mode              CrawlMode              `json:"mode"`
-	PlausibleAPIKey   string                 `json:"plausibleApiKey"`
-	PlausibleSiteID   string                 `json:"plausibleSiteId"`
-	CrUXFormFactor    CrUXFormFactor         `json:"cruxFormFactor"`
-	CrUXKey           string                 `json:"cruxKey"`
-	SitemapPriority   string                 `json:"sitemapPriority"`
-	UserAgent         string                 `json:"userAgent"`
+	CustomHeaders   map[string]string `json:"customHeaders"`
+	Cookies         string            `json:"cookies"`
+	DBPath          string            `json:"dbPath"`
+	Mode            CrawlMode         `json:"mode"`
+	PlausibleAPIKey string            `json:"plausibleApiKey"`
+	PlausibleSiteID string            `json:"plausibleSiteId"`
+	CrUXFormFactor  CrUXFormFactor    `json:"cruxFormFactor"`
+	CrUXKey         string            `json:"cruxKey"`
+	SitemapPriority string            `json:"sitemapPriority"`
+	UserAgent       string            `json:"userAgent"`
+	// Device is the device the crawl pretends to be (User-Agent, client
+	// hints and, with JS rendering, the screen Chrome emulates). UserAgent,
+	// when set, overrides the device's User-Agent. Nil keeps the old
+	// behaviour: Micelio/1.0 and a 1920x1080 desktop render.
+	Device *DeviceProfile `json:"device,omitempty"`
+	// CompareDevice, when set, fetches every page a second time as this
+	// device (rendered too with JS rendering) and stores the differences
+	// in PageData.DeviceCompare. Links it alone sees are crawled as well.
+	CompareDevice     *DeviceProfile         `json:"compareDevice,omitempty"`
 	SitemapChangefreq string                 `json:"sitemapChangefreq"`
 	OutputPath        string                 `json:"outputPath"`
 	OutputFormat      OutputFormat           `json:"outputFormat"`

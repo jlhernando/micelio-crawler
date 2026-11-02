@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/micelio/micelio/internal/types"
 )
 
 // crawlJob is the part of a dashboard crawl job the tools show. The job's
@@ -212,6 +214,7 @@ type crawlStartIn struct {
 	Depth       int      `json:"depth,omitempty" jsonschema:"how many clicks from the start URL to follow (default 10, max 100)"`
 	Concurrency int      `json:"concurrency,omitempty" jsonschema:"parallel requests (default 3, max 5)"`
 	DelayMs     *int     `json:"delayMs,omitempty" jsonschema:"pause between requests to the site in ms (default 1000, min 500)"`
+	Device      string   `json:"device,omitempty" jsonschema:"device to crawl as (sets the User-Agent): desktop, laptop, tablet, mobile, iphone, googlebot-smartphone, googlebot-desktop or bingbot; default Micelio/1.0"`
 }
 
 type crawlStartOut struct {
@@ -224,6 +227,7 @@ type crawlStartOut struct {
 	Depth       int    `json:"depth"`
 	Concurrency int    `json:"concurrency"`
 	DelayMs     int    `json:"delayMs"`
+	Device      string `json:"device,omitempty"`
 	// Adjusted lists every value changed to fit the caps, so the agent
 	// knows the crawl is not exactly the one it asked for.
 	Adjusted []string `json:"adjusted,omitempty" jsonschema:"values changed to fit the safety caps"`
@@ -277,6 +281,14 @@ func startConfig(in crawlStartIn) (map[string]any, crawlStartOut, error) {
 		"adaptiveRate":        true,
 		"showBlockedInternal": true,
 		"checkExternal":       false,
+	}
+	if in.Device != "" {
+		d, ok := types.LookupDevice(in.Device)
+		if !ok {
+			return nil, out, fmt.Errorf("unknown device %q", truncate(in.Device, 40))
+		}
+		out.Device = d.ID
+		cfg["device"] = map[string]any{"id": d.ID}
 	}
 	urls := in.URLs
 	switch out.Mode {

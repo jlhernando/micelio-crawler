@@ -1,4 +1,5 @@
 <script lang="ts">
+  import DeviceBadge from '../lib/components/DeviceBadge.svelte';
   import { formatDateTime, formatDuration } from '../lib/format';
   import HistoryOverview from '../lib/components/results/HistoryOverview.svelte';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
@@ -26,6 +27,7 @@
     durationMs: number | null;
     events?: CrawlEvent[];
     stats?: Record<string, unknown>;
+    config?: Record<string, unknown>;
   }
 
   let loading = $state(true);
@@ -315,7 +317,7 @@
                     <span class="text-fg-2 text-xs transition-transform {isExpanded ? 'rotate-90' : ''}">&#9654;</span>
                   {/if}
                   <div>
-                    <div class="font-medium">{extractDomain(crawl.seedUrl)}</div>
+                    <div class="font-medium flex items-center gap-2">{extractDomain(crawl.seedUrl)} <DeviceBadge device={crawl.config?.device} compare={crawl.config?.compareDevice} /></div>
                     <div class="text-xs text-fg-2 font-mono truncate max-w-xs">{crawl.seedUrl}</div>
                   </div>
                 </div>

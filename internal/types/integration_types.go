@@ -61,11 +61,11 @@ type PlausibleData struct {
 
 // AIVisibilityData holds AI visibility metrics for a URL (e.g., AI Overviews in GSC).
 type AIVisibilityData struct {
-	Queries          []AIOverviewQuery `json:"queries,omitempty"`
-	AIImpressions    int               `json:"aiImpressions"`
-	AIClicks         int               `json:"aiClicks"`
-	AICTR            float64           `json:"aiCtr"`
-	InAIOverview     bool              `json:"inAiOverview"`
+	Queries       []AIOverviewQuery `json:"queries,omitempty"`
+	AIImpressions int               `json:"aiImpressions"`
+	AIClicks      int               `json:"aiClicks"`
+	AICTR         float64           `json:"aiCtr"`
+	InAIOverview  bool              `json:"inAiOverview"`
 }
 
 // AIOverviewQuery holds a single query that triggered an AI Overview appearance.

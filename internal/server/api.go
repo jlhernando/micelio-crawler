@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,7 +43,7 @@ var validSortFields = map[string]bool{
 // ValidSettings defines the allowed setting keys and their types.
 var ValidSettings = map[string]string{
 	"defaultDepth": "number", "defaultLimit": "number", "defaultConcurrency": "number",
-	"defaultDelay": "number", "defaultUserAgent": "string",
+	"defaultDelay": "number", "defaultUserAgent": "string", "defaultDevice": "string",
 	"psiKey": "string", "aiProvider": "string", "aiModel": "string", "aiKey": "string",
 	"gscKeyFile": "string", "gscProperty": "string", "gscDays": "number",
 	"ga4KeyFile": "string", "ga4Property": "string", "ga4Days": "number",
@@ -796,6 +797,11 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			return
 		}
 		jsonOK(w, map[string]bool{"deleted": true})
+	})
+
+	// Device profiles a crawl can pretend to be (New Crawl device picker).
+	mux.HandleFunc("GET /api/devices", func(w http.ResponseWriter, r *http.Request) {
+		jsonOK(w, map[string]any{"devices": types.DeviceProfiles()})
 	})
 
 	// Settings
@@ -1806,7 +1812,12 @@ func pageMatchesIssue(p *types.PageData, issue string, dupSet map[string]bool) b
 		return p.Soft404 != nil
 	case "duplicate-titles", "duplicate-descriptions":
 		return dupSet[p.URL]
+	case "device-any":
+		return p.DeviceCompare != nil && len(p.DeviceCompare.Diffs) > 0
 	default:
+		if strings.HasPrefix(issue, "device-") && p.DeviceCompare != nil {
+			return slices.Contains(p.DeviceCompare.Diffs, issue)
+		}
 		return false
 	}
 }

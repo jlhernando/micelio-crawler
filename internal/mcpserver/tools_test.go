@@ -390,10 +390,18 @@ func TestCrawlStartCaps(t *testing.T) {
 		t.Errorf("defaults message mentions caps: %q", msg)
 	}
 	callOK(t, cs, "crawl_start", map[string]any{"mode": "list", "urls": []string{"https://example.com/x", "https://example.com/y"}}, nil)
+	var dev map[string]any
+	callOK(t, cs, "crawl_start", map[string]any{"url": "https://example.com/", "device": "Googlebot-Smartphone"}, &dev)
+	if dev["device"] != "googlebot-smartphone" {
+		t.Errorf("device = %v", dev["device"])
+	}
+	if res, text := call(t, cs, "crawl_start", map[string]any{"url": "https://example.com/", "device": "toaster"}); !res.IsError {
+		t.Errorf("unknown device accepted: %s", text)
+	}
 
 	stub.mu.Lock()
 	defer stub.mu.Unlock()
-	if len(stub.starts) != 3 {
+	if len(stub.starts) != 4 {
 		t.Fatalf("starts = %v", stub.starts)
 	}
 	capped, defaults, list := stub.starts[0], stub.starts[1], stub.starts[2]
@@ -417,6 +425,9 @@ func TestCrawlStartCaps(t *testing.T) {
 	check("defaults", defaults, "delay", float64(1000))
 	check("list", list, "mode", "list")
 	check("list", list, "urlList", "https://example.com/x\nhttps://example.com/y")
+	if d, _ := stub.starts[3]["device"].(map[string]any); d["id"] != "googlebot-smartphone" {
+		t.Errorf("device config = %v", stub.starts[3]["device"])
+	}
 
 	for _, bad := range []map[string]any{
 		{"url": "ftp://example.com/"},

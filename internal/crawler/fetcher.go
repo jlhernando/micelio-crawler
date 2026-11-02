@@ -628,7 +628,7 @@ func setHeaders(req *http.Request, opts FetchOptions) {
 	if isChromeUA(opts.UserAgent) {
 		ver := extractChromeVersion(opts.UserAgent)
 		req.Header.Set("Sec-Ch-Ua", chromeSecChUa(ver))
-		req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
+		req.Header.Set("Sec-Ch-Ua-Mobile", secChUaMobile(opts.UserAgent))
 		req.Header.Set("Sec-Ch-Ua-Platform", fmt.Sprintf(`"%s"`, platformFromUA(opts.UserAgent)))
 		req.Header.Set("Upgrade-Insecure-Requests", "1")
 		req.Header.Set("Sec-Fetch-Dest", "document")
@@ -657,6 +657,15 @@ func setHeaders(req *http.Request, opts FetchOptions) {
 	if opts.Stealth {
 		setStealthHeaders(req)
 	}
+}
+
+// secChUaMobile is "?1" for a mobile Chrome User-Agent (Android phones put
+// "Mobile" in it, tablets do not), else "?0".
+func secChUaMobile(ua string) string {
+	if strings.Contains(ua, " Mobile") {
+		return "?1"
+	}
+	return "?0"
 }
 
 // extractChromeVersion parses the major version from a Chrome UA string.

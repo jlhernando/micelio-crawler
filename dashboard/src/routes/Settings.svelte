@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { DEVICES } from '../lib/devices.js';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
@@ -12,6 +13,7 @@
     defaultConcurrency: number;
     defaultDelay: number;
     defaultUserAgent: string;
+    defaultDevice: string;
     psiKey: string;
     aiProvider: string;
     aiModel: string;
@@ -74,6 +76,7 @@
     defaultConcurrency: 3,
     defaultDelay: 200,
     defaultUserAgent: '',
+    defaultDevice: '',
     psiKey: '',
     aiProvider: '',
     aiModel: '',
@@ -425,6 +428,20 @@
           <span class="mt-1 block text-[11px] text-fg-2">Per site: {num('defaultDelay') > 0 ? `max ≈ ${(1000 / num('defaultDelay')).toLocaleString(undefined, { maximumFractionDigits: 1 })} pages/s` : 'no cap'}. Used by New Crawl.</span>
         </label>
       </div>
+      <label class="block mt-3">
+        <span class="text-xs text-fg-2">Default device</span>
+        <select
+          value={str('defaultDevice')}
+          onchange={(e) => set('defaultDevice', (e.target as HTMLSelectElement).value)}
+          class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+        >
+          <option value="">Micelio bot (Micelio/1.0, 1920×1080 render)</option>
+          {#each DEVICES as d}
+            <option value={d.id}>{d.label} · {d.width}×{d.height}</option>
+          {/each}
+        </select>
+        <span class="mt-1 block text-[11px] text-fg-2">Selected on New Crawl. A Custom User Agent below still wins.</span>
+      </label>
       <label class="block mt-3">
         <span class="text-xs text-fg-2">Custom User Agent</span>
         <input

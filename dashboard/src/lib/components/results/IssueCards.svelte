@@ -179,6 +179,16 @@
       });
     }
 
+    const parity = stats.deviceParity as { compared: number; identical: number; issues: Record<string, number> } | undefined;
+    if (parity) {
+      const links = parity.issues?.['device-links'] || 0;
+      const content = parity.issues?.['device-content'] || 0;
+      if (links > 0) cards.push({ id: 'device-links', label: 'Internal links differ between devices', count: links, severity: 'warning', details: [], issueFilter: 'device-links' });
+      if (content > 0) cards.push({ id: 'device-content', label: 'Main content differs between devices', count: content, severity: 'warning', details: [], issueFilter: 'device-content' });
+      const other = parity.compared - parity.identical - Math.max(links, content);
+      if (other > 0) cards.push({ id: 'device-any', label: 'Other device differences', count: parity.compared - parity.identical, severity: 'info', details: [], issueFilter: 'device-any' });
+    }
+
     const titleTooLong = (stats.titleTooLongCount as number) || 0;
     if (titleTooLong > 0) {
       cards.push({

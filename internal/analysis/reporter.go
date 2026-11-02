@@ -538,6 +538,7 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 	if cfg.TotalSitemapURLs > 0 {
 		stats.SitemapStats = buildSitemapComparisonStats(pages, cfg)
 	}
+	stats.DeviceParity = BuildDeviceParity(pages)
 
 	// Thin content: sort and cap at 50
 	sort.Slice(stats.ThinContentPages, func(i, j int) bool {

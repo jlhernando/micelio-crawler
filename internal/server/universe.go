@@ -87,7 +87,7 @@ type universeLayout struct {
 	pos   []byte // int16 x,y,z
 	clus  []byte // uint16 cluster index
 	rank  []byte // uint8 PageRank bucket
-	flags []byte // bits 0-1 status class, bit 2 blocked by robots.txt
+	flags []byte // bits 0-1 status class, bit 2 blocked by robots.txt, bit 3 differs between devices
 	// Link graph lookups. posOf maps a page index to its order position.
 	posOf []int32
 	links []universeLink
@@ -175,6 +175,31 @@ func universeStatusCounts(pages []*types.PageData) universeHidden {
 		}
 	}
 	return c
+}
+
+// universeDeviceDiff is a page whose links, content, status, redirect,
+// canonical or robots differ between the crawl's two devices (Devices pill).
+func universeDeviceDiff(p *types.PageData) bool {
+	if p.DeviceCompare == nil {
+		return false
+	}
+	for _, d := range p.DeviceCompare.Diffs {
+		switch d {
+		case types.DeviceDiffLinks, types.DeviceDiffContent, types.DeviceDiffStatus, types.DeviceDiffRedirect, types.DeviceDiffCanonical, types.DeviceDiffRobots:
+			return true
+		}
+	}
+	return false
+}
+
+func universeDeviceDiffCount(pages []*types.PageData) int {
+	n := 0
+	for _, p := range pages {
+		if universeDeviceDiff(p) {
+			n++
+		}
+	}
+	return n
 }
 
 // universeView returns the pages (and the link graph between them) that
@@ -625,6 +650,9 @@ func buildUniverseLayout(results *CrawlResults, requested, layout string) *unive
 		if p.RobotsBlocked {
 			l.flags[pos] |= 4 // bit 2: blocked by robots.txt (status class 0)
 		}
+		if universeDeviceDiff(p) {
+			l.flags[pos] |= 8 // bit 3: the compare device sees other links or content
+		}
 	}
 	return l
 }
@@ -774,6 +802,7 @@ func registerUniverseRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlMa
 				"sitewideTargets": l.sitewideTargets,
 				"hidden":          l.hidden,
 				"statusCounts":    universeStatusCounts(l.view.Pages),
+				"deviceDiffs":     universeDeviceDiffCount(l.view.Pages),
 				"all":             l.all,
 			})
 		})

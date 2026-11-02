@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -55,6 +57,12 @@ type crawlOptions struct {
 	delayMs             int
 	retries             int
 	userAgent           string
+	device              string
+	viewport            string
+	dpr                 float64
+	mobile              bool
+	landscape           bool
+	compareDevice       string
 	outputPath          string
 	outputFormat        string
 	proxy               string
@@ -140,7 +148,13 @@ func registerCrawlFlags(cmd *cobra.Command, o *crawlOptions, d crawlDefaults) {
 	}
 	f.IntVar(&o.delayMs, "delay", d.delayMs, "Delay between requests (ms)")
 	f.IntVar(&o.retries, "retries", types.DefaultRetries, "Retries per failed URL (network error, timeout, 408, 429, 5xx); 0 disables")
-	f.StringVarP(&o.userAgent, "user-agent", "u", "Micelio/1.0", "User-Agent")
+	f.StringVarP(&o.userAgent, "user-agent", "u", "Micelio/1.0", "User-Agent (overrides the --device User-Agent)")
+	f.StringVar(&o.device, "device", "", "Device to crawl as: desktop, laptop, tablet, mobile, iphone, googlebot-smartphone, googlebot-desktop, bingbot or custom")
+	f.StringVar(&o.viewport, "viewport", "", "Screen size WIDTHxHEIGHT for JS rendering, e.g. 412x915 (implies --device custom if no --device)")
+	f.Float64Var(&o.dpr, "dpr", 0, "Device pixel ratio for JS rendering, e.g. 2.625")
+	f.BoolVar(&o.mobile, "mobile", false, "Emulate a mobile browser (mobile viewport and touch) in JS rendering")
+	f.BoolVar(&o.landscape, "landscape", false, "Turn a phone or tablet --device sideways")
+	f.StringVar(&o.compareDevice, "compare-device", "", "Also fetch every page as this device (same ids as --device) and report what differs; about doubles the requests")
 	f.StringVarP(&o.outputPath, "output", "o", d.output, "Output file path")
 	f.StringVarP(&o.outputFormat, "format", "f", "", "Output format (jsonl or csv)")
 	f.StringVar(&o.proxy, "proxy", "", "HTTP/SOCKS5 proxy URL (use 'tor' for Tor)")
@@ -335,7 +349,59 @@ func (o *crawlOptions) buildConfig(cmd *cobra.Command) (types.CrawlConfig, error
 		r := o.retries
 		config.Retries = &r
 	}
+	device, err := o.deviceProfile()
+	if err != nil {
+		return types.CrawlConfig{}, err
+	}
+	if o.compareDevice != "" {
+		cd, ok := types.LookupDevice(o.compareDevice)
+		if !ok {
+			return types.CrawlConfig{}, fmt.Errorf("unknown --compare-device %q", o.compareDevice)
+		}
+		config.CompareDevice = &cd
+	}
+	if device != nil {
+		config.Device = device
+		// The device's User-Agent unless --user-agent was typed.
+		if !cmd.Flags().Changed("user-agent") {
+			config.UserAgent = ""
+		}
+	}
 	return config, nil
+}
+
+// deviceProfile builds the device from --device, --viewport, --dpr,
+// --mobile and --landscape, or nil when none was given.
+func (o *crawlOptions) deviceProfile() (*types.DeviceProfile, error) {
+	if o.device == "" && o.viewport == "" && o.dpr == 0 && !o.mobile && !o.landscape {
+		return nil, nil
+	}
+	d := &types.DeviceProfile{ID: strings.ToLower(o.device)}
+	if d.ID == "" {
+		d.ID = "custom"
+	}
+	if _, ok := types.LookupDevice(d.ID); !ok && d.ID != "custom" {
+		var ids []string
+		for _, p := range types.DeviceProfiles() {
+			ids = append(ids, p.ID)
+		}
+		return nil, fmt.Errorf("unknown --device %q (use %s or custom)", o.device, strings.Join(ids, ", "))
+	}
+	if o.viewport != "" {
+		w, h, ok := strings.Cut(strings.ToLower(o.viewport), "x")
+		wi, err1 := strconv.Atoi(strings.TrimSpace(w))
+		hi, err2 := strconv.Atoi(strings.TrimSpace(h))
+		if !ok || err1 != nil || err2 != nil || wi <= 0 || hi <= 0 {
+			return nil, fmt.Errorf("--viewport must be WIDTHxHEIGHT, like 412x915, not %q", o.viewport)
+		}
+		d.Width, d.Height = wi, hi
+	}
+	d.Scale = o.dpr
+	if o.mobile {
+		d.Mobile, d.Touch, d.Kind = true, true, types.DeviceMobile
+	}
+	d.Landscape = o.landscape
+	return types.ResolveDevice(d), nil
 }
 
 // resolveConfig builds the config from the flags and, with --config, lays

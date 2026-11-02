@@ -1,6 +1,8 @@
 <script lang="ts">
   import ScheduleForm from '../lib/components/schedule/ScheduleForm.svelte';
   import { Zap, ScanSearch, FileText, Wrench, Network } from 'lucide-svelte';
+  import DevicePicker from '../lib/components/DevicePicker.svelte';
+  import type { DeviceChoice } from '../lib/devices.js';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
   import CollapsibleSection from '../lib/components/ui/CollapsibleSection.svelte';
@@ -62,6 +64,8 @@
 
   // JavaScript
   let jsRendering = $state(false);
+  let device = $state<DeviceChoice | null>(null); // null = Micelio/1.0, 1920x1080 render
+  let compareDevice = $state<DeviceChoice | null>(null); // fetch every page as this device too
   let renderBlockResources = $state(true);
   let renderTimeoutSec = $state(0);
   let snippets = $state('');
@@ -198,6 +202,7 @@
         if (l !== undefined && l > 0) limit = l;
         if (c !== undefined && c > 0) concurrency = c;
         if (dl !== undefined && dl >= 0) delay = dl;
+        if (typeof st.defaultDevice === 'string' && st.defaultDevice) device = { id: st.defaultDevice };
         if (typeof st.defaultUserAgent === 'string' && st.defaultUserAgent) {
           userAgent = st.defaultUserAgent;
           onUaManualEdit();
@@ -273,6 +278,7 @@
     if (c.stealth !== undefined) stealth = c.stealth as boolean;
     if (c.discoverSitemaps !== undefined) discoverSitemaps = c.discoverSitemaps as boolean;
     if (c.retries !== undefined) retries = c.retries as number;
+    if (c.device !== undefined) device = (c.device as DeviceChoice | null) ?? null;
     if (c.timeoutSeconds !== undefined) stopAfterMinutes = Math.round((c.timeoutSeconds as number) / 60);
     if (c.delay !== undefined) delay = c.delay as number;
   }
@@ -286,6 +292,8 @@
     if (c.concurrency !== undefined) concurrency = c.concurrency as number;
     if (c.delay !== undefined) delay = c.delay as number;
     if (c.userAgent) userAgent = c.userAgent as string;
+    device = c.device && typeof c.device === 'object' ? (c.device as DeviceChoice) : null;
+    compareDevice = c.compareDevice && typeof c.compareDevice === 'object' ? (c.compareDevice as DeviceChoice) : null;
     if (c.proxy) proxy = c.proxy as string;
     if (c.cookies) cookies = c.cookies as string;
     if (c.includePatterns) includePatterns = (c.includePatterns as string[]).join('\n');
@@ -369,6 +377,8 @@
 
     if (delay > 0) config.delay = delay;
     if (userAgent) config.userAgent = userAgent;
+    if (device) config.device = device;
+    if (compareDevice) config.compareDevice = compareDevice;
     if (proxy) config.proxy = proxy;
     if (cookies) config.cookies = cookies;
     if (includePatterns) config.includePatterns = includePatterns.split('\n').filter(Boolean);
@@ -621,6 +631,11 @@
     </div>
   </div>
 
+  <!-- Device -->
+  <div class="rounded-xl border border-border bg-surface-2 p-5">
+    <DevicePicker bind:device bind:compareDevice {jsRendering} uaOverride={userAgent} />
+  </div>
+
   <!-- Advanced Options -->
   <div class="space-y-3">
     <!-- Filtering -->
@@ -754,7 +769,7 @@
     <CollapsibleSection title="HTTP & Authentication">
       <div class="space-y-3">
         <div>
-          <label for="uaPreset" class="block text-xs font-medium text-fg-2 mb-1">User Agent</label>
+          <label for="uaPreset" class="block text-xs font-medium text-fg-2 mb-1">User Agent <span class="font-normal">(overrides the Device User-Agent)</span></label>
           <select id="uaPreset" value={selectedUaPreset} onchange={onUaPresetChange}
             class="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent mb-2">
             <option value="__default">Micelio/1.0 (default)</option>

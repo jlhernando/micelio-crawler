@@ -201,25 +201,26 @@ type CrawlStats struct {
 	ExternalLinksUnchecked   int                    `json:"externalLinksUnchecked,omitempty"` // unique external URLs skipped (cap or cancellation)
 	// External URLs left unchecked because their site kept answering 429
 	// Too Many Requests (part of ExternalLinksUnchecked), and those sites.
-	ExternalLinksRateLimited  int      `json:"externalLinksRateLimited,omitempty"`
-	ExternalRateLimitedHosts  []string `json:"externalRateLimitedHosts,omitempty"`
-	PagesWithStructuredData   int      `json:"pagesWithStructuredData"`
-	TotalInternalLinks        int      `json:"totalInternalLinks"`
-	TotalImages               int      `json:"totalImages"`
-	CrawlDurationMs           int64    `json:"crawlDurationMs"`
-	PagesWithoutOG            int      `json:"pagesWithoutOg"`
-	PagesWithAIAnalysis       int      `json:"pagesWithAiAnalysis"`
-	TotalPages                int      `json:"totalPages"`
-	PagesWithoutH1            int      `json:"pagesWithoutH1"`
-	PagesWithoutDescription   int      `json:"pagesWithoutDescription"`
-	PagesWithoutTitle         int      `json:"pagesWithoutTitle"`
-	RobotsBlockedCount        int      `json:"robotsBlockedCount"`
-	DuplicateTitleCount       int      `json:"duplicateTitleCount"`
-	DuplicateDescriptionCount int      `json:"duplicateDescriptionCount"`
-	MultipleH1Count           int      `json:"multipleH1Count"`
-	TitleTooLongCount         int      `json:"titleTooLongCount"`
-	TitleTooShortCount        int      `json:"titleTooShortCount"`
-	DescriptionTooLongCount   int      `json:"descriptionTooLongCount"`
+	ExternalLinksRateLimited  int                `json:"externalLinksRateLimited,omitempty"`
+	ExternalRateLimitedHosts  []string           `json:"externalRateLimitedHosts,omitempty"`
+	PagesWithStructuredData   int                `json:"pagesWithStructuredData"`
+	TotalInternalLinks        int                `json:"totalInternalLinks"`
+	TotalImages               int                `json:"totalImages"`
+	CrawlDurationMs           int64              `json:"crawlDurationMs"`
+	PagesWithoutOG            int                `json:"pagesWithoutOg"`
+	PagesWithAIAnalysis       int                `json:"pagesWithAiAnalysis"`
+	TotalPages                int                `json:"totalPages"`
+	PagesWithoutH1            int                `json:"pagesWithoutH1"`
+	PagesWithoutDescription   int                `json:"pagesWithoutDescription"`
+	PagesWithoutTitle         int                `json:"pagesWithoutTitle"`
+	RobotsBlockedCount        int                `json:"robotsBlockedCount"`
+	DuplicateTitleCount       int                `json:"duplicateTitleCount"`
+	DuplicateDescriptionCount int                `json:"duplicateDescriptionCount"`
+	MultipleH1Count           int                `json:"multipleH1Count"`
+	TitleTooLongCount         int                `json:"titleTooLongCount"`
+	DeviceParity              *DeviceParityStats `json:"deviceParity,omitempty"`
+	TitleTooShortCount        int                `json:"titleTooShortCount"`
+	DescriptionTooLongCount   int                `json:"descriptionTooLongCount"`
 
 	// Automatic segmentation (no user rules): per-dimension value breakdown.
 	AutoSegmentStats     []SegmentDimensionStats `json:"autoSegmentStats,omitempty"`

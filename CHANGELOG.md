@@ -4,6 +4,15 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+### Added
+
+- **Device profiles.** New Crawl has a Device card: Micelio bot (default), Desktop, Laptop, Tablet, Mobile, iPhone, Googlebot Smartphone, Googlebot Desktop, Bingbot or Custom, with a turn button for landscape. The device sets the User-Agent and client hints (`Sec-CH-UA-Mobile: ?1` on phones), so dynamic-serving sites answer with their mobile HTML, and robots.txt is read for the device's bot. Settings has a default device; Monitor, History and Results show it. CLI `--device`, `--viewport`, `--dpr`, `--mobile`, `--landscape`; MCP `crawl_start` takes `device`.
+- **Compare two devices in one crawl.** Turn on *Compare with another device* (CLI `--compare-device`): every page is fetched, and with JS rendered, as both devices within the same per-site delay, so the crawl makes about twice the requests. Links only the second device sees are crawled too. Results get a **Devices** tab with pages compared, identical pages, text similarity and links only one device sees, one chip per difference (links, main content, status, redirect, canonical, robots, title, description, h1, structured data, hreflang, missing meta viewport) and a side-by-side view per page. Issues cards, a Universe *Device differences* pill, the HTML report and MCP `crawl_summary.devices` carry the same data.
+
+### Fixed
+
+- **JS rendering used a desktop screen for every crawl.** Chrome always rendered 1920×1080, even with a mobile User-Agent, so responsive sites showed their desktop menu and links. With a device, Chrome now emulates its screen, pixel ratio, touch and client hints. Without one it still renders 1920×1080.
+
 ## [1.11.0] - 2026-11-01
 
 Universe moves like Figma, and the Links tab drops Link Explorer.

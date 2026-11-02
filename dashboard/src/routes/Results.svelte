@@ -1,4 +1,5 @@
 <script lang="ts">
+  import DeviceBadge from '../lib/components/DeviceBadge.svelte';
   import { formatMs } from '../lib/format';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
@@ -52,7 +53,7 @@
   let loadingProgress = $state(0);
 
   // Active tab
-  let activeTab = $state<'overview' | 'pages' | 'segments' | 'issues' | 'performance' | 'content' | 'links' | 'signals' | 'ai-visibility'>('overview');
+  let activeTab = $state<'overview' | 'pages' | 'segments' | 'issues' | 'performance' | 'content' | 'links' | 'devices' | 'signals' | 'ai-visibility'>('overview');
   let graphSubTab = $state<'universe' | 'treemap'>('universe'); // Universe first: the map of the site
 
   // Filters passed from SummaryHeader clicks
@@ -233,6 +234,7 @@
 
 <div class="max-w-7xl mx-auto space-y-4">
   <PageHeading title="Site overview" description="Understand coverage, find problems, and explore the pages behind every number." section="Crawl results" />
+  {#if (crawlJob?.config as Record<string, unknown> | undefined)?.device || (crawlJob?.config as Record<string, unknown> | undefined)?.compareDevice}<div class="-mt-2 mb-2"><DeviceBadge device={(crawlJob?.config as Record<string, unknown>).device} compare={(crawlJob?.config as Record<string, unknown>).compareDevice} /></div>{/if}
   {#if loading}
     <div class="rounded-md border border-border bg-surface-2 p-12 text-center">
       <div class="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>
@@ -281,6 +283,7 @@
         { key: 'performance', label: 'Performance' },
         { key: 'content', label: 'Content' },
         { key: 'links', label: 'Links' },
+        ...(stats.deviceParity ? [{ key: 'devices', label: 'Devices' }] : []),
         { key: 'signals', label: 'Signals' },
         ...(stats.aiVisibilityStats ? [{ key: 'ai-visibility', label: 'AI Visibility' }] : []),
       ] as tab}
@@ -632,6 +635,11 @@
           </div>
         {/if}
       </div>
+
+    {:else if activeTab === 'devices'}
+      {#await import('../lib/components/results/DevicesView.svelte') then { default: DevicesView }}
+        <DevicesView crawlId={id} {stats} />
+      {/await}
 
     {:else if activeTab === 'signals'}
       <SignalsView {stats} {pageCount} />

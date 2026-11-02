@@ -1,4 +1,5 @@
 <script lang="ts">
+  import DeviceBadge from '../lib/components/DeviceBadge.svelte';
   import { formatDuration } from '../lib/format';
   import { statusBadgeClass } from '../lib/status';
   import { STATUS_GROUP_HEX } from '../lib/palette';
@@ -311,7 +312,12 @@
     if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
   }
 
+  let jobDevice = $state<unknown>(null);
+  let jobCompare = $state<unknown>(null);
+
   function hydrateFromJob(job: Record<string, unknown>) {
+    jobDevice = (job.config as Record<string, unknown> | undefined)?.device ?? null;
+    jobCompare = (job.config as Record<string, unknown> | undefined)?.compareDevice ?? null;
     if (job.status === 'completed') {
       status = 'completed';
       const pc = (job.pageCount as number) || 0;
@@ -417,6 +423,7 @@
 
 <div class="max-w-7xl mx-auto space-y-4">
   <PageHeading title="Crawl monitor" description="Follow discovery, response times, and errors as they happen." section="Live activity" />
+  {#if jobDevice || jobCompare}<div class="-mt-2"><DeviceBadge device={jobDevice} compare={jobCompare} /></div>{/if}
   <!-- Completion Banner -->
   {#if status === 'completed' && completionData}
     <div class="rounded-xl border border-green-500/30 bg-green-500/10 p-6 text-center">

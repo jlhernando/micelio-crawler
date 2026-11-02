@@ -103,7 +103,13 @@ failures.
 
 | Flag | Default | Meaning |
 |---|---:|---|
-| `-u, --user-agent <value>` | `Micelio/1.0` | Request user agent |
+| `-u, --user-agent <value>` | `Micelio/1.0` | Request user agent; overrides the `--device` user agent |
+| `--device <id>` | none | Crawl as `desktop`, `laptop`, `tablet`, `mobile`, `iphone`, `googlebot-smartphone`, `googlebot-desktop`, `bingbot` or `custom`: its user agent and client hints, and with `--js` its screen |
+| `--viewport <WxH>` | device size | Screen for `--js`, e.g. `412x915` (without `--device` it means `custom`) |
+| `--dpr <ratio>` | device ratio | Device pixel ratio for `--js`, e.g. `2.625` |
+| `--mobile` | off | Mobile viewport and touch for `--js` |
+| `--landscape` | off | Turn a phone or tablet `--device` sideways |
+| `--compare-device <id>` | none | Also fetch (and with `--js` render) every page as this device and store what differs in each page's `deviceCompare`; about doubles the requests |
 | `-H, --header "Name: Value"` | | Add a custom request header; repeatable |
 | `--cookies <value>` | | Initial Cookie header |
 | `--proxy <url>` | | HTTP, HTTPS, or SOCKS5 proxy; `tor` selects Tor |

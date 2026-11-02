@@ -138,6 +138,57 @@ does not create or supply API keys.
   5 pages/s, 1,000 ms allows 1 page/s. New Crawl shows the cap for the chosen
   delay.
 
+### Device
+
+The **Device** card on New Crawl sets what the crawler pretends to be. Pick
+Micelio bot (the default: `Micelio/1.0`), Desktop, Laptop, Tablet, Mobile,
+iPhone, Googlebot Smartphone, Googlebot Desktop, Bingbot or Custom (your own
+width, height, pixel ratio and mobile/touch). Phones and tablets have a turn
+button for landscape.
+
+- Every request sends the device's User-Agent, and Chrome-like devices send
+  matching client hints (`Sec-CH-UA-Mobile: ?1` on phones). Sites that serve
+  different HTML to phones (dynamic serving) answer with their mobile version.
+- robots.txt is read for the device's bot: Googlebot devices follow the
+  `Googlebot` group.
+- With **JavaScript Rendering** on, headless Chrome renders on the device's
+  screen: size, pixel ratio, mobile viewport, touch and client hints. A
+  responsive SPA shows its mobile menu and links. Without a device Chrome
+  renders a 1920×1080 desktop, as before. A mobile page without
+  `<meta name="viewport">` is laid out 980 px wide, like on a real phone.
+- A User Agent typed or picked in **HTTP & Authentication** overrides the
+  device's User-Agent; the screen still follows the device.
+- Settings > Default Crawl Settings has a **Default device**. Monitor, History
+  and Results show the device a crawl used.
+
+#### Compare two devices
+
+Turn on **Compare with another device** under the Device cards and pick the
+second device (desktop for a phone, a phone for a desktop; Googlebot
+Smartphone pairs with Googlebot Desktop). Every page is then fetched as both
+devices, one after the other and within the same per-site delay, so the crawl
+makes about twice the requests and takes about twice as long. With JavaScript
+Rendering on, both versions are rendered on their own screens. Links that only
+the second device sees are crawled too.
+
+Results get a **Devices** tab:
+
+- Pages compared, identical pages, average text similarity, and links only one
+  device sees (and how many of those only change query parameters).
+- One chip per difference: internal links, main content, HTTP status,
+  redirect, canonical, meta robots, title, description, h1, structured data,
+  hreflang, missing meta viewport on the phone, or a fetch that failed. Click a
+  chip to list its pages; click a page to see both versions side by side with
+  the links only each one has.
+- Issues gets cards for links and content that differ, and Universe a
+  **Device differences** pill that lights up those pages.
+- The HTML report, `crawl_summary` (MCP `devices`) and pages filters
+  (`issue=device-links`, `device-content`, … or `device-any`) carry the same
+  data.
+
+Google indexes the mobile version of a page, so links and content only the
+desktop version has may not count.
+
 New Crawl starts from **Settings > Default Crawl Settings** (delay,
 concurrency, depth, limit, user agent, external links, JS rendering, robots,
 n-grams, embeddings, link intelligence and more). A preset then changes only the

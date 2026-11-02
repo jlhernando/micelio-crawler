@@ -47,10 +47,10 @@ func TestPageDataJSONRoundTrip(t *testing.T) {
 			IsHTTPS: true,
 		},
 		LinkIntelligence: &LinkIntelligenceData{
-			ClickDepth:   &clickDepth,
-			InDegree:     5,
-			OutDegree:    10,
-			HubScore:     0.5,
+			ClickDepth:     &clickDepth,
+			InDegree:       5,
+			OutDegree:      10,
+			HubScore:       0.5,
 			AuthorityScore: 0.7,
 		},
 		PageRank: 3.14,
@@ -95,13 +95,13 @@ func TestPageDataJSONRoundTrip(t *testing.T) {
 
 func TestCrawlConfigDefaults(t *testing.T) {
 	cfg := CrawlConfig{
-		SeedURL:     "https://example.com",
-		Mode:        ModeSpider,
-		MaxDepth:    5,
-		MaxPages:    1000,
-		Concurrency: 5,
-		DelayMs:     200,
-		UserAgent:   "Micelio/1.0",
+		SeedURL:      "https://example.com",
+		Mode:         ModeSpider,
+		MaxDepth:     5,
+		MaxPages:     1000,
+		Concurrency:  5,
+		DelayMs:      200,
+		UserAgent:    "Micelio/1.0",
 		OutputFormat: FormatJSONL,
 	}
 
@@ -125,9 +125,9 @@ func TestCrawlConfigDefaults(t *testing.T) {
 
 func TestCrawlStatsJSONRoundTrip(t *testing.T) {
 	stats := CrawlStats{
-		TotalPages:  500,
-		StatusCodes: map[int]int{200: 450, 301: 30, 404: 20},
-		DepthDistribution: map[int]int{0: 1, 1: 50, 2: 200, 3: 249},
+		TotalPages:              500,
+		StatusCodes:             map[int]int{200: 450, 301: 30, 404: 20},
+		DepthDistribution:       map[int]int{0: 1, 1: 50, 2: 200, 3: 249},
 		ResponseTimePercentiles: PercentileData{P50: 120, P90: 350, P99: 1200},
 		IndexabilityStats: IndexabilityStats{
 			Indexable:    400,
@@ -135,7 +135,7 @@ func TestCrawlStatsJSONRoundTrip(t *testing.T) {
 			Reasons:      map[string]int{"noindex": 50, "canonicalized": 50},
 		},
 		PageRankScores: map[string]float64{
-			"https://example.com/": 10.0,
+			"https://example.com/":      10.0,
 			"https://example.com/about": 5.5,
 		},
 	}

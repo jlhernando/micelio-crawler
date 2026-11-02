@@ -27,6 +27,7 @@ export interface UniverseMeta {
   // Pages left out as not architecture (shown when all is set).
   hidden?: { redirects: number; errors: number; blocked: number }; all?: boolean;
   statusCounts?: { redirects: number; errors: number; blocked: number }; // drawn pages by status
+  deviceDiffs?: number; // pages that differ between the crawl's two devices (flags bit 3)
   layout: 'links' | 'folders'; unreached: number; maxLevel: number;
 }
 export interface NodeLinks {
@@ -92,7 +93,7 @@ const pointVertex = /* glsl */ `
   uniform vec3 redirColor;
   uniform vec3 blockedColor;
   uniform float showStatus; // 1 with "Redirects, errors & blocked" on
-  uniform float highlight;  // status pill: 0 none, 1 redirects, 2 errors, 3 blocked
+  uniform float highlight;  // status pill: 0 none, 1 redirects, 2 errors, 3 blocked, 4 device differences
   uniform float focus;
   uniform float projScale;
   uniform float sizeScale;
@@ -106,7 +107,8 @@ const pointVertex = /* glsl */ `
     bool blocked = mod(floor(flags / 4.0), 2.0) > 0.5;
     // Status pill: 1 redirects, 2 errors, 3 blocked; others fade.
     float kind = status > 1.5 ? 2.0 : status > 0.5 ? 1.0 : blocked ? 3.0 : 0.0;
-    bool lit = highlight > 0.5 && abs(kind - highlight) < 0.5;
+    bool deviceDiff = mod(floor(flags / 8.0), 2.0) > 0.5;
+    bool lit = highlight > 3.5 ? deviceDiff : highlight > 0.5 && abs(kind - highlight) < 0.5;
     bool dimmed = (focus >= 0.0 && abs(cluster - focus) > 0.5) || (highlight > 0.5 && !lit);
     float world = mix(24.0, 80.0, rank) * sizeScale;
     // Every page stays a visible dot. On big crawls low-PageRank pages
@@ -832,8 +834,8 @@ export class UniverseEngine {
   }
 
   /** While a page is selected, fade every other link so its own stand out. */
-  /** Status pill: light up redirects (1), errors (2) or blocked URLs (3) and their links; 0 clears. */
-  setHighlight(kind: 0 | 1 | 2 | 3) {
+  /** Status pill: light up redirects (1), errors (2) or blocked URLs (3) and their links, or pages that differ between devices (4); 0 clears. */
+  setHighlight(kind: 0 | 1 | 2 | 3 | 4) {
     this.highlight = kind;
     this.pointMat.uniforms.highlight.value = kind;
     const sm = this.status?.material as THREE.ShaderMaterial | undefined;

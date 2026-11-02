@@ -106,9 +106,21 @@ var pageFields = map[string]pageField{
 		return p.Soft404.Confidence
 	},
 	"robotsBlocked": func(p *types.PageData) any { return p.RobotsBlocked },
-	"bodySize":      func(p *types.PageData) any { return p.BodySize },
-	"error":         func(p *types.PageData) any { return truncate(scrub(p.Error), maxText) },
-	"htmlLang":      func(p *types.PageData) any { return p.HTMLLang },
+	"deviceDiffs": func(p *types.PageData) any {
+		if p.DeviceCompare == nil {
+			return nil
+		}
+		return p.DeviceCompare.Diffs
+	},
+	"deviceLinksOnlyCompare": func(p *types.PageData) any {
+		if p.DeviceCompare == nil {
+			return nil
+		}
+		return p.DeviceCompare.LinksOnlySecondaryCount
+	},
+	"bodySize": func(p *types.PageData) any { return p.BodySize },
+	"error":    func(p *types.PageData) any { return truncate(scrub(p.Error), maxText) },
+	"htmlLang": func(p *types.PageData) any { return p.HTMLLang },
 	"inSitemap": func(p *types.PageData) any {
 		if p.SitemapData == nil {
 			return nil

@@ -127,6 +127,7 @@ type PageData struct {
 	LastModified       string                  `json:"lastModified,omitempty"`
 	NotModified        bool                    `json:"notModified,omitempty"`
 	ContentChanged     *bool                   `json:"contentChanged,omitempty"`
+	DeviceCompare      *DeviceComparison       `json:"deviceCompare,omitempty"` // with CrawlConfig.CompareDevice
 }
 
 // --- HEAD-only Crawl ---

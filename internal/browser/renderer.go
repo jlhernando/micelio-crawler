@@ -12,7 +12,6 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
@@ -59,6 +58,9 @@ type RenderConfig struct {
 	// GuardNetwork sends all of Chrome's traffic through a local proxy that
 	// refuses private addresses (netguard), loopback included.
 	GuardNetwork bool
+	// Device is the screen and browser to emulate: viewport, pixel ratio,
+	// mobile and touch, and UA client hints. Nil renders a 1920x1080 desktop.
+	Device *types.DeviceProfile
 }
 
 // Prefetched is a page the crawler already downloaded. The browser is served
@@ -117,6 +119,7 @@ func NewRenderer(proxy string, cfg ...RenderConfig) *Renderer {
 		rc.BlockResources = c.BlockResources
 		rc.Pace = c.Pace
 		rc.GuardNetwork = c.GuardNetwork
+		rc.Device = c.Device
 	}
 
 	return &Renderer{
@@ -286,17 +289,6 @@ func prefetchedHeaders(h map[string]string) []*fetch.HeaderEntry {
 	return out
 }
 
-// setUserAgent overrides the tab's user agent when one is given.
-func setUserAgent(userAgent string) chromedp.Action[chromedp.Void] {
-	return chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
-		if userAgent == "" {
-			return nil
-		}
-		_, err := cdp.Call(ctx, t, emulation.SetUserAgentOverride, emulation.SetUserAgentOverrideParams{UserAgent: userAgent})
-		return err
-	})
-}
-
 // collectJSErrors enables runtime domain and collects console errors.
 func collectJSErrors(errors *[]string, mu *sync.Mutex) chromedp.Action[chromedp.Void] {
 	return chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
@@ -332,6 +324,12 @@ func collectJSErrors(errors *[]string, mu *sync.Mutex) chromedp.Action[chromedp.
 // RenderPage navigates to a URL and returns the rendered HTML after JS
 // execution. With pre, the page itself is served from pre (see Prefetched).
 func (r *Renderer) RenderPage(ctx context.Context, pageURL, userAgent string, pre *Prefetched) (*RenderResult, error) {
+	return r.RenderPageAs(ctx, pageURL, userAgent, r.config.Device, pre)
+}
+
+// RenderPageAs renders like RenderPage on another device's screen, so one
+// Chrome serves both devices of a device comparison crawl.
+func (r *Renderer) RenderPageAs(ctx context.Context, pageURL, userAgent string, device *types.DeviceProfile, pre *Prefetched) (*RenderResult, error) {
 	taskCtx, cancel := chromedp.NewContext(r.allocCtx)
 	defer cancel()
 
@@ -342,8 +340,8 @@ func (r *Renderer) RenderPage(ctx context.Context, pageURL, userAgent string, pr
 	var errorMu sync.Mutex
 
 	actions := []chromedp.Action[chromedp.Void]{
-		chromedp.EmulateViewport(1920, 1080),
-		setUserAgent(userAgent),
+		emulateDevice(device),
+		overrideUserAgent(userAgent, device),
 		collectJSErrors(&jsErrors, &errorMu),
 		setupInterception(r.config, pageURL, pre),
 	}
@@ -379,7 +377,8 @@ func (r *Renderer) RunSnippet(ctx context.Context, pageURL, userAgent, jsCode st
 	defer timeoutCancel()
 
 	actions := []chromedp.Action[chromedp.Void]{
-		setUserAgent(userAgent),
+		emulateDevice(r.config.Device),
+		overrideUserAgent(userAgent, r.config.Device),
 		setupInterception(r.config, pageURL, pre),
 	}
 

@@ -100,7 +100,7 @@ Crawl tools (only with `--allow-crawl`):
 
 | Tool | What it does |
 |---|---|
-| `crawl_start` | Starts a crawl (`url`, `mode` spider/list/sitemap, `urls`, `limit`, `depth`, `concurrency`, `delayMs`) and returns its id at once |
+| `crawl_start` | Starts a crawl (`url`, `mode` spider/list/sitemap, `urls`, `limit`, `depth`, `concurrency`, `delayMs`, `device` such as `googlebot-smartphone`) and returns its id at once |
 | `crawl_wait` | Waits up to 50 s (default 45) and returns the status with `done`. Sends progress notifications when the client asks for them. Call again while `done` is false |
 | `crawl_stop` | Stop & Analyze: no new pages are fetched and the pages so far are analysed. Nothing is deleted |
 

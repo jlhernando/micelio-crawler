@@ -111,6 +111,11 @@ func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
 	// Per-page enrichments (returns rendered HTML if JS rendering produced it)
 	renderedHTML := s.enrichPage(ctx, e, result, &page)
 
+	// Device comparison: the same page as the compare device.
+	if s.config.CompareDevice != nil && result.StatusCode > 0 && result.Error == "" {
+		s.compareDevice(ctx, e, result, &page, renderedHTML)
+	}
+
 	// Enqueue discovered links (spider mode)
 	s.enqueueLinks(e, &page)
 

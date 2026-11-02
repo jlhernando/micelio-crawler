@@ -178,6 +178,11 @@ func (s *crawlSession) applyConfigDefaults() {
 	if s.config.MaxDepth <= 0 {
 		s.config.MaxDepth = 10
 	}
+	s.config.Device = types.ResolveDevice(s.config.Device)
+	s.config.CompareDevice = types.ResolveDevice(s.config.CompareDevice)
+	if s.config.UserAgent == "" && s.config.Device != nil {
+		s.config.UserAgent = s.config.Device.UserAgent
+	}
 	if s.config.UserAgent == "" {
 		s.config.UserAgent = "Micelio/1.0"
 	}
@@ -471,6 +476,7 @@ func (s *crawlSession) setupBrowser() {
 	// Chrome makes its own connections: send them through the guarded
 	// proxy so none reaches this computer or its networks.
 	cfg.GuardNetwork = !s.config.SkipSSRF
+	cfg.Device = s.config.Device
 	s.renderer = browser.NewRenderer(s.config.Proxy, cfg)
 	s.browserSem = make(chan struct{}, 4)
 	features := "max 4 tabs"

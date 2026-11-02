@@ -441,6 +441,17 @@ function renderOverview(){
   // Page Types
   if(s.templateTypeDistribution){const types=s.templateTypeDistribution;const keys=Object.keys(types).sort((a,b)=>types[b]-types[a]);if(keys.length){h+='<div style="margin-bottom:16px">';keys.forEach(k=>{h+='<span class="type-tag">'+esc(k)+' <b>'+comma(types[k])+'</b></span>'});h+='</div>'}}
 
+  // Device comparison
+  if(s.deviceParity&&s.deviceParity.compared){
+    const d=s.deviceParity,lbl={'device-status':'Different HTTP status','device-redirect':'Redirects to a different URL','device-canonical':'Different canonical','device-robots':'Different meta robots','device-title':'Different title','device-description':'Different meta description','device-h1':'Different h1','device-content':'Different main content','device-links':'Internal links only one device sees','device-schema':'Different structured data','device-hreflang':'Different hreflang','device-no-viewport':'Mobile page without meta viewport','device-failed':'Compare device could not fetch'};
+    const name=id=>id?id.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase()):'Micelio bot';
+    h+='<div class="chart-card" style="margin-bottom:16px"><h4>Devices: '+esc(name(d.primary))+' vs '+esc(name(d.secondary))+(d.rendered?' (rendered)':'')+'</h4>';
+    h+='<div class="sub" style="margin-bottom:8px">'+comma(d.compared)+' pages compared · '+comma(d.identical)+' identical ('+pct(d.identical,d.compared)+') · text similarity '+d.avgSimilarity+'% · '+comma(d.linksOnlySecondary)+' links only on '+esc(name(d.secondary))+', '+comma(d.linksOnlyPrimary)+' only on '+esc(name(d.primary))+'</div>';
+    const ks=Object.keys(d.issues||{}).sort((a,b)=>d.issues[b]-d.issues[a]);
+    ks.forEach(k=>{h+='<div class="funnel-row"><div class="funnel-label" style="width:260px">'+esc(lbl[k]||k)+'</div><div class="funnel-bar-wrap"><div class="funnel-bar" style="width:'+pctN(d.issues[k],d.compared)+'%;background:var(--orange)">'+comma(d.issues[k])+'</div></div><div class="funnel-pct">'+pct(d.issues[k],d.compared)+'</div></div>'});
+    h+='</div>';
+  }
+
   // SEO Funnel
   if(s.seoFunnelStats){
     const sf=s.seoFunnelStats;

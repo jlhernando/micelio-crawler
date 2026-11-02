@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/micelio/micelio/internal/types"
 )
 
 // maxSummaryBytes keeps crawl_summary small enough for an agent's context.
@@ -18,8 +20,9 @@ const maxSummaryBytes = 4000
 // summaryStats is the part of /stats crawl_summary reads. Other fields
 // are left out on purpose to keep the summary small.
 type summaryStats struct {
-	TotalPages        int            `json:"totalPages"`
-	StatusCodes       map[string]int `json:"statusCodes"`
+	DeviceParity      *types.DeviceParityStats `json:"deviceParity"`
+	TotalPages        int                      `json:"totalPages"`
+	StatusCodes       map[string]int           `json:"statusCodes"`
 	IndexabilityStats struct {
 		Reasons      map[string]int `json:"reasons"`
 		Indexable    int            `json:"indexable"`
@@ -101,16 +104,17 @@ type percentiles struct {
 }
 
 type crawlSummaryOut struct {
-	ID                string              `json:"id"`
-	SeedURL           string              `json:"seedUrl"`
-	Status            string              `json:"status"`
-	AnalysisPending   bool                `json:"analysisPending" jsonschema:"true while link intelligence or external link checks still run; some numbers may change"`
-	Totals            summaryTotals       `json:"totals"`
-	StatusCodes       map[string]int      `json:"statusCodes" jsonschema:"pages per HTTP status code (0 = request failed)"`
-	Indexability      summaryIndexability `json:"indexability"`
-	Issues            []summaryIssue      `json:"issues" jsonschema:"top 10 issues, most pages first"`
-	Soft404Candidates int                 `json:"soft404Candidates"`
-	ResponseTimeMs    *percentiles        `json:"responseTimeMs,omitempty"`
+	ID                string                   `json:"id"`
+	SeedURL           string                   `json:"seedUrl"`
+	Status            string                   `json:"status"`
+	AnalysisPending   bool                     `json:"analysisPending" jsonschema:"true while link intelligence or external link checks still run; some numbers may change"`
+	Totals            summaryTotals            `json:"totals"`
+	StatusCodes       map[string]int           `json:"statusCodes" jsonschema:"pages per HTTP status code (0 = request failed)"`
+	Indexability      summaryIndexability      `json:"indexability"`
+	Issues            []summaryIssue           `json:"issues" jsonschema:"top 10 issues, most pages first"`
+	Soft404Candidates int                      `json:"soft404Candidates"`
+	ResponseTimeMs    *percentiles             `json:"responseTimeMs,omitempty"`
+	Devices           *types.DeviceParityStats `json:"devices,omitempty" jsonschema:"device comparison crawl: pages compared, identical, and pages per difference (device-links, device-content, ...); filter pages_query with issue set to that id"`
 }
 
 // issueDef describes one issue: how to count it and where samples come from.
@@ -249,6 +253,7 @@ func (t *tools) crawlSummary(ctx context.Context, _ *mcp.CallToolRequest, in idI
 	if s.Soft404Stats != nil {
 		out.Soft404Candidates = s.Soft404Stats.Total
 	}
+	out.Devices = s.DeviceParity
 	if p := s.ResponseTimePercentiles; p.P50 > 0 || p.P90 > 0 {
 		out.ResponseTimeMs = &percentiles{P50: p.P50, P90: p.P90, P99: p.P99}
 	}

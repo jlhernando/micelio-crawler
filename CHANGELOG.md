@@ -4,6 +4,10 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-11-02
+
+Crawl as any device, render on its screen, and compare two devices in one crawl.
+
 ### Added
 
 - **Device profiles.** New Crawl has a Device card: Micelio bot (default), Desktop, Laptop, Tablet, Mobile, iPhone, Googlebot Smartphone, Googlebot Desktop, Bingbot or Custom, with a turn button for landscape. The device sets the User-Agent and client hints (`Sec-CH-UA-Mobile: ?1` on phones), so dynamic-serving sites answer with their mobile HTML, and robots.txt is read for the device's bot. Settings has a default device; Monitor, History and Results show it. CLI `--device`, `--viewport`, `--dpr`, `--mobile`, `--landscape`; MCP `crawl_start` takes `device`.

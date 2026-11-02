@@ -37,6 +37,10 @@
   const SEVERE = new Set(['device-links', 'device-content', 'device-status', 'device-redirect', 'device-canonical', 'device-robots', 'device-schema', 'device-no-viewport']);
 
   const name = (id: string) => (id ? DEVICES.find((d) => d.id === id)?.label ?? id : 'Micelio bot');
+  const kindOf = (id: string) => (id ? DEVICES.find((d) => d.id === id)?.kind ?? 'desktop' : 'desktop'); // Micelio bot renders a desktop screen
+  const isBot = (id: string) => id.startsWith('googlebot') || id === 'bingbot';
+  // Width matters for rendering; the bots' slightly shorter screens do not.
+  let sameScreen = $derived(!!parity && (DEVICES.find((d) => d.id === parity!.primary)?.width ?? 1920) === (DEVICES.find((d) => d.id === parity!.secondary)?.width ?? 1920));
 
   let filter = $state('device-any');
   let rows = $state<Record<string, unknown>[]>([]);
@@ -88,8 +92,17 @@
       {#if parity.linksParamOnly}
         <p class="mt-3 text-xs text-fg-2">{parity.linksParamOnly.toLocaleString()} of the one-sided links point to a page the other device also links, with other query parameters (for example tracking or filter values).</p>
       {/if}
-      {#if parity.primary && DEVICES.find((d) => d.id === parity.primary)?.kind !== 'desktop' && parity.linksOnlySecondary}
+      {#if kindOf(parity.primary) !== 'desktop' && kindOf(parity.secondary) === 'desktop' && parity.linksOnlySecondary}
         <p class="mt-3 text-xs text-fg-2">Google indexes the mobile version. Links and content that only {name(parity.secondary)} sees may not count.</p>
+      {/if}
+      {#if isBot(parity.primary) !== isBot(parity.secondary)}
+        <p class="mt-3 text-xs text-fg-2">
+          {#if kindOf(parity.primary) === kindOf(parity.secondary) && (!parity.rendered || sameScreen)}
+            Same screen, different agent: differences show what the site serves to {name(isBot(parity.secondary) ? parity.secondary : parity.primary)} (prerendering for bots, dynamic rendering or cloaking).
+          {:else}
+            This compares a bot with a browser <b>and</b> two kinds of device or screen, so each difference can come from either. To see only what the site serves to the bot, compare the same kind of device, such as Mobile with Googlebot Smartphone.
+          {/if}
+        </p>
       {/if}
     </div>
 

@@ -1000,6 +1000,7 @@ func registerUniverseRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlMa
 	})
 
 	registerUniverseThumbRoute(mux, store, manager)
+	registerPDFExportRoute(mux, store, manager)
 }
 
 // universeLess returns a comparator over order positions. For "title" the

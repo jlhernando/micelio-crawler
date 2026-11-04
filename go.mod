@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	github.com/PuerkitoBio/goquery v1.13.0
+	github.com/andybalholm/brotli v1.2.0
 	github.com/bits-and-blooms/bloom/v3 v3.7.1
 	github.com/bogdanfinn/tls-client v1.16.0
 	github.com/chromedp/cdproto v0.158.2
@@ -22,7 +23,6 @@ require (
 )
 
 require (
-	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/andybalholm/cascadia v1.3.4 // indirect
 	github.com/bdandy/go-errors v1.2.2 // indirect
 	github.com/bdandy/go-socks4 v1.2.3 // indirect

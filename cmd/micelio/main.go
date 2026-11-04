@@ -1572,6 +1572,54 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 		}
 	}
 
+	// PDF report and backlog: Core Web Vitals (with a Google key) and the
+	// CDN probe are checked once for both.
+	var reportOpts report.PDFOptions
+	if config.PDFReport != "" || config.BacklogCSV != "" {
+		seedURL := config.SeedURL
+		if seedURL == "" && len(config.URLs) > 0 {
+			seedURL = config.URLs[0]
+		}
+		reportOpts = reportWebChecks(config, seedURL)
+	}
+
+	// Generate PDF report
+	if config.PDFReport != "" {
+		seedURL := config.SeedURL
+		if seedURL == "" && len(config.URLs) > 0 {
+			seedURL = config.URLs[0]
+		}
+		pdf, pdfErr := report.GeneratePDF(context.Background(), seedURL, &stats, result.Pages, reportOpts)
+		if pdfErr == nil {
+			pdfErr = os.WriteFile(config.PDFReport, pdf, 0644)
+		}
+		if pdfErr != nil {
+			fmt.Fprintf(os.Stderr, "  [warn] PDF report failed: %v\n", pdfErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "  PDF report: %s\n", config.PDFReport)
+		}
+	}
+
+	// Write the SEO backlog for JIRA
+	if config.BacklogCSV != "" {
+		seedURL := config.SeedURL
+		if seedURL == "" && len(config.URLs) > 0 {
+			seedURL = config.URLs[0]
+		}
+		f, bErr := os.Create(config.BacklogCSV)
+		if bErr == nil {
+			bErr = report.BacklogCSV(f, seedURL, &stats, result.Pages, reportOpts)
+			if cErr := f.Close(); bErr == nil {
+				bErr = cErr
+			}
+		}
+		if bErr != nil {
+			fmt.Fprintf(os.Stderr, "  [warn] Backlog export failed: %v\n", bErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "  Backlog (JIRA CSV): %s\n", config.BacklogCSV)
+		}
+	}
+
 	// Generate XML sitemap from indexable pages
 	if config.SitemapOut && config.OutputPath != "" {
 		sitemapPath := sitemapOutputPath(config.OutputPath)

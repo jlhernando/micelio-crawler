@@ -81,6 +81,8 @@ file, otherwise the command fails.
 | `-o, --output <path>` | | Page-data output path |
 | `-f, --format <format>` | | `jsonl` or `csv` |
 | `--html` | off | Generate an interactive HTML report |
+| `--pdf <path>` | off | Write a client-ready PDF report (needs Chrome or Chromium) |
+| `--backlog <path>` | off | Write the SEO and GEO backlog as a CSV for JIRA's import (Summary, Issue Type, Priority, Story Points, Component, Labels, Description) |
 | `--html-open` | off | Open the generated HTML report |
 | `--sitemap-out` | off | Generate an XML sitemap from indexable pages |
 | `--db <path>` | auto | Explicit SQLite crawl database path |

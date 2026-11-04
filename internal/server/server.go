@@ -158,6 +158,8 @@ func StartUIServerWithOptions(opts ServerOptions, dashboardFS fs.FS) error {
 		srv.broadcast(data)
 	})
 
+	setSelfURL(host, port, authToken) // the PDF report screenshots the Universe here
+
 	httpServer := &http.Server{
 		Addr:    net.JoinHostPort(host, strconv.Itoa(port)),
 		Handler: srv.buildHandler(opts, dashboardFS),

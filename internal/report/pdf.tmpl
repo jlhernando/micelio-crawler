@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SEO &amp; GEO crawl report · {{.D.Domain}}</title>
+<style>
+@page { size: A4; margin: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --ink: #171819; --ink-2: #4b4f56; --ink-3: #81858c;
+  --line: #e6e7ea; --line-2: #f0f1f3; --panel: #f7f7f8;
+  --good: #73d9ac; --warn: #e5b66e; --bad: #f58f98; --info: #75a6ff; --purple: #b09aff;
+  --good-ink: #1d8a5c; --warn-ink: #a36a14; --bad-ink: #c93b4b; --info-ink: #2f66d0;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+html { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { counter-reset: sheet; }
+.sheet { position: relative; width: 210mm; height: 297mm; overflow: hidden; page-break-after: always; break-after: page; padding: 22mm 18mm 20mm; counter-increment: sheet; background: #fff; }
+.sheet:last-child { page-break-after: auto; break-after: auto; }
+
+/* Running head and folio */
+.head { position: absolute; top: 9mm; left: 18mm; right: 18mm; display: flex; justify-content: space-between; align-items: center; font-size: 8pt; color: var(--ink-3); }
+.head .brand { display: flex; align-items: center; gap: 6px; color: var(--ink); font-weight: 600; letter-spacing: -.2px; }
+.head img { width: 14px; height: 14px; border-radius: 4px; }
+.foot { position: absolute; bottom: 9mm; left: 18mm; right: 18mm; display: flex; justify-content: space-between; font-size: 7.5pt; color: var(--ink-3); border-top: 1px solid var(--line); padding-top: 3mm; }
+.foot .folio { font-family: var(--mono); letter-spacing: .5px; }
+.foot .folio::before { content: counter(sheet, decimal-leading-zero); color: var(--ink); }
+
+/* Type */
+.eyebrow { font-family: var(--mono); font-size: 7.5pt; letter-spacing: 1.6px; text-transform: uppercase; color: var(--ink-3); font-weight: 500; }
+h1 { font-size: 24pt; font-weight: 600; letter-spacing: -.9px; line-height: 1.15; margin: 3mm 0 2mm; }
+h2 { font-size: 11pt; font-weight: 600; letter-spacing: -.2px; }
+.lede { font-size: 10pt; line-height: 1.55; color: var(--ink-2); max-width: 150mm; }
+.muted { color: var(--ink-3); }
+.section { margin-top: 9mm; }
+.section > .eyebrow { display: block; padding-bottom: 2.5mm; border-bottom: 1px solid var(--line); margin-bottom: 4mm; }
+
+/* Tones */
+.t-good { color: var(--good-ink); } .t-warn { color: var(--warn-ink); } .t-bad { color: var(--bad-ink); } .t-info { color: var(--info-ink); }
+.f-good { background: var(--good); } .f-warn { background: var(--warn); } .f-bad { background: var(--bad); } .f-info { background: var(--info); } .f- { background: #c9cbd0; }
+.dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+
+/* Panels */
+.panel { border: 1px solid var(--line); border-radius: 10px; padding: 5mm; background: #fff; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.grid-4 > div { padding: 4.5mm 4mm; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.grid-4 > div:nth-child(4n) { border-right: 0; }
+.grid-4 > div:nth-last-child(-n+4) { border-bottom: 0; }
+.kpi-label { font-size: 7.5pt; color: var(--ink-3); }
+.kpi-value { font-size: 17pt; font-weight: 600; letter-spacing: -.6px; margin-top: 1.5mm; font-variant-numeric: tabular-nums; }
+.kpi-note { font-size: 7.5pt; color: var(--ink-3); margin-top: 1mm; }
+
+/* ── Cover ── */
+.cover { background: #101112; color: #f2f2f2; padding: 20mm 18mm; }
+.cover .brandline { display: flex; align-items: center; gap: 9px; font-size: 12pt; font-weight: 600; letter-spacing: -.3px; }
+.cover .brandline img { width: 30px; height: 30px; border-radius: 8px; }
+.cover .brandline span.sep { color: #50535a; font-weight: 400; }
+.cover .brandline span.kind { color: #a1a5ad; font-weight: 400; }
+.cover .glow { position: absolute; right: -40mm; top: -30mm; width: 150mm; height: 150mm; border-radius: 50%; background: radial-gradient(circle, rgba(117,166,255,.16), rgba(176,154,255,.06) 45%, transparent 70%); }
+.cover .glow2 { position: absolute; left: -50mm; bottom: 20mm; width: 140mm; height: 140mm; border-radius: 50%; background: radial-gradient(circle, rgba(115,217,172,.10), transparent 65%); }
+.cover .title { position: absolute; left: 18mm; right: 18mm; top: 70mm; }
+.cover .eyebrow { color: #92969e; }
+.cover h1 { font-size: 40pt; letter-spacing: -1.8px; margin: 5mm 0 4mm; color: #fff; word-break: break-word; }
+.cover .lede { color: #a1a5ad; font-size: 11pt; }
+.cover .scorebox { position: absolute; left: 18mm; right: 18mm; top: 150mm; display: grid; grid-template-columns: 62mm 1fr; gap: 5mm; }
+.cover .score { background: #171819; border: 1px solid #303235; border-radius: 12px; padding: 6mm; display: flex; align-items: center; gap: 5mm; }
+.cover .score .num { font-size: 30pt; font-weight: 600; letter-spacing: -1px; line-height: 1; }
+.cover .score .lbl { font-size: 8pt; color: #a1a5ad; margin-top: 2mm; }
+.cover .metrics { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid #303235; border-radius: 12px; overflow: hidden; }
+.cover .metrics > div { padding: 5mm; border-right: 1px solid #303235; border-bottom: 1px solid #303235; }
+.cover .metrics > div:nth-child(2n) { border-right: 0; }
+.cover .metrics > div:nth-last-child(-n+2) { border-bottom: 0; }
+.cover .metrics .kpi-label { color: #92969e; }
+.cover .metrics .kpi-value { color: #f2f2f2; font-size: 19pt; }
+.cover .t-good, .cover .metrics .kpi-value.t-good { color: var(--good); } .cover .t-warn, .cover .metrics .kpi-value.t-warn { color: var(--warn); } .cover .t-bad, .cover .metrics .kpi-value.t-bad { color: var(--bad); } .cover .t-info { color: var(--info); }
+.cover .meta { position: absolute; left: 18mm; right: 18mm; bottom: 18mm; display: grid; grid-template-columns: repeat(3, 1fr); gap: 5mm; border-top: 1px solid #303235; padding-top: 5mm; font-size: 8.5pt; color: #d2d4d7; }
+.cover .meta .eyebrow { display: block; margin-bottom: 1.5mm; font-size: 6.5pt; }
+.ring-track { stroke: #232527; }
+.ring-good { stroke: var(--good); } .ring-warn { stroke: var(--warn); } .ring-bad { stroke: var(--bad); } .ring- { stroke: #50535a; }
+
+/* ── Summary ── */
+.points { list-style: none; counter-reset: pt; }
+.points li { counter-increment: pt; display: grid; grid-template-columns: 9mm 1fr; padding: 3.2mm 0; border-bottom: 1px solid var(--line-2); font-size: 10pt; line-height: 1.5; }
+.points li::before { content: counter(pt, decimal-leading-zero); font-family: var(--mono); font-size: 8pt; color: var(--ink-3); padding-top: .6mm; }
+.points li:last-child { border-bottom: 0; }
+.meaning { margin-top: 6mm; background: #101112; color: #d2d4d7; border-radius: 10px; padding: 5.5mm 6mm; font-size: 9.5pt; line-height: 1.6; }
+.meaning .eyebrow { color: #92969e; display: block; margin-bottom: 2mm; }
+
+/* ── Scorecard ── */
+.score-hero { display: grid; grid-template-columns: 48mm 1fr; gap: 6mm; align-items: center; }
+.score-hero .num { font-size: 34pt; font-weight: 600; letter-spacing: -1.2px; }
+.ring-wrap { position: relative; width: 44mm; height: 44mm; }
+.ring-wrap .inner { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.ring-wrap .inner .lbl { font-size: 8pt; color: var(--ink-3); margin-top: -1mm; }
+.light .ring-track { stroke: #eeeff1; }
+.areas { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3mm; margin-top: 7mm; }
+.area { border: 1px solid var(--line); border-radius: 10px; padding: 4mm 3.5mm; }
+.area .name { font-size: 7.5pt; color: var(--ink-3); }
+.area .val { font-size: 16pt; font-weight: 600; letter-spacing: -.5px; margin: 1.5mm 0 2mm; }
+.meter { height: 4px; border-radius: 2px; background: var(--line-2); overflow: hidden; }
+.meter > i { display: block; height: 100%; border-radius: 2px; }
+.area .detail { font-size: 7pt; color: var(--ink-2); line-height: 1.45; margin-top: 2.5mm; }
+
+/* Bars */
+.stack { display: flex; height: 9px; border-radius: 5px; overflow: hidden; background: var(--line-2); margin: 1mm 0 4mm; }
+.stack > i { display: block; height: 100%; }
+.legend { display: grid; grid-template-columns: 1fr auto auto; gap: 2mm 4mm; font-size: 8.5pt; align-items: center; }
+.legend .n { font-variant-numeric: tabular-nums; text-align: right; }
+.legend .s { color: var(--ink-3); text-align: right; font-variant-numeric: tabular-nums; min-width: 10mm; }
+.hbars { display: grid; gap: 2.6mm; }
+.hbar { display: grid; grid-template-columns: 1fr 15mm; gap: 3mm; align-items: center; font-size: 8.5pt; }
+.hbar .lab { display: flex; justify-content: space-between; margin-bottom: 1mm; }
+.hbar .lab span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60mm; }
+.hbar .track { height: 6px; border-radius: 3px; background: var(--line-2); overflow: hidden; }
+.hbar .track > i { display: block; height: 100%; border-radius: 3px; }
+.hbar .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.cols { display: flex; align-items: flex-end; gap: 3mm; height: 40mm; padding-top: 4mm; }
+.cols .col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+.cols .col i { display: block; width: 100%; border-radius: 4px 4px 1px 1px; min-height: 1px; }
+.cols .col .v { font-size: 7pt; color: var(--ink-2); margin-bottom: 1mm; font-variant-numeric: tabular-nums; }
+.cols .col .k { font-family: var(--mono); font-size: 7pt; color: var(--ink-3); margin-top: 1.5mm; }
+.empty { font-size: 8.5pt; color: var(--ink-3); padding: 6mm 0; text-align: center; }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; font-size: 8.5pt; }
+th { text-align: left; font-size: 7pt; font-weight: 500; letter-spacing: .6px; text-transform: uppercase; color: var(--ink-3); padding: 0 2.5mm 2.5mm; border-bottom: 1px solid var(--line); }
+td { padding: 2.6mm 2.5mm; border-bottom: 1px solid var(--line-2); vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.url { font-family: var(--mono); font-size: 7.3pt; color: var(--ink-2); word-break: break-all; }
+tr:last-child td { border-bottom: 0; }
+.pill { display: inline-block; font-size: 6.8pt; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; padding: .8mm 2mm; border-radius: 4px; white-space: nowrap; }
+.p-critical { background: #fde8ea; color: var(--bad-ink); }
+.p-warning { background: #fbf1df; color: var(--warn-ink); }
+.p-notice { background: #e7effe; color: var(--info-ink); }
+.counts { display: flex; gap: 6mm; margin: 4mm 0 6mm; font-size: 9pt; }
+.counts > span { white-space: nowrap; }
+.counts b { font-size: 14pt; letter-spacing: -.4px; margin-right: 1.5mm; }
+
+/* Actions */
+.lanes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3mm; }
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 3.5mm; margin-top: 6mm; }
+.card { border: 1px solid var(--line); border-radius: 10px; padding: 4.5mm; break-inside: avoid; }
+.card .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2.5mm; }
+.card h3 { font-size: 9.5pt; font-weight: 600; line-height: 1.35; letter-spacing: -.1px; }
+.card p { font-size: 7.8pt; color: var(--ink-2); line-height: 1.5; margin-top: 2mm; }
+.card .val { font-size: 7.5pt; color: var(--ink-3); margin-top: 2.5mm; padding-top: 2.5mm; border-top: 1px solid var(--line-2); }
+.note { font-size: 7.5pt; color: var(--ink-3); line-height: 1.5; margin-top: 5mm; }
+
+/* Checks */
+.checks { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; }
+.check { border: 1px solid var(--line); border-radius: 10px; padding: 5mm; }
+.check .row { display: flex; justify-content: space-between; align-items: baseline; }
+.check .val { font-size: 20pt; font-weight: 600; letter-spacing: -.6px; margin-top: 2mm; }
+.check .sum { font-size: 8pt; color: var(--ink-2); line-height: 1.5; margin-top: 1.5mm; }
+.check .hbars { margin-top: 4mm; }
+
+/* Methodology */
+.method { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5mm; font-size: 7.8pt; line-height: 1.55; color: var(--ink-2); }
+.method b { display: block; color: var(--ink); font-size: 8.5pt; margin-bottom: 1mm; }
+/* ── Universe (dark sheets, as in the dashboard) ── */
+.cover .backdrop { position: absolute; left: 0; right: 0; top: 0; height: 190mm; background-size: cover; background-position: center 40%; opacity: .62; -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 18%, #000 55%, transparent 100%); }
+.cover .backdrop::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, #101112 0, rgba(16,17,18,.75) 38%, rgba(16,17,18,0) 75%); }
+.dark { background: #101112; color: #f2f2f2; }
+.dark .head { color: #81858c; } .dark .head .brand { color: #f2f2f2; }
+.dark .foot { border-top-color: #303235; color: #81858c; } .dark .foot .folio::before { color: #f2f2f2; }
+.dark .eyebrow { color: #92969e; } .dark .lede { color: #a1a5ad; } .dark h1 { color: #fff; }
+.dark .t-good { color: var(--good); } .dark .t-warn { color: var(--warn); } .dark .t-bad { color: var(--bad); } .dark .t-info { color: var(--info); }
+.shot { border: 1px solid #303235; border-radius: 12px; overflow: hidden; background: #0c0d0e; }
+.shot img { display: block; width: 100%; height: auto; }
+.uv-hero { margin-top: 7mm; }
+.uv-facts { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid #303235; border-radius: 10px; overflow: hidden; margin-top: 5mm; }
+.uv-facts > div { padding: 4mm; border-right: 1px solid #303235; }
+.uv-facts > div:last-child { border-right: 0; }
+.uv-facts .kpi-label { color: #92969e; } .uv-facts .kpi-value { color: #f2f2f2; font-size: 15pt; }
+.uv-legend { display: flex; flex-wrap: wrap; gap: 2mm; margin-top: 5mm; }
+.uv-legend span { display: inline-flex; align-items: center; gap: 6px; padding: 1.4mm 3mm 1.4mm 2.4mm; border: 1px solid #303235; border-radius: 999px; background: #171819; font-size: 7.5pt; color: #d2d4d7; }
+.uv-legend i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.uv-legend b { font-weight: 500; color: #a1a5ad; }
+.uv-cap { margin-top: 4mm; font-size: 8.5pt; line-height: 1.55; color: #a1a5ad; }
+.uv-cap b { color: #f2f2f2; font-weight: 600; }
+.uv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm 4mm; margin-top: 7mm; }
+.uv-grid h2 { font-size: 9.5pt; margin-top: 3mm; color: #f2f2f2; }
+.uv-grid p { font-size: 7.6pt; line-height: 1.5; color: #a1a5ad; margin-top: 1mm; }
+.uv-grid.one { grid-template-columns: 1fr; }
+/* ── Backlog ── */
+.mono { font-family: var(--mono); font-size: 7.5pt; }
+.prio { display: inline-block; font-family: var(--mono); font-size: 6.8pt; font-weight: 600; padding: .7mm 1.6mm; border-radius: 4px; letter-spacing: .3px; }
+.pr-P0 { background: #fde8ea; color: var(--bad-ink); } .pr-P1 { background: #fbf1df; color: var(--warn-ink); }
+.pr-P2 { background: #e7effe; color: var(--info-ink); } .pr-P3 { background: #f0f1f3; color: var(--ink-2); }
+.bl td { vertical-align: middle; }
+.eff { display: inline-block; min-width: 5mm; text-align: center; border: 1px solid var(--line); border-radius: 4px; font-size: 7pt; font-weight: 600; padding: .3mm 1mm; }
+.mini { display: inline-block; width: 12mm; height: 4px; border-radius: 2px; background: var(--line-2); overflow: hidden; margin-right: 2mm; vertical-align: middle; }
+.mini i { display: block; height: 100%; }
+.mapflag { font-family: var(--mono); font-size: 6pt; color: var(--info-ink); border: 1px solid #cfdcf7; border-radius: 3px; padding: 0 1mm; margin-left: 1mm; }
+.matrix-wrap { display: grid; grid-template-columns: 6mm 1fr; grid-template-rows: auto auto; gap: 2mm; }
+.ylab { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 7pt; color: var(--ink-3); text-align: center; }
+.matrix { position: relative; height: 92mm; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.q { border-right: 1px dashed var(--line); border-bottom: 1px dashed var(--line); padding: 2.5mm 3mm; }
+.q:nth-child(2n) { border-right: 0; } .q3, .q4 { border-bottom: 0; }
+.q span { font-family: var(--mono); font-size: 6.8pt; letter-spacing: 1px; text-transform: uppercase; color: var(--ink-3); }
+.q1 { background: linear-gradient(135deg, rgba(115,217,172,.14), transparent 70%); } .q1 span { color: var(--good-ink); }
+.dot-t { position: absolute; transform: translate(0, 0); font-family: var(--mono); font-size: 6.6pt; font-weight: 600; color: #171819; padding: .6mm 1.6mm; border-radius: 999px; white-space: nowrap; box-shadow: 0 0 0 2px #fff; }
+.xlab { grid-column: 2; display: grid; grid-template-columns: 1fr 1fr 1fr auto; font-size: 7pt; color: var(--ink-3); }
+.board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3.5mm; margin-top: 7mm; }
+.col-b { background: var(--panel); border-radius: 10px; padding: 3.5mm; }
+.bh { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2.5mm; font-size: 9pt; }
+.bh span { font-size: 7pt; color: var(--ink-3); }
+.chip { display: flex; gap: 2mm; align-items: flex-start; background: #fff; border: 1px solid var(--line); border-radius: 7px; padding: 2mm; margin-top: 1.8mm; font-size: 7.3pt; line-height: 1.35; }
+.chip .ct { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.chip b { font-family: var(--mono); font-size: 6.8pt; }
+.more { font-size: 7pt; color: var(--ink-3); margin-top: 2mm; }
+.cards-t { display: grid; grid-template-rows: 1fr 1fr; gap: 5mm; margin-top: 4mm; height: 238mm; }
+.cards-t.single { grid-template-rows: 1fr; }
+.tk { border: 1px solid var(--line); border-radius: 12px; padding: 5.5mm 6mm; display: flex; flex-direction: column; gap: 3mm; overflow: hidden; }
+.tk-top { display: flex; align-items: center; gap: 2mm; font-size: 7.3pt; }
+.tk-top .key { color: var(--ink-3); }
+.tag { border: 1px solid var(--line); border-radius: 4px; padding: .5mm 1.6mm; color: var(--ink-2); }
+.owner { margin-left: auto; background: #101112; color: #f2f2f2; border-radius: 999px; padding: .8mm 2.6mm; font-size: 7pt; }
+.tk-title { font-size: 14pt; letter-spacing: -.4px; line-height: 1.2; }
+.tk-hero { display: flex; align-items: center; gap: 4mm; }
+.tk-hero .big { font-size: 24pt; font-weight: 600; letter-spacing: -1px; line-height: 1; }
+.tk-hero .hb { flex: 1; }
+.tk-hero .lbl { font-size: 7.5pt; color: var(--ink-3); margin-bottom: 1.5mm; }
+.tk-hero .meter { height: 6px; border-radius: 3px; }
+.tk-prob { font-size: 8.8pt; line-height: 1.5; color: var(--ink-2); }
+.tk-cols { display: grid; grid-template-columns: 1fr 1.2fr; gap: 5mm; }
+.tk-cols .eyebrow { display: block; margin-bottom: 1.5mm; }
+.ex { list-style: none; }
+.ex li { font-family: var(--mono); font-size: 6.8pt; color: var(--ink-2); word-break: break-all; padding: 1mm 0; border-bottom: 1px solid var(--line-2); }
+.fix { padding-left: 4mm; font-size: 8pt; line-height: 1.45; color: var(--ink-2); }
+.fix li { margin-bottom: 1mm; }
+.sm { font-size: 7.5pt; line-height: 1.45; margin-top: 1.5mm; }
+.tk-done { margin-top: auto; display: flex; gap: 3mm; align-items: flex-start; background: rgba(115,217,172,.13); border-radius: 8px; padding: 3mm 3.5mm; font-size: 8.3pt; line-height: 1.45; }
+.tk-done .eyebrow { color: var(--good-ink); display: block; margin-bottom: .5mm; }
+.ck { flex: none; width: 5mm; height: 5mm; border-radius: 50%; background: var(--good); color: #101112; font-size: 7pt; font-weight: 700; display: grid; place-items: center; }
+.tk-map { position: relative; }
+.tk-map img { max-height: 112mm; object-fit: cover; }
+.maplabel { position: absolute; left: 3mm; top: 3mm; font-family: var(--mono); font-size: 6.5pt; letter-spacing: 1px; text-transform: uppercase; color: #d2d4d7; background: rgba(16,17,18,.8); border: 1px solid #303235; border-radius: 999px; padding: .8mm 2.4mm; }
+.tk-story { font-size: 8pt; line-height: 1.5; color: var(--ink-2); }
+.tk-story b { color: var(--ink); }
+/* ── SEO / GEO ── */
+.trk { display: inline-block; font-family: var(--mono); font-size: 6.3pt; font-weight: 700; letter-spacing: .6px; padding: .5mm 1.6mm; border-radius: 4px; }
+.tr-SEO { background: #171819; color: #f2f2f2; } .tr-GEO { background: #b09aff; color: #171819; }
+tr.grp td { background: var(--panel); font-size: 7.5pt; font-weight: 600; color: var(--ink-2); padding-top: 2mm; padding-bottom: 2mm; }
+.dot-t.geo { outline: 1.5px solid #8a6cff; outline-offset: 1px; }
+.geo-k { color: #6b4fd8; }
+.tk-site { background: #f4f1ff; border: 1px solid #e3dbff; border-radius: 8px; padding: 3mm 3.5mm; font-size: 8.5pt; line-height: 1.45; color: var(--ink); word-break: break-word; }
+.tk-site .eyebrow { color: #6b4fd8; display: block; margin-bottom: 1mm; }
+.geo-top { display: grid; grid-template-columns: 40mm 1fr; gap: 7mm; align-items: center; }
+.ring-wrap.sm { width: 38mm; height: 38mm; }
+.ring-wrap.sm .num { font-size: 26pt; font-weight: 600; letter-spacing: -1px; }
+.bots { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.8mm; }
+.bot { display: flex; gap: 2mm; align-items: center; border: 1px solid var(--line); border-radius: 7px; padding: 1.6mm 2.2mm; min-width: 0; }
+.bot > div { min-width: 0; }
+.bot b, .bot span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bot i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: #c9cbd0; }
+.b-allowed i { background: var(--good); } .b-blocked i { background: var(--bad); } .b-blocked { background: #fdf0f1; } .b-refused i { background: var(--warn); } .b-refused { background: #fdf6ea; } .bot em { font-style: normal; color: var(--warn-ink); }
+.bot b { display: block; font-size: 7.6pt; font-weight: 600; }
+.bot span { font-size: 6.3pt; color: var(--ink-3); }
+/* ── Core Web Vitals / CDN ── */
+.cwv-verdict { display: flex; align-items: center; gap: 2mm; margin-top: 6mm; font-size: 10pt; }
+.cwv-verdict .muted { margin-left: auto; font-size: 7.5pt; }
+.cwv-cols { display: grid; gap: 4mm; margin-top: 4mm; }
+.cwv-cols.c2 { grid-template-columns: 1fr 1fr; }
+.cwv-row { padding: 2.6mm 0; border-bottom: 1px solid var(--line-2); }
+.cwv-row:last-child { border-bottom: 0; }
+.cwv-row.minor { opacity: .8; }
+.cwv-h { display: flex; justify-content: space-between; align-items: baseline; font-size: 8pt; }
+.cwv-h .muted { font-size: 7pt; }
+.cwv-v { font-size: 15pt; font-weight: 600; letter-spacing: -.4px; }
+.cwv-row.minor .cwv-v { font-size: 11pt; }
+.dist { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: 1.6mm 0 1mm; background: var(--line-2); }
+.dist i { display: block; height: 100%; }
+.cwv-f { display: flex; justify-content: space-between; font-size: 6.8pt; color: var(--ink-3); }
+.lab { display: flex; gap: 5mm; align-items: center; }
+.ring-wrap.xs { width: 24mm; height: 24mm; flex: none; }
+.ring-wrap.xs .num { font-size: 16pt; font-weight: 600; }
+.cwv-missing h2 { font-size: 11pt; margin-top: 1mm; line-height: 1.4; }
+.cwv-missing .eyebrow { color: var(--warn-ink); }
+table.thr td, table.cdn td { font-size: 8pt; }
+.cdn-hero .cdn-name { font-size: 22pt; font-weight: 600; letter-spacing: -.8px; margin: 1mm 0; }
+table.cdn td.mono { font-size: 7.3pt; }
+.opp { list-style: none; }
+.opp li { position: relative; padding: 2mm 0 2mm 6mm; font-size: 8.5pt; line-height: 1.5; border-bottom: 1px solid var(--line-2); color: var(--ink-2); }
+.opp li::before { content: '→'; position: absolute; left: 0; color: var(--info-ink); }
+</style>
+</head>
+<body>
+
+{{define "card"}}<article class="tk">
+    <div class="tk-top"><span class="trk tr-{{.Track}}">{{.Track}}</span><span class="mono key">{{.Key}}</span><span class="prio pr-{{.Priority}}">{{.Priority}}</span><span class="tag">{{.Type}}</span><span class="tag">Effort {{.Effort}} · {{.Points}} pt</span><span class="owner">{{.Owner}}</span></div>
+    <h2 class="tk-title">{{.Title}}</h2>
+    {{if .Unit}}<div class="tk-hero"><div class="big t-{{.Tone}}">{{comma .Count}}</div><div class="hb"><div class="lbl">{{unit .Count .Unit}} affected · {{.Share}}</div><div class="meter"><i class="f-{{.Tone}}" style="width:{{printf "%.1f" .Pct}}%"></i></div></div></div>
+    {{else}}<div class="tk-site"><span class="eyebrow">Site-wide check</span><div>{{.Evidence}}</div></div>{{end}}
+    <p class="tk-prob">{{.Problem}}</p>
+    {{if .Map}}<div class="tk-map shot"><img src="{{.Map.Src}}" alt="{{.Map.Title}}"><span class="maplabel">{{.Map.Title}}</span></div>
+    <p class="tk-story">{{if .MapStory}}<b>{{.MapStory}}</b> {{end}}{{.Map.Caption}}</p>{{end}}
+    <div class="tk-cols">
+      <div><div class="eyebrow">Evidence</div>{{if .Examples}}<ul class="ex">{{range .Examples}}<li>{{.}}</li>{{end}}</ul>{{else if .Unit}}<p class="muted sm">Full list in the dashboard and the CSV export.</p>{{else}}<p class="muted sm">Checked once for the start host. Details in the dashboard's Agent readiness tab.</p>{{end}}{{if and .MapStory (not .Map)}}<p class="sm">{{.MapStory}}</p>{{end}}</div>
+      <div><div class="eyebrow">How to fix</div><ol class="fix">{{range .Fix}}<li>{{.}}</li>{{end}}</ol></div>
+    </div>
+    <div class="tk-done"><span class="ck">✓</span><div><div class="eyebrow">Done when</div>{{.Accept}}</div></div>
+  </article>{{end}}
+{{define "head"}}<div class="head"><span class="brand"><img src="{{.Mark}}" alt="">micelio</span><span>{{.D.Domain}} · {{.D.Date}}</span></div>{{end}}
+{{define "foot"}}<div class="foot"><span>SEO &amp; GEO crawl report · {{.D.Domain}}</span><span class="folio"> / {{pad .D.Sheets}}</span></div>{{end}}
+{{define "ring"}}<svg width="100%" height="100%" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="none" class="ring-track" stroke-width="7"/><circle cx="50" cy="50" r="40" fill="none" class="ring-{{.ScoreTone}}" stroke-width="7" stroke-linecap="round" stroke-dasharray="251.327" stroke-dashoffset="{{printf "%.3f" .ScoreDash}}" transform="rotate(-90 50 50)"/></svg>{{end}}
+
+{{$d := .D}}
+<!-- 01 Cover -->
+<section class="sheet cover">
+  {{if $d.CoverSrc}}<div class="backdrop" style="background-image:url('{{$d.CoverSrc}}')"></div>{{end}}
+  <div class="glow"></div><div class="glow2"></div>
+  <div class="brandline"><img src="{{.Mark}}" alt="">micelio <span class="sep">/</span> <span class="kind">SEO &amp; GEO crawl report</span></div>
+  <div class="title">
+    <span class="eyebrow">Technical SEO &amp; GEO audit</span>
+    <h1>{{$d.Domain}}</h1>
+    <p class="lede">What search engines and AI systems see when they crawl the site: what works, what blocks them, and what to fix first.</p>
+  </div>
+  <div class="scorebox">
+    <div class="score">
+      <div style="width:26mm;height:26mm;flex-shrink:0">{{template "ring" $d}}</div>
+      <div><div class="num">{{if eq $d.ScoreLabel "No data"}}—{{else}}{{$d.Score}}{{end}}</div><div class="lbl">Health score</div><div class="lbl t-{{$d.ScoreTone}}" style="margin-top:.5mm">{{$d.ScoreLabel}}</div></div>
+    </div>
+    <div class="metrics">
+      {{range $d.Cover}}<div><div class="kpi-label">{{.Label}}</div><div class="kpi-value t-{{.Tone}}">{{.Value}}</div></div>{{end}}
+    </div>
+  </div>
+  <div class="meta">
+    <div><span class="eyebrow">Start URL</span>{{$d.SeedURL}}</div>
+    <div><span class="eyebrow">Report date</span>{{$d.Date}}</div>
+    <div><span class="eyebrow">Crawl time</span>{{if $d.Duration}}{{$d.Duration}}{{else}}—{{end}}</div>
+  </div>
+</section>
+
+<!-- 02 Summary -->
+<section class="sheet">
+  {{template "head" .}}
+  <span class="eyebrow">Executive summary</span>
+  <h1>Here is what we found</h1>
+  <p class="lede">The key points of the crawl, most important first.</p>
+  <div class="section">
+    <ul class="points">{{range $d.Insights}}<li><span>{{.}}</span></li>{{end}}</ul>
+    <div class="meaning"><span class="eyebrow">What this means</span>{{$d.Meaning}}</div>
+  </div>
+  <div class="section">
+    <span class="eyebrow">Crawl at a glance</span>
+    <div class="grid-4">
+      {{range $d.KPIs}}<div><div class="kpi-label">{{.Label}}</div><div class="kpi-value t-{{.Tone}}">{{.Value}}</div><div class="kpi-note">{{.Note}}&nbsp;</div></div>{{end}}
+    </div>
+  </div>
+  {{template "foot" .}}
+</section>
+
+{{if $d.Hero}}
+<!-- Universe: main view -->
+<section class="sheet dark">
+  {{template "head" .}}
+  <span class="eyebrow">Site universe</span>
+  <h1>The site as a crawler sees it</h1>
+  <p class="lede">Each dot is a page, placed by the real internal links found in the crawl. This is the site's architecture, not its sitemap.</p>
+  <div class="uv-hero shot"><img src="{{$d.Hero.Src}}" alt="{{$d.Hero.Title}}"></div>
+  {{if $d.HeroFacts}}<div class="uv-facts">{{range $d.HeroFacts}}<div><div class="kpi-label">{{.Label}}</div><div class="kpi-value t-{{.Tone}}">{{.Value}}</div></div>{{end}}</div>{{end}}
+  {{if $d.HeroMeta}}{{if $d.HeroMeta.Top}}<div class="uv-legend">{{range $d.HeroMeta.Top}}<span><i style="background:{{.Color}}"></i>{{.Label}} <b>{{comma .Count}}</b></span>{{end}}</div>{{end}}{{end}}
+  <p class="uv-cap">{{if $d.HeroStory}}<b>{{$d.HeroStory}}</b> {{end}}{{$d.Hero.Caption}} The backlog tickets below show the same map, lit up where each problem sits.</p>
+  {{template "foot" .}}
+</section>
+{{end}}
+
+
+<!-- 03 Scorecard -->
+<section class="sheet light">
+  {{template "head" .}}
+  <span class="eyebrow">Health scorecard</span>
+  <h1>Site health</h1>
+  <div class="section score-hero">
+    <div class="ring-wrap">{{template "ring" $d}}<div class="inner"><div class="num">{{if eq $d.ScoreLabel "No data"}}—{{else}}{{$d.Score}}{{end}}</div><div class="lbl">of 100</div></div></div>
+    <div>
+      <h2 class="t-{{$d.ScoreTone}}">{{$d.ScoreLabel}}</h2>
+      <p class="lede" style="margin-top:2mm">The score weighs indexability (25), titles (15), descriptions (15), H1 (10), response time (10), broken links (10), canonicals (10) and orphan pages (5). It is the same score the Micelio dashboard shows.</p>
+    </div>
+  </div>
+  {{if $d.Areas}}<div class="areas">
+    {{range $d.Areas}}<div class="area"><div class="name">{{.Name}}</div><div class="val t-{{.Tone}}">{{.Score}}</div><div class="meter"><i class="f-{{.Tone}}" style="width:{{.Score}}%"></i></div><div class="detail">{{.Detail}}</div></div>{{end}}
+  </div>{{end}}
+  <div class="section grid-2">
+    <div class="panel">
+      <h2>Status codes</h2>
+      {{if $d.Status}}
+      <div class="stack" style="margin-top:4mm">{{range $d.Status}}<i class="f-{{.Tone}}" style="width:{{printf "%.2f" .Pct}}%"></i>{{end}}</div>
+      <div class="legend">{{range $d.Status}}<span><span class="dot f-{{.Tone}}"></span>{{.Label}}</span><span class="n">{{comma .Count}}</span><span class="s">{{.Share}}</span>{{end}}</div>
+      {{else}}<div class="empty">No responses recorded.</div>{{end}}
+    </div>
+    <div class="panel">
+      <h2>Why pages are not indexable</h2>
+      {{if $d.Reasons}}<div class="hbars" style="margin-top:4mm">
+        {{range $d.Reasons}}<div class="hbar"><div><div class="lab"><span>{{.Label}}</span></div><div class="track"><i class="f-{{.Tone}}" style="width:{{printf "%.2f" .Pct}}%"></i></div></div><span class="n">{{comma .Count}}</span></div>{{end}}
+      </div>{{else}}<div class="empty">Every crawled page can be indexed.</div>{{end}}
+    </div>
+  </div>
+  {{template "foot" .}}
+</section>
+
+{{if or $d.Tickets $d.GEO}}
+<!-- Backlog table -->
+<section class="sheet">
+  {{template "head" .}}
+  <span class="eyebrow">Backlog</span>
+  <h1>What to fix, as tickets</h1>
+  <p class="lede">Every finding is a ticket a team can pick up: priority, effort, owner and a measurable definition of done. SEO tickets are about search engines; GEO tickets about AI search and agents.</p>
+  <div class="section">
+    <table class="bl">
+      <thead><tr><th style="width:15mm">Key</th><th style="width:11mm">Prio</th><th>Ticket</th><th>Owner</th><th class="num">Effort</th><th class="num">Affected</th></tr></thead>
+      <tbody>
+        {{if $d.Overview}}<tr class="grp"><td colspan="6"><span class="trk tr-SEO">SEO</span> Search engines · {{plural (len $d.Tickets) "ticket"}}</td></tr>{{range $d.Overview}}<tr><td class="mono">{{.Key}}</td><td><span class="prio pr-{{.Priority}}">{{.Priority}}</span></td><td>{{.Title}}{{if .Map}} <span class="mapflag">map</span>{{end}}</td><td class="muted">{{.Owner}}</td><td class="num"><span class="eff">{{.Effort}}</span> <span class="muted">{{.Points}} pt</span></td><td class="num">{{if .Unit}}<div class="mini"><i class="f-{{.Tone}}" style="width:{{printf "%.1f" .Pct}}%"></i></div>{{.Share}}{{else}}<span class="muted">site</span>{{end}}</td></tr>{{end}}{{end}}
+        {{if $d.GEOOverview}}<tr class="grp"><td colspan="6"><span class="trk tr-GEO">GEO</span> AI search and agents · {{plural (len $d.GEO) "ticket"}}</td></tr>{{range $d.GEOOverview}}<tr><td class="mono">{{.Key}}</td><td><span class="prio pr-{{.Priority}}">{{.Priority}}</span></td><td>{{.Title}}{{if .Map}} <span class="mapflag">map</span>{{end}}</td><td class="muted">{{.Owner}}</td><td class="num"><span class="eff">{{.Effort}}</span> <span class="muted">{{.Points}} pt</span></td><td class="num">{{if .Unit}}<div class="mini"><i class="f-{{.Tone}}" style="width:{{printf "%.1f" .Pct}}%"></i></div>{{.Share}}{{else}}<span class="muted">site</span>{{end}}</td></tr>{{end}}{{end}}
+      </tbody>
+    </table>
+    <p class="note">{{if or (gt (len $d.Tickets) (len $d.Overview)) (gt (len $d.GEO) (len $d.GEOOverview))}}Some tickets do not fit this page; {{end}}The CSV export has every ticket, with SEO or GEO as its JIRA component.</p>
+  </div>
+  {{template "foot" .}}
+</section>
+
+<!-- Sprint plan -->
+<section class="sheet">
+  {{template "head" .}}
+  <span class="eyebrow">Sprint plan</span>
+  <h1>Where to start</h1>
+  <p class="lede">Impact against effort. Quick wins sit top left: high impact, little work. The board below turns the backlog into three waves.</p>
+  <div class="section matrix-wrap">
+    <div class="ylab">Impact →</div>
+    <div class="matrix">
+      <div class="q q1"><span>Quick wins</span></div><div class="q q2"><span>Big bets</span></div>
+      <div class="q q3"><span style="float:right">Fill-ins</span></div><div class="q q4"><span>Later</span></div>
+      {{range $d.Matrix}}<span class="dot-t f-{{.Tone}}{{if eq .Track "GEO"}} geo{{end}}" style="left:{{printf "%.1f" .X}}%;top:{{printf "%.1f" .Y}}%">{{.Key}}</span>{{end}}
+    </div>
+    <div class="xlab"><span>S · small</span><span>M · medium</span><span>L · large</span><span class="arrow">Effort →</span></div>
+  </div>
+  {{with $d.Plan}}<div class="board">
+    <div class="col-b"><div class="bh"><b>Now</b><span>{{plural (len .Now) "ticket"}} · {{index .Points 0}} pt</span></div>{{range $i, $t := .Now}}{{if lt $i 6}}<div class="chip"><span class="prio pr-{{$t.Priority}}">{{$t.Priority}}</span><span class="ct"><b{{if eq $t.Track "GEO"}} class="geo-k"{{end}}>{{$t.Key}}</b> {{$t.Title}}</span></div>{{end}}{{end}}{{if gt (len .Now) 6}}<div class="more">{{len .Now}} in total</div>{{end}}</div>
+    <div class="col-b"><div class="bh"><b>Next</b><span>{{plural (len .Next) "ticket"}} · {{index .Points 1}} pt</span></div>{{range $i, $t := .Next}}{{if lt $i 6}}<div class="chip"><span class="prio pr-{{$t.Priority}}">{{$t.Priority}}</span><span class="ct"><b{{if eq $t.Track "GEO"}} class="geo-k"{{end}}>{{$t.Key}}</b> {{$t.Title}}</span></div>{{end}}{{end}}{{if gt (len .Next) 6}}<div class="more">{{len .Next}} in total</div>{{end}}</div>
+    <div class="col-b"><div class="bh"><b>Later</b><span>{{plural (len .Later) "ticket"}} · {{index .Points 2}} pt</span></div>{{range $i, $t := .Later}}{{if lt $i 6}}<div class="chip"><span class="prio pr-{{$t.Priority}}">{{$t.Priority}}</span><span class="ct"><b{{if eq $t.Track "GEO"}} class="geo-k"{{end}}>{{$t.Key}}</b> {{$t.Title}}</span></div>{{end}}{{end}}{{if gt (len .Later) 6}}<div class="more">{{len .Later}} in total</div>{{end}}</div>
+  </div>{{end}}
+  {{template "foot" .}}
+</section>
+
+{{range $d.Cards}}
+<!-- Ticket cards -->
+<section class="sheet">
+  {{template "head" $}}
+  <span class="eyebrow">SEO ticket{{if gt (len .) 1}}s{{end}}</span>
+  <div class="cards-t{{if eq (len .) 1}} single{{end}}">
+  {{range .}}{{template "card" .}}{{end}}
+  </div>
+  {{template "foot" $}}
+</section>
+{{end}}
+{{with $d.GEOView}}
+<!-- GEO readiness -->
+<section class="sheet">
+  {{template "head" $}}
+  <span class="eyebrow">GEO · AI search and agents</span>
+  <h1>Ready for AI search?</h1>
+  <p class="lede">Whether ChatGPT, Claude, Perplexity, Google's AI answers and other agents can reach, read and understand {{.Host}}. GEO (generative engine optimisation) is SEO for AI answers.</p>
+  <div class="section geo-top">
+    <div class="ring-wrap sm"><svg width="100%" height="100%" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="none" stroke="#eeeff1" stroke-width="7"/><circle cx="50" cy="50" r="40" fill="none" stroke="#b09aff" stroke-width="7" stroke-linecap="round" stroke-dasharray="251.327" stroke-dashoffset="{{printf "%.3f" .Dash}}" transform="rotate(-90 50 50)"/></svg><div class="inner"><div class="num">{{.Score}}</div><div class="lbl">AI readiness</div></div></div>
+    <div><h2 class="t-{{.Tone}}">{{.Level}}</h2>
+      <div class="hbars" style="margin-top:3mm">{{range .Categories}}<div class="hbar"><div><div class="lab"><span>{{.Label}}</span><span class="muted">{{.Share}}</span></div><div class="track"><i class="f-{{.Tone}}" style="width:{{printf "%.0f" .Pct}}%"></i></div></div><span class="n">{{.Count}}</span></div>{{end}}</div>
+    </div>
+  </div>
+  {{if .Bots}}<div class="section"><span class="eyebrow">AI bots on robots.txt</span>
+    <div class="bots">{{range .Bots}}<div class="bot b-{{.State}}"><i></i><div><b>{{.Bot}}</b><span>{{.Owner}} · {{.Purpose}}{{if .Note}} · <em>{{.Note}}</em>{{end}}</span></div></div>{{end}}</div>
+    <p class="note" style="margin-top:2.5mm"><span class="dot" style="background:var(--good)"></span>allowed <span class="dot" style="background:var(--bad);margin-left:3mm"></span>blocked by robots.txt <span class="dot" style="background:var(--warn);margin-left:3mm"></span>allowed, but our test (not from the bot's IPs) was refused <span class="dot" style="background:#c9cbd0;margin-left:3mm"></span>unknown · Training bots collect data for models; search and user bots fetch pages to answer people.</p>
+  </div>{{end}}
+  {{if .Signals}}<div class="section"><span class="eyebrow">Answer signals across the crawl</span>
+    <div class="grid-4">{{range .Signals}}<div style="border-bottom:0"><div class="kpi-label">{{.Label}}</div><div class="kpi-value t-{{.Tone}}">{{.Value}}</div><div class="kpi-note">{{.Note}}&nbsp;</div></div>{{end}}</div></div>{{end}}
+  <p class="note">These are crawl-time proxies: they show whether AI systems can access and parse the site, not whether they cite it. Confirm with AI Overview data in Search Console, AI referral traffic in analytics or AI bot hits in server logs.</p>
+  {{template "foot" $}}
+</section>
+{{end}}
+{{range $d.GEOCards}}
+<!-- GEO ticket cards -->
+<section class="sheet">
+  {{template "head" $}}
+  <span class="eyebrow">GEO ticket{{if gt (len .) 1}}s{{end}}</span>
+  <div class="cards-t{{if eq (len .) 1}} single{{end}}">
+  {{range .}}{{template "card" .}}{{end}}
+  </div>
+  {{template "foot" $}}
+</section>
+{{end}}
+{{end}}
+
+<!-- 05 Structure & speed -->
+<section class="sheet">
+  {{template "head" .}}
+  <span class="eyebrow">Architecture and performance</span>
+  <h1>Structure and speed</h1>
+  <p class="lede">How deep pages sit from the start URL, how they link to each other, and how fast the server answers.</p>
+  <div class="section grid-2">
+    <div class="panel">
+      <h2>Crawl depth</h2>
+      <p class="kpi-note">Pages per click from the start URL. Important pages should sit within 3 clicks.</p>
+      {{if $d.Depth}}<div class="cols">{{range $d.Depth}}<div class="col"><span class="v">{{comma .Count}}</span><i class="f-{{.Tone}}" style="height:{{printf "%.2f" .Pct}}%"></i><span class="k">{{.Label}}</span></div>{{end}}</div>{{else}}<div class="empty">No depth data.</div>{{end}}
+    </div>
+    <div class="panel">
+      <h2>Response time</h2>
+      <p class="kpi-note">Server answer time for crawled pages.</p>
+      {{if $d.Speed}}<div class="hbars" style="margin-top:5mm">
+        {{range $d.Speed}}<div class="hbar"><div><div class="lab"><span>{{.Label}}</span><span class="muted">{{.Share}}</span></div><div class="track"><i class="f-{{.Tone}}" style="width:{{printf "%.2f" .Pct}}%"></i></div></div><span class="n">{{comma .Count}}</span></div>{{end}}
+      </div>{{else}}<div class="empty">No timing data.</div>{{end}}
+      <div class="counts">{{range $d.Percentiles}}<span><b class="t-{{.Tone}}">{{.Value}}</b><span class="muted">{{.Label}}</span></span>{{end}}</div>
+    </div>
+  </div>
+  <div class="section">
+    <span class="eyebrow">Internal linking</span>
+    <div class="grid-4" style="grid-template-columns:repeat({{len $d.LinkFacts}},1fr)">
+      {{range $d.LinkFacts}}<div style="border-bottom:0"><div class="kpi-label">{{.Label}}</div><div class="kpi-value t-{{.Tone}}">{{.Value}}</div><div class="kpi-note">{{.Note}}&nbsp;</div></div>{{end}}
+    </div>
+  </div>
+  {{template "foot" .}}
+</section>
+
+{{with $d.CWV}}
+<!-- Core Web Vitals -->
+<section class="sheet">
+  {{template "head" $}}
+  <span class="eyebrow">Performance · real users</span>
+  <h1>Core Web Vitals</h1>
+  <p class="lede">How fast the site feels to real Chrome users: loading (LCP), response to taps and clicks (INP) and layout stability (CLS). Google uses them as a page experience signal; it judges the 75th percentile of visits.</p>
+  {{if .Measured}}
+    {{if .Verdict}}<div class="cwv-verdict"><span class="dot f-{{.Tone}}"></span><b class="t-{{.Tone}}">{{.Verdict}}</b><span class="muted">{{.Source}}</span></div>{{end}}
+    {{if .Columns}}<div class="cwv-cols c{{len .Columns}}">{{range .Columns}}<div class="panel">
+      <div class="eyebrow">{{.Label}}</div>
+      {{range .Rows}}<div class="cwv-row{{if not .Core}} minor{{end}}">
+        <div class="cwv-h"><div><b>{{.ID | upper}}</b> <span class="muted">{{.Name}}</span></div><div class="cwv-v t-{{.Tone}}">{{.Value}}</div></div>
+        <div class="dist"><i class="f-good" style="width:{{printf "%.1f" .Good}}%"></i><i class="f-warn" style="width:{{printf "%.1f" .NI}}%"></i><i class="f-bad" style="width:{{printf "%.1f" .Poor}}%"></i></div>
+        <div class="cwv-f"><span>{{printf "%.0f" .Good}}% good · {{printf "%.0f" .Poor}}% poor</span><span>{{.Limit}}</span></div>
+      </div>{{end}}
+    </div>{{end}}</div>{{end}}
+    {{with .Lab}}<div class="section"><span class="eyebrow">Lab test · start page · mobile (Lighthouse)</span>
+      <div class="lab"><div class="ring-wrap xs"><svg width="100%" height="100%" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="none" stroke="#eeeff1" stroke-width="8"/><circle cx="50" cy="50" r="40" fill="none" class="ring-{{.Tone}}" stroke-width="8" stroke-linecap="round" stroke-dasharray="251.327" stroke-dashoffset="{{printf "%.3f" .Dash}}" transform="rotate(-90 50 50)"/></svg><div class="inner"><div class="num">{{.Score}}</div></div></div>
+      <div class="grid-4" style="flex:1">{{range .Items}}<div style="border-bottom:0"><div class="kpi-label">{{.Label}}</div><div class="kpi-value t-{{.Tone}}">{{.Value}}</div></div>{{end}}</div></div>
+      <p class="note">A lab run is one simulated load on a slow phone; field data above is what users get.</p></div>{{end}}
+    {{if .Pages}}<div class="section"><span class="eyebrow">Pages measured in the crawl</span><div class="grid-4">{{range .Pages}}<div style="border-bottom:0"><div class="kpi-label">{{.Label}}</div><div class="kpi-value t-{{.Tone}}">{{.Value}}</div></div>{{end}}</div></div>{{end}}
+  {{else}}
+    <div class="section panel cwv-missing">
+      <div class="eyebrow">Not measured</div>
+      <h2>{{.Missing}}</h2>
+      <ol class="fix" style="margin-top:3mm">
+        <li>Create a free Google API key and enable the <b>Chrome UX Report API</b> (and <b>PageSpeed Insights API</b> for a lab run).</li>
+        <li>Add it in Micelio → Settings → Integrations (CrUX / PageSpeed key), or set MICELIO_CRUX_KEY / MICELIO_PSI_KEY in ~/.micelio/micelio.env.</li>
+        <li>Export the report again. No new crawl is needed.</li>
+      </ol>
+    </div>
+    {{if .Proxy}}<div class="section"><span class="eyebrow">Until then: server response in the crawl</span><div class="grid-4" style="grid-template-columns:repeat(2,1fr)">{{range .Proxy}}<div style="border-bottom:0"><div class="kpi-label">{{.Label}}</div><div class="kpi-value t-{{.Tone}}">{{.Value}}</div></div>{{end}}</div>
+    <p class="note">Server time is only the first part of LCP; it is not a Core Web Vital on its own.</p></div>{{end}}
+  {{end}}
+  <div class="section"><span class="eyebrow">Thresholds (75th percentile)</span>
+    <table class="thr"><thead><tr><th>Metric</th><th>What it measures</th><th class="num">Good</th><th class="num">Poor</th></tr></thead><tbody>
+      <tr><td><b>LCP</b></td><td>main content visible</td><td class="num t-good">≤ 2.5 s</td><td class="num t-bad">&gt; 4 s</td></tr>
+      <tr><td><b>INP</b></td><td>reaction to taps and clicks</td><td class="num t-good">≤ 200 ms</td><td class="num t-bad">&gt; 500 ms</td></tr>
+      <tr><td><b>CLS</b></td><td>layout jumps while loading</td><td class="num t-good">≤ 0.10</td><td class="num t-bad">&gt; 0.25</td></tr>
+    </tbody></table></div>
+  {{template "foot" $}}
+</section>
+{{end}}
+
+{{with $d.CDN}}
+<!-- CDN & caching -->
+<section class="sheet">
+  {{template "head" $}}
+  <span class="eyebrow">Delivery</span>
+  <h1>CDN &amp; caching</h1>
+  <p class="lede">Who delivers the pages and how much of the work the network edge saves the server. Fast delivery helps visitors, Core Web Vitals and crawl budget.</p>
+  <div class="section cdn-hero"><div><div class="kpi-label">CDN</div><div class="cdn-name">{{.Provider}}</div><div class="kpi-note">detected from the {{.Evidence}}</div></div></div>
+  <div class="section"><table class="cdn"><tbody>{{range .Rows}}<tr><td style="width:46mm"><span class="dot f-{{.Tone}}"></span>{{.Label}}</td><td class="mono" style="width:38mm">{{.Value}}</td><td class="muted">{{.Note}}</td></tr>{{end}}</tbody></table>
+  <p class="note">Measured at export time with 4 requests to the start page and one static file, from this computer. Edge results can differ by location.</p></div>
+  {{if .Opportunities}}<div class="section"><span class="eyebrow">Worth checking{{if eq .Provider "Cloudflare"}} in Cloudflare{{end}}</span><ul class="opp">{{range .Opportunities}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+  {{template "foot" $}}
+</section>
+{{end}}
+
+
+
+{{if $d.Checks}}
+<!-- Extra checks -->
+<section class="sheet">
+  {{template "head" .}}
+  <span class="eyebrow">Additional checks</span>
+  <h1>Beyond the basics</h1>
+  <p class="lede">Checks that ran for this crawl: international targeting, AI agents, devices, real-user speed and sitemaps.</p>
+  <div class="section checks">
+    {{range $d.Checks}}<div class="check">
+      <div class="row"><h2>{{.Name}}</h2><span class="dot f-{{.Tone}}"></span></div>
+      <div class="val t-{{.Tone}}">{{.Value}}</div>
+      <div class="sum">{{.Summary}}</div>
+      {{if .Rows}}<div class="hbars">{{range .Rows}}<div class="hbar"><div><div class="lab"><span>{{.Label}}</span></div><div class="track"><i class="f-{{.Tone}}" style="width:{{printf "%.2f" .Pct}}%"></i></div></div><span class="n">{{comma .Count}}</span></div>{{end}}</div>{{end}}
+    </div>{{end}}
+  </div>
+  {{template "foot" .}}
+</section>
+{{end}}
+
+<!-- Top pages + methodology -->
+<section class="sheet">
+  {{template "head" .}}
+  <span class="eyebrow">Link authority</span>
+  <h1>Strongest pages</h1>
+  <p class="lede">Pages with the most internal PageRank: the ones the site's own links point to most. They pass the most weight to the pages they link to.</p>
+  <div class="section">
+    {{if $d.TopPages}}<table>
+      <thead><tr><th style="width:8mm">#</th><th>URL</th><th class="num">PageRank</th>{{if $d.HasInlinks}}<th class="num">Inlinks</th>{{end}}<th class="num">Status</th></tr></thead>
+      <tbody>{{range $d.TopPages}}<tr><td class="muted">{{pad .Rank}}</td><td><div class="url" style="font-family:var(--mono);font-size:7.3pt">{{.Path}}</div>{{if .Title}}<div class="kpi-note" style="margin-top:.6mm">{{.Title}}</div>{{end}}</td><td class="num">{{.PageRank}}</td>{{if $d.HasInlinks}}<td class="num">{{if .Inlinks}}{{comma .Inlinks}}{{else}}—{{end}}</td>{{end}}<td class="num">{{if .Status}}{{.Status}}{{else}}—{{end}}</td></tr>{{end}}</tbody>
+    </table>{{else}}<div class="panel empty">PageRank was not computed for this crawl.</div>{{end}}
+  </div>
+  <div class="section">
+    <span class="eyebrow">Methodology</span>
+    <div class="method">
+      <div><b>Crawl</b>Micelio followed internal links from the start URL, as a search engine bot would, and respected robots.txt.</div>
+      <div><b>Scope</b>Numbers cover the URLs found in this crawl. Pages not linked internally or blocked by robots.txt may be missing.</div>
+      <div><b>Limits</b>A crawl shows what the site serves, not how it ranks. Confirm findings with Search Console, analytics and server logs.</div>
+    </div>
+  </div>
+  {{template "foot" .}}
+</section>
+
+</body>
+</html>

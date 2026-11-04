@@ -14,12 +14,17 @@
   const loadDiff = () => import('./routes/Diff.svelte');
   const loadLogs = () => import('./routes/Logs.svelte');
   const loadLogResults = () => import('./routes/LogResults.svelte');
+  const loadUniverseCapture = () => import('./routes/UniverseCapture.svelte');
 
   let currentPath = $state(getCurrentRoute().path);
+  let currentParams = $state(getCurrentRoute().params);
 
   onRouteChange((route: Route) => {
     currentPath = route.path;
+    currentParams = route.params;
   });
+  // PDF report capture: the Universe map alone, without the dashboard chrome.
+  let captureId = $derived(matchRoute('/capture/universe/:id', currentPath)?.id ?? '');
 
   // Derive both page name and params from the path (no state mutation)
   let routeInfo = $derived.by(() => {
@@ -77,6 +82,10 @@
       <button type="submit" class="px-3 py-1.5 rounded-lg bg-accent text-surface font-medium cursor-pointer">Log in</button>
     </form>
   </div>
+{:else if captureId}
+  {#await loadUniverseCapture() then { default: UniverseCapture }}
+    <UniverseCapture id={captureId} params={currentParams} />
+  {/await}
 {:else}
 <Layout {currentPath}>
   {#if page === 'setup'}

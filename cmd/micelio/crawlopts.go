@@ -121,6 +121,8 @@ type crawlOptions struct {
 	fullPageWeight      bool
 	htmlReport          bool
 	htmlOpen            bool
+	pdfReport           string
+	backlogCSV          string
 	sitemapOut          bool
 	saveHTML            bool
 	saveRendered        bool
@@ -223,6 +225,8 @@ func registerCrawlFlags(cmd *cobra.Command, o *crawlOptions, d crawlDefaults) {
 	f.BoolVar(&o.fullPageWeight, "full-page-weight", false, "Include per-resource detail in page weight (default: aggregate only)")
 	f.BoolVar(&o.htmlReport, "html", false, "Generate interactive HTML report")
 	f.BoolVar(&o.htmlOpen, "html-open", false, "Auto-open HTML report in browser")
+	f.StringVar(&o.pdfReport, "pdf", "", "Write a PDF report to this path (needs Chrome)")
+	f.StringVar(&o.backlogCSV, "backlog", "", "Write the SEO backlog as a JIRA-importable CSV to this path")
 	f.BoolVar(&o.sitemapOut, "sitemap-out", false, "Generate XML sitemap from crawled indexable pages")
 	f.BoolVar(&o.saveHTML, "save-html", false, "Store each page's raw HTML in the crawl database")
 	f.BoolVar(&o.saveRendered, "save-rendered", false, "Store each page's rendered HTML in the crawl database (with --js)")
@@ -331,6 +335,8 @@ func (o *crawlOptions) buildConfig(cmd *cobra.Command) (types.CrawlConfig, error
 		FullPageWeight:      o.fullPageWeight,
 		HTMLReport:          o.htmlReport,
 		HTMLOpen:            o.htmlOpen,
+		PDFReport:           o.pdfReport,
+		BacklogCSV:          o.backlogCSV,
 		SitemapOut:          o.sitemapOut,
 		SaveHTML:            o.saveHTML,
 		SaveRendered:        o.saveRendered,
@@ -469,9 +475,9 @@ func (o *crawlOptions) run(cmd *cobra.Command, config types.CrawlConfig) error {
 
 	// --no-analysis: crawl and store only; `micelio import` analyses the
 	// database on another machine.
-	if o.noAnalysis && (config.HTMLReport || config.SitemapOut) {
-		fmt.Fprintf(os.Stderr, "  [warn] --no-analysis skips the HTML report and sitemap\n")
-		config.HTMLReport, config.HTMLOpen, config.SitemapOut = false, false, false
+	if o.noAnalysis && (config.HTMLReport || config.SitemapOut || config.PDFReport != "" || config.BacklogCSV != "") {
+		fmt.Fprintf(os.Stderr, "  [warn] --no-analysis skips the HTML report, PDF report, backlog and sitemap\n")
+		config.HTMLReport, config.HTMLOpen, config.SitemapOut, config.PDFReport, config.BacklogCSV = false, false, false, "", ""
 	}
 	return startCrawl(config, !o.noAnalysis)
 }

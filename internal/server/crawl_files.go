@@ -1,11 +1,13 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"zombiezen.com/go/sqlite"
@@ -18,12 +20,31 @@ import (
 // DeleteCrawl deletes a crawl job, its cached results and, when no other job
 // uses it, its crawl DB file. A running crawl must be cancelled first.
 func (m *CrawlManager) DeleteCrawl(id string) (bool, error) {
-	m.mu.RLock()
-	running := m.active != nil && m.active.ID == id
-	m.mu.RUnlock()
-	if running {
+	// The checks and the deleting mark are one step under mu, so no crawl,
+	// restart, import or analysis of this job can start until it is gone.
+	m.mu.Lock()
+	switch {
+	case m.active != nil && m.active.ID == id:
+		m.mu.Unlock()
 		return false, fmt.Errorf("crawl %s is running: cancel it first", id)
+	case m.jobHolds[id] > 0:
+		m.mu.Unlock()
+		return false, fmt.Errorf("%w: crawl %s is still being imported or analysed, try again when it ends", ErrCrawlBusy, id)
+	case m.deleting[id]:
+		m.mu.Unlock()
+		return false, fmt.Errorf("%w: crawl %s is already being deleted", ErrCrawlBusy, id)
 	}
+	if m.deleting == nil {
+		m.deleting = map[string]bool{}
+	}
+	m.deleting[id] = true
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		delete(m.deleting, id)
+		m.mu.Unlock()
+	}()
+
 	job, err := m.store.GetCrawlJob(id)
 	if err != nil {
 		return false, err
@@ -51,11 +72,59 @@ func (m *CrawlManager) DeleteCrawl(id string) (bool, error) {
 	return true, nil
 }
 
+// ErrCrawlBusy means a crawl cannot be deleted yet: work still uses it.
+var ErrCrawlBusy = errors.New("crawl busy")
+
+// holdJob marks work that uses crawl id's job or DB (a crawl, restart,
+// import, deferred analysis, result load), so DeleteCrawl refuses until the
+// returned release runs. It fails while the crawl is being deleted.
+func (m *CrawlManager) holdJob(id string) (release func(), err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.deleting[id] {
+		return nil, fmt.Errorf("%w: crawl %s is being deleted", ErrCrawlBusy, id)
+	}
+	return m.holdJobLocked(id), nil
+}
+
+// holdJobLocked adds a hold without the deleting check: for work started
+// by a caller that already holds the job. Caller holds mu.
+func (m *CrawlManager) holdJobLocked(id string) func() {
+	if m.jobHolds == nil {
+		m.jobHolds = map[string]int{}
+	}
+	m.jobHolds[id]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.mu.Lock()
+			if m.jobHolds[id]--; m.jobHolds[id] <= 0 {
+				delete(m.jobHolds, id)
+			}
+			m.mu.Unlock()
+		})
+	}
+}
+
+// retainJob adds a hold for work handed off by a holder (see holdJobLocked).
+func (m *CrawlManager) retainJob(id string) func() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.holdJobLocked(id)
+}
+
 // removeCrawlFile deletes a crawl DB (and its -wal/-shm) when it is inside
 // the crawls directory and no job uses it any more. Files elsewhere (a
 // custom dbPath) are the user's and are left alone.
 func (s *UiStore) removeCrawlFile(path string) {
-	if path == "" || !s.ownsCrawlFile(path) || s.crawlFileInUse(path) {
+	if path == "" || !s.ownsCrawlFile(path) {
+		return
+	}
+	// A failed lookup is no proof the file is unused: keep it.
+	if inUse, err := s.crawlFileInUse(path); err != nil || inUse {
+		if err != nil {
+			log.Printf("[store] keep crawl file %s: cannot check its jobs: %v", filepath.Base(path), err)
+		}
 		return
 	}
 	var size int64
@@ -79,15 +148,15 @@ func (s *UiStore) ownsCrawlFile(path string) bool {
 	return err == nil && filepath.Dir(abs) == dir
 }
 
-func (s *UiStore) crawlFileInUse(path string) bool {
+func (s *UiStore) crawlFileInUse(path string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := 0
-	_ = sqlitex.Execute(s.conn, `SELECT count(*) FROM crawl_jobs WHERE db_path = ?`, &sqlitex.ExecOptions{
+	err := sqlitex.Execute(s.conn, `SELECT count(*) FROM crawl_jobs WHERE db_path = ?`, &sqlitex.ExecOptions{
 		Args:       []interface{}{path},
 		ResultFunc: func(stmt *sqlite.Stmt) error { n = stmt.ColumnInt(0); return nil },
 	})
-	return n > 0
+	return n > 0, err
 }
 
 // removeOrphanCrawlFiles deletes <uuid>.db files in the crawls directory that
@@ -96,6 +165,11 @@ func (s *UiStore) crawlFileInUse(path string) bool {
 func (s *UiStore) removeOrphanCrawlFiles() {
 	entries, err := os.ReadDir(s.crawlDir)
 	if err != nil {
+		return
+	}
+	// If the jobs table cannot be read, no file is known to be orphaned.
+	if _, err := s.crawlFileInUse(""); err != nil {
+		log.Printf("[store] skip orphan crawl file cleanup: %v", err)
 		return
 	}
 	for _, e := range entries {

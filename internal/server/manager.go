@@ -121,6 +121,10 @@ type CrawlManager struct {
 	analyzing map[string]bool
 	// logQueue bounds concurrent and waiting log analyses (limits.go).
 	logQueue logQueue
+	// jobHolds counts work using each crawl's job or DB; deleting marks
+	// crawls DeleteCrawl is removing (crawl_files.go). Guarded by mu.
+	jobHolds map[string]int
+	deleting map[string]bool
 }
 
 // NewCrawlManager creates a new crawl manager.
@@ -221,6 +225,11 @@ func (m *CrawlManager) StartCrawl(crawlID string, config map[string]interface{})
 		m.mu.Unlock()
 		return fmt.Errorf("crawl already running: %s", activeID)
 	}
+	if m.deleting[crawlID] {
+		m.mu.Unlock()
+		return fmt.Errorf("%w: crawl %s is being deleted", ErrCrawlBusy, crawlID)
+	}
+	release := m.holdJobLocked(crawlID)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.active = &ActiveCrawl{
@@ -243,6 +252,7 @@ func (m *CrawlManager) StartCrawl(crawlID string, config map[string]interface{})
 	m.background.Add(1)
 	go func() {
 		defer m.background.Done()
+		defer release()
 		m.runCrawl(ctx, crawlID, config)
 	}()
 	return nil
@@ -298,6 +308,13 @@ func (m *CrawlManager) ResumeCrawl(crawlID string) error {
 // If configOverride is provided, it replaces the stored config (allowing
 // the user to change settings before resuming).
 func (m *CrawlManager) RestartCrawl(oldJobID string, configOverride map[string]interface{}) (string, error) {
+	// Held until StartCrawl takes over, so a delete cannot remove the job
+	// or its DB while the resume is being set up.
+	release, err := m.holdJob(oldJobID)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	oldJob, err := m.store.GetCrawlJob(oldJobID)
 	if err != nil {
 		return "", fmt.Errorf("get old crawl: %w", err)
@@ -930,9 +947,12 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 	// Launch deferred analysis (link intelligence, embeddings) in background.
 	// Pass crawlStats directly to avoid JSON round-trip precision loss.
 	if needsDeferred {
+		// The crawl/import holding the job returns before this ends.
+		release := m.retainJob(crawlID)
 		m.background.Add(1)
 		go func() {
 			defer m.background.Done()
+			defer release()
 			defer func() {
 				if intLinksClose != nil {
 					intLinksClose()
@@ -946,9 +966,11 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 			intLinksClose()
 		}
 		if coreSnap != nil {
+			release := m.retainJob(crawlID)
 			m.background.Add(1)
 			go func() {
 				defer m.background.Done()
+				defer release()
 				coreSnap.save(dbPath)
 			}()
 		}
@@ -1153,6 +1175,14 @@ func (m *CrawlManager) loadResults(crawlID string) *CrawlResults {
 	}
 	m.mu.RUnlock()
 
+	// Held so a delete cannot run between reading the job and caching it,
+	// which would cache a crawl that no longer exists.
+	release, err := m.holdJob(crawlID)
+	if err != nil {
+		return nil
+	}
+	defer release()
+
 	// Try loading from persisted stats + crawl DB
 	job, err := m.store.GetCrawlJob(crawlID)
 	if err != nil || job == nil || job.Status != "completed" {
@@ -1235,6 +1265,13 @@ func (m *CrawlManager) GetQuickStats(crawlID string) *CrawlResults {
 		return r
 	}
 	m.mu.RUnlock()
+
+	// Held until the entry is cached (see loadResults).
+	release, err := m.holdJob(crawlID)
+	if err != nil {
+		return nil
+	}
+	defer release()
 
 	// Load only stats from persisted DB (fast, <50ms)
 	job, err := m.store.GetCrawlJob(crawlID)

@@ -149,6 +149,11 @@ func (m *CrawlManager) prepareImport(path string, opts ImportOptions) (*pendingI
 		p.cleanup()
 		return nil, fmt.Errorf("create crawl: %w", err)
 	}
+	// Held until runImport ends, so a delete cannot remove the job while
+	// its DB is copied and analysed. The job is new: nothing deletes it yet.
+	release := m.retainJob(p.job.ID)
+	cleanup := p.cleanup
+	p.cleanup = func() { cleanup(); release() }
 	return p, nil
 }
 

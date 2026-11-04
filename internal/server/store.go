@@ -592,13 +592,14 @@ func (s *UiStore) GetSettings() (map[string]interface{}, error) {
 }
 
 // UpdateSettings batch-upserts settings within a single transaction.
-func (s *UiStore) UpdateSettings(settings map[string]interface{}) error {
+func (s *UiStore) UpdateSettings(settings map[string]interface{}) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(settings) == 0 {
 		return nil
 	}
 
+	// err is the named result so a failed COMMIT reaches the caller.
 	endFn, err := sqlitex.ImmediateTransaction(s.conn)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
@@ -928,11 +929,12 @@ func (s *UiStore) GetLogJob(id string) (*LogJob, error) {
 	return job, err
 }
 
-func (s *UiStore) DeleteLogJob(id string) error {
+func (s *UiStore) DeleteLogJob(id string) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var err error
+	// err is the named result: the caller deletes the uploaded log files
+	// on nil, so a failed COMMIT must not look like success.
 	endFn, txErr := sqlitex.ImmediateTransaction(s.conn)
 	if txErr != nil {
 		return txErr
@@ -1179,14 +1181,13 @@ func (s *UiStore) CountLogURLStats(jobID string) (int64, error) {
 // UpsertLogURLStatsBatch inserts or merges a batch of URL stats using UPSERT.
 // Uses a dedicated SQLite connection (urlConn) so bulk writes don't block API
 // reads on the main connection.
-func (s *UiStore) UpsertLogURLStatsBatch(jobID string, urls []logs.URLStat) error {
+func (s *UiStore) UpsertLogURLStatsBatch(jobID string, urls []logs.URLStat) (commitErr error) {
 	if len(urls) == 0 {
 		return nil
 	}
 	s.urlMu.Lock()
 	defer s.urlMu.Unlock()
 
-	var commitErr error
 	endFn, txErr := sqlitex.ImmediateTransaction(s.urlConn)
 	if txErr != nil {
 		return txErr
@@ -1304,50 +1305,40 @@ func (s *UiStore) LoadAllLogURLStats(jobID string) ([]logs.URLStat, error) {
 // WriteMergePagesBulk writes ALL merged pages in a single transaction.
 // This is 10-50× faster than per-batch transactions because SQLite only
 // syncs the WAL once (at COMMIT), not 1000+ times.
+// It replaces only the rows of the (logID, crawlID) pair: merges of other
+// pairs stay cached. On error it keeps reading pages until the channel is
+// closed, so a producer sending on it never blocks forever.
 // The onProgress callback is called every progressInterval rows.
-func (s *UiStore) WriteMergePagesBulk(logID, crawlID string, pages <-chan logs.MergedPage, onProgress func(written int64)) error {
+func (s *UiStore) WriteMergePagesBulk(logID, crawlID string, pages <-chan logs.MergedPage, onProgress func(written int64)) (commitErr error) {
+	defer func() {
+		if commitErr != nil {
+			for range pages {
+			}
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var commitErr error
 	endFn, txErr := sqlitex.ImmediateTransaction(s.conn)
 	if txErr != nil {
 		return txErr
 	}
 	defer func() { endFn(&commitErr) }()
 
-	// Nuclear approach: drop the entire table and recreate it as a regular
-	// rowid table (no WITHOUT ROWID, no compound primary key). This turns
-	// each INSERT from an O(log n) B-tree search on a URL string into an
-	// O(1) append. The table is a cache — safe to drop and recreate.
-	for _, sql := range []string{
-		`DROP TABLE IF EXISTS log_merge_pages`,
-		`CREATE TABLE log_merge_pages (
-			log_id          TEXT NOT NULL,
-			crawl_id        TEXT NOT NULL,
-			url             TEXT NOT NULL,
-			segment         TEXT NOT NULL,
-			reason          TEXT,
-			log_hits        INTEGER NOT NULL DEFAULT 0,
-			log_bot_hits    INTEGER NOT NULL DEFAULT 0,
-			log_human_hits  INTEGER NOT NULL DEFAULT 0,
-			log_top_bot     TEXT,
-			log_status      INTEGER,
-			crawl_status    INTEGER,
-			crawl_indexable INTEGER,
-			crawl_canonical TEXT,
-			crawl_depth     INTEGER,
-			crawl_inlinks   INTEGER,
-			crawl_word_count INTEGER,
-			has_noindex     INTEGER,
-			in_crawl        INTEGER,
-			in_logs         INTEGER,
-			log_bytes       INTEGER NOT NULL DEFAULT 0
-		)`,
-	} {
-		if commitErr = sqlitex.Execute(s.conn, sql, nil); commitErr != nil {
+	// Bulk-loading into indexed tables is 2-3x slower than building the
+	// indexes once at the end, so drop them for the delete and the load;
+	// they are rebuilt below inside the same transaction. Only this pair's
+	// rows are replaced: before, the whole table was dropped, which deleted
+	// the cached merges of every other log/crawl pair.
+	for _, idx := range []string{"idx_lmp_pk", "idx_lmp_segment", "idx_lmp_bot_hits"} {
+		if commitErr = sqlitex.Execute(s.conn, "DROP INDEX IF EXISTS "+idx, nil); commitErr != nil {
 			return commitErr
 		}
+	}
+	if commitErr = sqlitex.Execute(s.conn,
+		`DELETE FROM log_merge_pages WHERE log_id = ? AND crawl_id = ?`,
+		&sqlitex.ExecOptions{Args: []interface{}{logID, crawlID}}); commitErr != nil {
+		return commitErr
 	}
 
 	stmt, _, prepErr := s.conn.PrepareTransient(`
@@ -1427,8 +1418,7 @@ func (s *UiStore) WriteMergePagesBulk(logID, crawlID string, pages <-chan logs.M
 		onProgress(written)
 	}
 
-	// Build all indexes in one pass now that all rows are inserted.
-	// This is orders of magnitude faster than maintaining indexes during 5M+ inserts.
+	// Rebuild the indexes dropped for the load.
 	for _, ddl := range []string{
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_lmp_pk ON log_merge_pages(log_id, crawl_id, url)`,
 		`CREATE INDEX IF NOT EXISTS idx_lmp_segment ON log_merge_pages(log_id, crawl_id, segment, log_bot_hits DESC)`,
@@ -1456,14 +1446,13 @@ func (s *UiStore) ClearMergePages(logID, crawlID string) error {
 // SaveMergePagesBatch writes a batch of merged pages in one transaction.
 // Caller is expected to call this in chunks (e.g. 5K rows) during a streaming
 // merge so memory stays bounded.
-func (s *UiStore) SaveMergePagesBatch(logID, crawlID string, pages []logs.MergedPage) error {
+func (s *UiStore) SaveMergePagesBatch(logID, crawlID string, pages []logs.MergedPage) (commitErr error) {
 	if len(pages) == 0 {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var commitErr error
 	endFn, txErr := sqlitex.ImmediateTransaction(s.conn)
 	if txErr != nil {
 		return txErr

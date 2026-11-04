@@ -68,6 +68,9 @@
       It was started with <code>--auth-token</code> or <code>MICELIO_AUTH_TOKEN</code>. Open
       <code>{location.origin}/?token=&lt;token&gt;</code> once, or enter the token below. The browser then keeps a login cookie.
     </p>
+    {#if auth.failed}
+      <p class="text-danger mb-3" role="alert">Wrong token, try again.</p>
+    {/if}
     <form class="flex gap-2" onsubmit={(e) => { e.preventDefault(); if (token.trim()) loginWithToken(token.trim()); }}>
       <input type="password" bind:value={token} placeholder="Access token" autocomplete="current-password"
         class="flex-1 px-3 py-1.5 rounded-lg border border-border bg-surface text-fg" />

@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1037,30 +1038,27 @@ func (m *CrawlManager) cancelDeferredLocked(crawlID string) {
 	}
 }
 
-// deferredPages returns the pages deferred analysis works on. Link
-// intelligence clears link slices, swaps pages for small stubs and writes
-// scores; doing that on the cached pages raced with HTTP handlers reading
-// them. The copies share the heavy data (read only) and own every field the
-// analysis writes, including the structs it changes through pointers.
-func deferredPages(pages []*types.PageData) []*types.PageData {
-	work := make([]*types.PageData, len(pages))
-	for i, p := range pages {
-		cp := *p
-		if p.Topicality != nil {
-			t := *p.Topicality
-			cp.Topicality = &t
-		}
-		if p.AutoSegments != nil {
-			a := *p.AutoSegments
-			cp.AutoSegments = &a
-		}
-		if p.LinkIntelligence != nil {
-			li := *p.LinkIntelligence
-			cp.LinkIntelligence = &li
-		}
-		work[i] = &cp
+// deferredWork returns the pages deferred analysis works on, without
+// copying them. Embeddings only read pages. Link intelligence swaps each
+// page for a small stub in its own slice and writes scores on the stubs; it
+// never writes to the input pages once their links are released, and the
+// structs stubs share with them (Topicality, AutoSegments) are copied only
+// where a value changes. So the cached pages drop their links first, under
+// the write lock (the graph is built before that), and handlers keep
+// reading them. Without link intelligence nothing is copied; with it the
+// extra is the slice plus the changed structs.
+func deferredWork(own *CrawlResults, cfg *analysis.PostProcessConfig) []*types.PageData {
+	pages := own.Pages
+	if !cfg.LinkIntelligence {
+		return pages
 	}
-	return work
+	if cfg.Graph == nil || cfg.Graph.N != len(pages) {
+		cfg.Graph = analysis.BuildLinkGraph(pages, cfg.InternalLinksIter)
+	}
+	own.mu.Lock()
+	releaseLinkData(pages)
+	own.mu.Unlock()
+	return slices.Clone(pages)
 }
 
 // releaseLinkData frees what link intelligence would free on the cached
@@ -1170,19 +1168,19 @@ func (m *CrawlManager) runDeferredAnalysis(ctx context.Context, crawlID string, 
 		}
 	}
 
-	// The analysis runs on copies; the cached pages drop now what link
-	// intelligence would drop, so memory peaks as before.
-	work := deferredPages(pages)
-	if cfg.LinkIntelligence {
-		own.mu.Lock()
-		releaseLinkData(pages)
-		own.mu.Unlock()
-	}
+	// The cached pages drop now what link intelligence would drop, so
+	// memory peaks as before.
+	work := deferredWork(own, &cfg)
 
 	// Run deferred analysis (link intelligence + embeddings)
 	graph := analysis.RunDeferredAnalysis(ctx, work, cfg, &crawlStats)
-	// Link intelligence adds graph in-degree; refresh segment inlink averages.
-	refreshAutoSegmentStats(work, &crawlStats)
+	// Link intelligence adds graph in-degree; refresh segment inlink
+	// averages on the stubs. Without it nothing changed since the core
+	// analysis did the same.
+	if cfg.LinkIntelligence {
+		analysis.AssignAuthoritySegmentsShared(work, nil)
+		crawlStats.AutoSegmentStats = analysis.BuildAutoSegmentStats(work)
+	}
 	if stale() {
 		return
 	}
@@ -1649,8 +1647,10 @@ func stripPagesForCache(pages []*types.PageData) {
 		p.SchemaValidation = nil
 		p.ContentHash = ""
 		p.SimhashFingerprint = ""
-		if p.PageWeight != nil {
-			p.PageWeight.Resources = nil // keep summary (TotalBytes, HTMLBytes, ByType)
+		// Keep the summary (TotalBytes, HTMLBytes, ByType). Write only when
+		// set: the struct can be shared with copies handlers are encoding.
+		if p.PageWeight != nil && p.PageWeight.Resources != nil {
+			p.PageWeight.Resources = nil
 		}
 		p.Pagespeed = nil
 		p.CruxData = nil

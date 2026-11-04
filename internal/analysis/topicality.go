@@ -255,11 +255,16 @@ func EnrichTopicalityAnchors(pages []*types.PageData, graph *AdjacencyGraph, agg
 			counted += anchor.count
 		}
 		if counted > 0 {
-			p.Topicality.AnchorTitleRelevance = math.Round((totalRelevance/float64(counted))*1000) / 1000
+			// Copy on write: link intelligence passes stubs that share
+			// Topicality with pages other goroutines read (the dashboard
+			// cache), so the shared struct is never written.
+			t := *p.Topicality
+			t.AnchorTitleRelevance = math.Round((totalRelevance/float64(counted))*1000) / 1000
 			// Recompute composite: Body 70% + Anchors 30%
-			bodyScore := 0.30*p.Topicality.TitleBodyOverlap + 0.20*p.Topicality.TitleH1Alignment + 0.20*p.Topicality.HeadingBodyCoverage
-			anchorScore := 0.30 * p.Topicality.AnchorTitleRelevance
-			p.Topicality.TopicalConsistency = math.Round((bodyScore+anchorScore)*1000) / 1000
+			bodyScore := 0.30*t.TitleBodyOverlap + 0.20*t.TitleH1Alignment + 0.20*t.HeadingBodyCoverage
+			anchorScore := 0.30 * t.AnchorTitleRelevance
+			t.TopicalConsistency = math.Round((bodyScore+anchorScore)*1000) / 1000
+			p.Topicality = &t
 		}
 	}
 }

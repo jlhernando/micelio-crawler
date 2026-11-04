@@ -266,6 +266,42 @@ func TestLoginCookie(t *testing.T) {
 		t.Fatalf("wrong token: status %d, cookies %v", w.Code, w.Result().Cookies())
 	}
 
+	// A browser with a wrong token goes back to the page, where the login
+	// screen says so. The token is not in the new URL.
+	for name, hdr := range map[string][2]string{
+		"fetch metadata": {"Sec-Fetch-Mode", "navigate"},
+		"accept html":    {"Accept", "text/html,application/xhtml+xml"},
+	} {
+		r = httptest.NewRequest("GET", "/results?token=wrong-"+tok+"&tab=links", nil)
+		r.Header.Set(hdr[0], hdr[1])
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		loc := w.Header().Get("Location")
+		if w.Code != http.StatusSeeOther || loc != "/results?login=failed&tab=links" || len(w.Result().Cookies()) != 0 {
+			t.Fatalf("%s: wrong token: status %d, Location %q, cookies %v", name, w.Code, loc, w.Result().Cookies())
+		}
+		if strings.Contains(loc, tok) || strings.Contains(w.Body.String(), tok) {
+			t.Fatalf("%s: token leaked into the redirect: %q %q", name, loc, w.Body.String())
+		}
+	}
+	// A script fetching with a wrong token still gets a 401.
+	r = httptest.NewRequest("GET", "/?token=wrong", nil)
+	r.Header.Set("Sec-Fetch-Mode", "cors")
+	r.Header.Set("Accept", "text/html")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("fetch with wrong token: status %d, want 401", w.Code)
+	}
+	// Retrying from the failed page drops the failure flag.
+	r = httptest.NewRequest("GET", "/?login=failed&token="+tok, nil)
+	r.Header.Set("Sec-Fetch-Mode", "navigate")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if loc := w.Header().Get("Location"); w.Code != http.StatusSeeOther || loc != "/" {
+		t.Fatalf("retry: status %d, Location %q, want 303 to /", w.Code, loc)
+	}
+
 	// The dashboard page itself loads without a token (it then needs one
 	// for /api/).
 	r = httptest.NewRequest("GET", "/", nil)

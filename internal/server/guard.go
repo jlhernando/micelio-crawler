@@ -200,16 +200,27 @@ func authorized(r *http.Request, token, cookie string) bool {
 
 // withLogin turns a dashboard visit with ?token=<token> into the login
 // cookie and redirects to the same page without the token, so it does not
-// stay in the address bar or history.
+// stay in the address bar or history. A wrong token sends a browser back
+// to the page with ?login=failed (no token), where the login screen says
+// so; other clients get a 401.
 func withLogin(token, cookie string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if r.Method == http.MethodGet && q.Has("token") && r.URL.Path != "/ws" &&
 			!strings.HasPrefix(r.URL.Path, "/api/") {
 			if !tokenEqual(q.Get("token"), token) {
-				http.Error(w, "invalid token", http.StatusUnauthorized)
+				if !isPageNavigation(r) {
+					http.Error(w, "invalid token", http.StatusUnauthorized)
+					return
+				}
+				q.Del("token")
+				q.Set("login", "failed")
+				dest := *r.URL
+				dest.RawQuery = q.Encode()
+				http.Redirect(w, r, dest.RequestURI(), http.StatusSeeOther)
 				return
 			}
+			q.Del("login")
 			http.SetCookie(w, &http.Cookie{
 				Name:     cookie,
 				Value:    sessionValue(token),
@@ -226,4 +237,13 @@ func withLogin(token, cookie string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isPageNavigation reports whether a request is a browser loading a page
+// (address bar, link, form), not a script or a command-line client.
+func isPageNavigation(r *http.Request) bool {
+	if mode := r.Header.Get("Sec-Fetch-Mode"); mode != "" {
+		return mode == "navigate"
+	}
+	return strings.Contains(r.Header.Get("Accept"), "text/html")
 }

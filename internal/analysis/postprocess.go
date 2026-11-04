@@ -45,6 +45,12 @@ type PostProcessConfig struct {
 	Ngrams              bool
 }
 
+// BuildLinkGraph builds the link graph link intelligence needs, from the
+// pages' links or, when they are released, from the disk iterator.
+func BuildLinkGraph(pages []*types.PageData, iter func(fn func(source string, targets []string)) error) *AdjacencyGraph {
+	return buildReportGraph(pages, iter)
+}
+
 // RunCoreAnalysis runs the fast synchronous analysis (reporter + n-grams + field stripping).
 // Returns CrawlStats without link intelligence or embeddings.
 func RunCoreAnalysis(ctx context.Context, pages []*types.PageData, cfg PostProcessConfig) types.CrawlStats {
@@ -235,8 +241,14 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 		if len(p.ExternalLinks) > 0 {
 			p.ExternalLinkCount = len(p.ExternalLinks)
 		}
-		p.InternalLinks = nil
-		p.ExternalLinks = nil
+		// Pages other goroutines read (the dashboard cache) arrive with
+		// links released; writing nil again would still race with them.
+		if p.InternalLinks != nil {
+			p.InternalLinks = nil
+		}
+		if p.ExternalLinks != nil {
+			p.ExternalLinks = nil
+		}
 	}
 
 	// Extract metadata needed by GenerateLinkSuggestions before stripping pages.

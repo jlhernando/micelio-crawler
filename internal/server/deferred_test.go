@@ -24,6 +24,8 @@ func TestDeferredAnalysisDoesNotRaceHandlers(t *testing.T) {
 	for _, p := range pages {
 		p.Title = &types.TextLength{Text: "Cat page"}
 		p.Topicality = &types.TopicalityData{}
+		p.AutoSegments = &types.PageSegments{Authority: "low"}
+		p.PageWeight = &types.PageWeightData{Resources: []types.ResourceEntry{{}}}
 		p.Anchors = []types.AnchorData{{Href: "https://ex.com/cat/", Text: "cat page", IsInternal: true}}
 	}
 	res := &CrawlResults{Pages: pages, PagesReady: true, AnalysisPending: true}

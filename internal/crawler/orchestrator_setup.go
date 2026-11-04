@@ -32,7 +32,8 @@ type crawlSession struct {
 	queue   *CrawlQueue
 	seedURL string
 
-	soft404Probes []types.Soft404Probe
+	soft404Probes  []types.Soft404Probe
+	agentReadiness []types.AgentHostReport
 
 	// Setup work that runs alongside the crawl (startBackground).
 	background      sync.WaitGroup
@@ -87,6 +88,7 @@ type crawlSession struct {
 
 	// Sitemap discovery
 	discoveredSitemapURLs []string
+	sitemapHreflang       types.SitemapHreflang // <xhtml:link> alternates from the sitemaps
 
 	// Disk accumulators
 	extLinksDisk  *externalLinksDisk
@@ -654,6 +656,11 @@ func (s *crawlSession) startBackground(ctx context.Context) {
 		defer s.background.Done()
 		s.setupSoft404Probe(ctx)
 	}()
+	s.background.Add(1)
+	go func() {
+		defer s.background.Done()
+		s.setupAgentCheck(ctx)
+	}()
 }
 
 // finishBackground ends sitemap discovery (a crawl that stopped no longer
@@ -676,6 +683,7 @@ func (s *crawlSession) setupSitemapDiscovery(ctx context.Context) {
 	fmt.Fprintf(os.Stderr, "  [sitemap-discovery] Fetching sitemaps (crawl continues meanwhile)...\n")
 	enqueued := 0
 	ref := "sitemap"
+	defer s.saveSitemapHreflang()
 	err := discoverSitemaps(ctx, s.seedURL, robotsSitemaps, s.fetchOpts.Client, s.config.UserAgent, s.fetchOpts.Pace, func(urls []string) {
 		s.discoveredSitemapURLs = append(s.discoveredSitemapURLs, urls...)
 		// Enqueue sitemap URLs into crawl queue at depth 0
@@ -684,7 +692,7 @@ func (s *crawlSession) setupSitemapDiscovery(ctx context.Context) {
 				enqueued++
 			}
 		}
-	})
+	}, &s.sitemapHreflang)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  [sitemap-discovery] Error: %v\n", err)
 		return
@@ -753,7 +761,12 @@ func (s *crawlSession) seedSitemapMode(ctx context.Context) error {
 			return ctx.Err()
 		}
 		var urls []string
-		err := fetchSitemap(ctx, sm, s.fetchOpts.Client, s.config.UserAgent, s.fetchOpts.Pace, 0, func(u []string) { urls = append(urls, u...) })
+		err := fetchSitemap(ctx, sm, s.fetchOpts.Client, s.config.UserAgent, s.fetchOpts.Pace, 0, func(u []string, alts [][]types.HreflangEntry) {
+			urls = append(urls, u...)
+			for i, a := range alts {
+				s.sitemapHreflang.Add(u[i], a)
+			}
+		})
 		if err != nil {
 			lastErr = err
 			fmt.Fprintf(os.Stderr, "  [sitemap] %s: %v\n", sm, err)
@@ -802,6 +815,7 @@ func (s *crawlSession) seedSitemapMode(ctx context.Context) error {
 		}
 		urls = nil // release this file before fetching the next
 	}
+	s.saveSitemapHreflang()
 
 	if skippedScope > 0 {
 		fmt.Fprintf(os.Stderr, "  [sitemap] %d URL(s) skipped (outside AllowedDomains)\n", skippedScope)

@@ -12,6 +12,7 @@ This reference matches the commands and flags in the current source tree. Run
 | `sitemap <url...>` | Resolve XML sitemaps and crawl exactly their listed URLs, with the same analysis flags as `crawl` |
 | `head <file>` | Make lightweight HEAD requests for status and header checks |
 | `robots-test <url>` | Test robots.txt rules against major crawler user agents |
+| `agent-check <url>` | Check how ready a site is for AI agents (llms.txt, markdown, AI bot rules, /.well-known agent files) |
 | `verify-bot <ip...>` | Check IPs against Google's official crawler ranges |
 | `diff <old.jsonl> <new.jsonl>` | Compare two crawl exports |
 | `generate-sitemap <input.jsonl>` | Build an XML sitemap from eligible crawl results |
@@ -91,6 +92,7 @@ file, otherwise the command fails.
 | `--no-analysis` | off | Only crawl and save; skip post-crawl analysis (run it later with `micelio import`) |
 | `--db-only` | off | Write only the crawl database, no JSONL/CSV output |
 | `--no-soft404-probe` | off | Skip the one request for a URL that cannot exist (soft-404 check) |
+| `--no-agent-check` | off | Skip the agent-readiness check (about 20 requests per host: robots.txt AI rules, llms.txt, markdown, /.well-known agent files) |
 
 When no database path is supplied, the CLI derives one from the output path or
 seed domain. `--resume` cannot be combined with `--no-db`.
@@ -385,6 +387,21 @@ micelio robots-test https://example.com \
   --agents 'Googlebot,Bingbot,GPTBot' \
   --url / --url /private --url /api --json
 ```
+
+## `agent-check`: AI agent readiness
+
+```bash
+micelio agent-check https://example.com [--json] [--user-agent UA] [--no-robots]
+```
+
+Runs the crawl's agent-readiness check on one site without crawling it: robots.txt
+rules for 18 AI bots and `Content-Signal`, `/llms.txt` and `/llms-full.txt`
+(soft 404s caught), markdown negotiation and `.md` twins, Link headers, a live
+request as GPTBot and ClaudeBot, and the `/.well-known` agent files (MCP server
+card, A2A agent card, API catalog, OAuth, Web Bot Auth, agent skills,
+security.txt, `ai-plugin.json`). Structured data comes from the home page's
+JSON-LD. At most 25 requests; prints a score (0-100), level and a fix per check.
+`--no-robots` stops robots.txt from applying to the check's own requests.
 
 ## `verify-bot`: Verify Google crawler IPs
 

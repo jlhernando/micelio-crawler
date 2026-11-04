@@ -43,6 +43,10 @@ type CrawlResult struct {
 	DeadLetterQueue       []types.DeadLetterEntry
 	DiscoveredSitemapURLs []string
 	Soft404Probes         []types.Soft404Probe
+	// SitemapHreflang holds the hreflang alternates read from the sitemaps
+	// (nil when they declare none).
+	SitemapHreflang *types.SitemapHreflang
+	AgentReadiness  []types.AgentHostReport
 	// ResourceSizer HEAD-fetches resource sizes for page weight using the
 	// crawl's HTTP client (proxy/Tor/SSRF guard) and per-host rate limiter.
 	ResourceSizer analysis.ResourceSizer
@@ -301,6 +305,8 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 		DeadLetterQueue:       dlqEntries,
 		DiscoveredSitemapURLs: s.discoveredSitemapURLs,
 		Soft404Probes:         s.soft404Probes,
+		SitemapHreflang:       s.sitemapHreflangResult(),
+		AgentReadiness:        s.agentReadiness,
 		ChangedPages:          changedPages,
 		UnchangedPages:        unchangedPages,
 		ResourceSizer:         s.resourceSizer(),

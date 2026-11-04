@@ -20,9 +20,11 @@ const maxSummaryBytes = 4000
 // summaryStats is the part of /stats crawl_summary reads. Other fields
 // are left out on purpose to keep the summary small.
 type summaryStats struct {
-	DeviceParity      *types.DeviceParityStats `json:"deviceParity"`
-	TotalPages        int                      `json:"totalPages"`
-	StatusCodes       map[string]int           `json:"statusCodes"`
+	DeviceParity      *types.DeviceParityStats   `json:"deviceParity"`
+	Hreflang          *types.HreflangStats       `json:"hreflang"`
+	AgentReadiness    *types.AgentReadinessStats `json:"agentReadiness"`
+	TotalPages        int                        `json:"totalPages"`
+	StatusCodes       map[string]int             `json:"statusCodes"`
 	IndexabilityStats struct {
 		Reasons      map[string]int `json:"reasons"`
 		Indexable    int            `json:"indexable"`
@@ -115,6 +117,58 @@ type crawlSummaryOut struct {
 	Soft404Candidates int                      `json:"soft404Candidates"`
 	ResponseTimeMs    *percentiles             `json:"responseTimeMs,omitempty"`
 	Devices           *types.DeviceParityStats `json:"devices,omitempty" jsonschema:"device comparison crawl: pages compared, identical, and pages per difference (device-links, device-content, ...); filter pages_query with issue set to that id"`
+	Hreflang          *summaryHreflang         `json:"hreflang,omitempty" jsonschema:"hreflang audit (HTML, HTTP Link header and XML sitemap alternates): pages declaring it by source, codes, invalid codes, and pages per issue id"`
+	AgentReadiness    *summaryAgent            `json:"agentReadiness,omitempty" jsonschema:"agent readiness of the seed host: score 0-100, level, and the ids of failed and warning checks (robots.txt AI rules, llms.txt, markdown, /.well-known agent files, structured data)"`
+}
+
+type summaryHreflang struct {
+	Pages         int            `json:"pages"`
+	BySource      map[string]int `json:"bySource"`
+	Codes         int            `json:"codes"`
+	InvalidCodes  []string       `json:"invalidCodes,omitempty"`
+	XDefaultPages int            `json:"xDefaultPages"`
+	Issues        map[string]int `json:"issues" jsonschema:"pages affected per hreflang-* issue id"`
+}
+
+func summarizeHreflang(h *types.HreflangStats) *summaryHreflang {
+	if h == nil {
+		return nil
+	}
+	out := &summaryHreflang{Pages: h.PagesWithHreflang, BySource: h.BySource, Codes: len(h.Codes), XDefaultPages: h.XDefaultPages, Issues: map[string]int{}}
+	for _, c := range h.Codes {
+		if !c.Valid && len(out.InvalidCodes) < 5 {
+			out.InvalidCodes = append(out.InvalidCodes, truncate(c.Code, 20))
+		}
+	}
+	for _, g := range h.Issues {
+		out.Issues[g.ID] = g.Pages
+	}
+	return out
+}
+
+type summaryAgent struct {
+	Host  string   `json:"host"`
+	Score int      `json:"score"`
+	Level string   `json:"level"`
+	Fail  []string `json:"fail,omitempty"`
+	Warn  []string `json:"warn,omitempty"`
+}
+
+func agentSummary(a *types.AgentReadinessStats) *summaryAgent {
+	if a == nil || len(a.Hosts) == 0 {
+		return nil
+	}
+	h := a.Hosts[0]
+	out := &summaryAgent{Host: h.Host, Score: h.Score, Level: h.Level}
+	for _, c := range h.Checks {
+		switch c.Status {
+		case types.AgentFail:
+			out.Fail = append(out.Fail, c.ID)
+		case types.AgentWarn:
+			out.Warn = append(out.Warn, c.ID)
+		}
+	}
+	return out
 }
 
 // issueDef describes one issue: how to count it and where samples come from.
@@ -254,6 +308,8 @@ func (t *tools) crawlSummary(ctx context.Context, _ *mcp.CallToolRequest, in idI
 		out.Soft404Candidates = s.Soft404Stats.Total
 	}
 	out.Devices = s.DeviceParity
+	out.Hreflang = summarizeHreflang(s.Hreflang)
+	out.AgentReadiness = agentSummary(s.AgentReadiness)
 	if p := s.ResponseTimePercentiles; p.P50 > 0 || p.P90 > 0 {
 		out.ResponseTimeMs = &percentiles{P50: p.P50, P90: p.P90, P99: p.P99}
 	}
@@ -326,5 +382,8 @@ func fitSummary(out *crawlSummaryOut) {
 			}
 		}
 		out.StatusCodes = codes
+	}
+	if size() > maxSummaryBytes {
+		out.Hreflang = nil
 	}
 }

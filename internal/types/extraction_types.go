@@ -30,8 +30,9 @@ type ImageData struct {
 
 // HreflangEntry represents a single hreflang annotation.
 type HreflangEntry struct {
-	Lang string `json:"lang"`
-	Href string `json:"href"`
+	Lang   string `json:"lang"`
+	Href   string `json:"href"`
+	Source string `json:"source,omitempty"` // "" = html; "header" (HTTP Link) or "sitemap"
 }
 
 // StructuredDataEntry holds a single piece of structured data.

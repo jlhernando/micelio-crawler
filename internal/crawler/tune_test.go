@@ -51,7 +51,7 @@ func TestTunerDelayAndLimit(t *testing.T) {
 		_, err := CrawlWithTuner(context.Background(), types.CrawlConfig{
 			SeedURL: srv.URL + "/", Mode: types.ModeSpider, MaxDepth: 10, MaxPages: 1000,
 			Concurrency: 4, DelayMs: 300, DelayExplicit: true, UserAgent: "Micelio/1.0", SkipSSRF: true,
-			NoSoft404Probe: true,
+			NoSoft404Probe: true, NoAgentCheck: true,
 		}, nil, nil, nil, nil, func(tu *Tuner) { tuner = tu; close(ready) })
 		done <- err
 	}()
@@ -114,7 +114,7 @@ func TestTunerConcurrency(t *testing.T) {
 	ready := make(chan struct{})
 	go CrawlWithTuner(ctx, types.CrawlConfig{
 		SeedURL: srv.URL + "/", Mode: types.ModeSpider, MaxDepth: 10, MaxPages: 200,
-		Concurrency: 1, DelayMs: 0, UserAgent: "Micelio/1.0", SkipSSRF: true, NoSoft404Probe: true,
+		Concurrency: 1, DelayMs: 0, UserAgent: "Micelio/1.0", SkipSSRF: true, NoSoft404Probe: true, NoAgentCheck: true,
 	}, nil, nil, nil, nil, func(tu *Tuner) { tuner = tu; close(ready) })
 	<-ready
 

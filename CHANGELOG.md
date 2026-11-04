@@ -4,6 +4,23 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+### Security
+
+- **Outbound requests can no longer reach this computer or the local network.** Webhooks, alert channels, Plausible and the Google token URL refuse private and loopback addresses, also after DNS and redirects; Chromium goes through the same guard.
+- **The dashboard is locked down.** Requests from other sites (CSRF, DNS rebinding) are refused with a port-exact Origin check; a dashboard that listens beyond this computer needs an access token and refuses to start without one, and shows a login screen when the browser has none; pprof sits behind the same token.
+- **Crawl configs are allowlisted and capped**: unknown keys are dropped, pages, concurrency, log uploads and imports have limits.
+- **Credentials stay with the site they belong to.** Cookies, auth headers and API keys are masked in API responses, sent only to the crawled host, kept out of crawl databases and exports, and crawl files are owner-only. Re-crawl restores the stored secrets only for the same site. Header masking is default-deny; URLs and failed precheck output are redacted.
+- **The legacy TypeScript crawler** gets the same SSRF guard, credential scoping and locked-down dashboard.
+
+### Fixed
+
+- Response time no longer includes rate-limiter and retry waits.
+- One dashboard per data folder: a second `micelio ui` on the same folder exits instead of marking running crawls failed.
+- Pausing could deadlock; analysis now runs per crawl; races between page loading and Universe fixed.
+- Log × crawl merges keep their own cache table and are not lost; failed commits are reported; a crawl file in use is never deleted.
+- Deferred analysis no longer copies every page; a wrong login token returns to the login screen.
+- Legacy TypeScript crawler: cancel skips post-crawl work, bounded results cache, deleting a crawl removes its files, and 7 more reliability fixes.
+
 ## [1.12.0] - 2026-11-02
 
 Crawl as any device, render on its screen, and compare two devices in one crawl.

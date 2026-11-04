@@ -230,7 +230,7 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 		}
 	}
 
-	start := time.Now()
+	clock := newFetchClock()
 	redirectChain := make([]types.RedirectHop, 0)
 	currentURL := rawURL
 	retries := 0
@@ -242,27 +242,27 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 				URL:            rawURL,
 				FinalURL:       currentURL,
 				RedirectChain:  redirectChain,
-				ResponseTimeMs: time.Since(start).Milliseconds(),
+				ResponseTimeMs: clock.ms(),
 				Error:          fmt.Sprintf("request creation failed: %v", err),
 			}
 		}
 
 		setHeaders(req, opts)
 
-		resp, err := pacedDo(client, req, opts.Pace)
+		resp, err := clock.do(client, req, opts.Pace)
 		if err != nil {
 			retryable := isRetryableFetchErr(ctx, err)
 			if retryable && !opts.NoRetry && retries < maxRetries {
 				delay := backoffDelay(retries)
 				retries++
-				sleepCtx(ctx, delay)
+				clock.sleep(ctx, delay)
 				continue
 			}
 			return types.FetchResult{
 				URL:            rawURL,
 				FinalURL:       currentURL,
 				RedirectChain:  redirectChain,
-				ResponseTimeMs: time.Since(start).Milliseconds(),
+				ResponseTimeMs: clock.ms(),
 				Error:          FormatError(err),
 				Retryable:      retryable,
 			}
@@ -280,7 +280,7 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 						FinalURL:       currentURL,
 						StatusCode:     resp.StatusCode,
 						RedirectChain:  redirectChain,
-						ResponseTimeMs: time.Since(start).Milliseconds(),
+						ResponseTimeMs: clock.ms(),
 						Error:          fmt.Sprintf("Max redirects (%d) exceeded", maxRedirects),
 					}
 				}
@@ -297,7 +297,7 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 						FinalURL:       currentURL,
 						StatusCode:     resp.StatusCode,
 						RedirectChain:  redirectChain,
-						ResponseTimeMs: time.Since(start).Milliseconds(),
+						ResponseTimeMs: clock.ms(),
 						Error:          fmt.Sprintf("Redirect to private/loopback address blocked: %s", resolved),
 					}
 				}
@@ -315,7 +315,7 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 				FinalURL:       currentURL,
 				StatusCode:     304,
 				RedirectChain:  redirectChain,
-				ResponseTimeMs: time.Since(start).Milliseconds(),
+				ResponseTimeMs: clock.ms(),
 				NotModified:    true,
 			}
 		}
@@ -325,7 +325,7 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 			drainAndClose(resp.Body)
 			delay := parseRetryAfter(resp.Header.Get("Retry-After"), backoffDelay(retries))
 			retries++
-			sleepCtx(ctx, delay)
+			clock.sleep(ctx, delay)
 			continue
 		}
 
@@ -349,7 +349,7 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 					FinalURL:       currentURL,
 					StatusCode:     resp.StatusCode,
 					RedirectChain:  redirectChain,
-					ResponseTimeMs: time.Since(start).Milliseconds(),
+					ResponseTimeMs: clock.ms(),
 					Error:          fmt.Sprintf("body read failed: %v", readErr),
 				}
 			}
@@ -388,7 +388,7 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 			Headers:        headers,
 			HTML:           html,
 			ContentType:    contentType,
-			ResponseTimeMs: time.Since(start).Milliseconds(),
+			ResponseTimeMs: clock.ms(),
 			TransferSize:   transferSize,
 			BodySize:       int64(len(html)), // uncompressed HTML body size
 		}
@@ -414,7 +414,7 @@ func FetchHead(ctx context.Context, rawURL string, opts FetchOptions) types.Head
 		}
 	}
 
-	start := time.Now()
+	clock := newFetchClock()
 	redirectChain := make([]types.RedirectHop, 0)
 	currentURL := rawURL
 	retries := 0
@@ -426,25 +426,25 @@ func FetchHead(ctx context.Context, rawURL string, opts FetchOptions) types.Head
 				URL:            rawURL,
 				FinalURL:       currentURL,
 				RedirectChain:  redirectChain,
-				ResponseTimeMs: time.Since(start).Milliseconds(),
+				ResponseTimeMs: clock.ms(),
 				Error:          FormatError(err),
 			}
 		}
 
 		setHeaders(req, opts)
 
-		resp, err := pacedDo(client, req, opts.Pace)
+		resp, err := clock.do(client, req, opts.Pace)
 		if err != nil {
 			if isRetryableFetchErr(ctx, err) && !opts.NoRetry && retries < maxRetries {
 				retries++
-				sleepCtx(ctx, backoffDelay(retries-1))
+				clock.sleep(ctx, backoffDelay(retries-1))
 				continue
 			}
 			return types.HeadResult{
 				URL:            rawURL,
 				FinalURL:       currentURL,
 				RedirectChain:  redirectChain,
-				ResponseTimeMs: time.Since(start).Milliseconds(),
+				ResponseTimeMs: clock.ms(),
 				Error:          FormatError(err),
 			}
 		}
@@ -460,7 +460,7 @@ func FetchHead(ctx context.Context, rawURL string, opts FetchOptions) types.Head
 						FinalURL:       currentURL,
 						StatusCode:     resp.StatusCode,
 						RedirectChain:  redirectChain,
-						ResponseTimeMs: time.Since(start).Milliseconds(),
+						ResponseTimeMs: clock.ms(),
 						Error:          fmt.Sprintf("Max redirects (%d) exceeded", maxRedirects),
 					}
 				}
@@ -472,7 +472,7 @@ func FetchHead(ctx context.Context, rawURL string, opts FetchOptions) types.Head
 						FinalURL:       currentURL,
 						StatusCode:     resp.StatusCode,
 						RedirectChain:  redirectChain,
-						ResponseTimeMs: time.Since(start).Milliseconds(),
+						ResponseTimeMs: clock.ms(),
 						Error:          fmt.Sprintf("Redirect to private address blocked: %s", resolved),
 					}
 				}
@@ -485,7 +485,7 @@ func FetchHead(ctx context.Context, rawURL string, opts FetchOptions) types.Head
 		if resp.StatusCode == 429 && !opts.NoRetry && retries < maxRetries {
 			delay := parseRetryAfter(resp.Header.Get("Retry-After"), backoffDelay(retries))
 			retries++
-			sleepCtx(ctx, delay)
+			clock.sleep(ctx, delay)
 			continue
 		}
 
@@ -534,7 +534,7 @@ func FetchHead(ctx context.Context, rawURL string, opts FetchOptions) types.Head
 			FinalURL:       currentURL,
 			StatusCode:     resp.StatusCode,
 			RedirectChain:  redirectChain,
-			ResponseTimeMs: time.Since(start).Milliseconds(),
+			ResponseTimeMs: clock.ms(),
 			ContentType:    contentType,
 			ContentLength:  contentLength,
 			Server:         headers["server"],
@@ -828,4 +828,32 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 	case <-ctx.Done():
 	case <-timer.C:
 	}
+}
+
+// fetchClock times a fetch without the time it spends waiting: for its turn
+// in the per-host rate limiter and in retry backoff. Counting that wait made
+// a busy crawl look like a slow site, and the adaptive limiter then slowed
+// the crawl down further.
+type fetchClock struct {
+	start  time.Time
+	waited time.Duration
+}
+
+func newFetchClock() *fetchClock { return &fetchClock{start: time.Now()} }
+
+func (c *fetchClock) do(client *http.Client, req *http.Request, pace func(context.Context, string) func()) (*http.Response, error) {
+	resp, wait, err := pacedDoWait(client, req, pace)
+	c.waited += wait
+	return resp, err
+}
+
+func (c *fetchClock) sleep(ctx context.Context, d time.Duration) {
+	t := time.Now()
+	sleepCtx(ctx, d)
+	c.waited += time.Since(t)
+}
+
+// ms is the time spent fetching so far, in milliseconds.
+func (c *fetchClock) ms() int64 {
+	return max(time.Since(c.start)-c.waited, 0).Milliseconds()
 }

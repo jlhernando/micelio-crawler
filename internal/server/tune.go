@@ -13,6 +13,10 @@ import (
 // crawl. The change is kept in the job config (so a resume uses it) and
 // recorded as a crawl event.
 func (m *CrawlManager) TuneCrawl(crawlID string, n crawler.Tuning) (crawler.Tuning, error) {
+	// The queue sizes a new bloom filter from a raised limit.
+	if n.MaxPages > limits().MaxCrawlPages {
+		return crawler.Tuning{}, fmt.Errorf("page limit must be at most %d", limits().MaxCrawlPages)
+	}
 	m.mu.RLock()
 	active := m.active
 	m.mu.RUnlock()

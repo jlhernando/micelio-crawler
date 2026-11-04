@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -99,6 +100,10 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if err := sanitizeCrawlConfig(config); err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		// Validate seed URL against SSRF
 		if seedURL, ok := config["seedUrl"].(string); ok && !manager.SkipSSRF && crawler.IsPrivateURL(seedURL) {
 			jsonError(w, "seed URL targets a private/loopback address", http.StatusBadRequest)
@@ -179,6 +184,10 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			configOverride, err = readJSON(r)
 			if err != nil {
 				jsonError(w, "invalid request body", http.StatusBadRequest)
+				return
+			}
+			if err := sanitizeCrawlConfig(configOverride); err != nil {
+				jsonError(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 		}
@@ -883,6 +892,25 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		// no io.Copy duplication, O(1) memory regardless of file size.
 		// Supports multiple "file" parts in one request — all files are merged
 		// into a single unified analysis job.
+		// The whole body (all files) is capped, and so is the number of
+		// analyses running or waiting (limits.go).
+		lim := limits()
+		uploadTooBig := fmt.Sprintf("upload is larger than the %d GB limit (MICELIO_MAX_LOG_UPLOAD_GB)", lim.LogUploadBytes/gib)
+		if r.ContentLength > lim.LogUploadBytes {
+			jsonError(w, uploadTooBig, http.StatusRequestEntityTooLarge)
+			return
+		}
+		if !manager.logQueue.reserve() {
+			jsonError(w, "too many log analyses are running or waiting; try again when one finishes", http.StatusTooManyRequests)
+			return
+		}
+		reserved := true
+		defer func() {
+			if reserved {
+				manager.logQueue.release()
+			}
+		}()
+		r.Body = http.MaxBytesReader(w, r.Body, lim.LogUploadBytes)
 		reader, err := r.MultipartReader()
 		if err != nil {
 			jsonError(w, "invalid multipart form: "+err.Error(), http.StatusBadRequest)
@@ -909,6 +937,19 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 				os.Remove(p)
 			}
 		}
+		// failUpload marks the job failed (if created) and answers with the
+		// right status: 413 when the size cap was hit.
+		failUpload := func(msg string, err error, code int) {
+			cleanupOnError()
+			var tooBig *http.MaxBytesError
+			if errors.As(err, &tooBig) {
+				msg, code = uploadTooBig, http.StatusRequestEntityTooLarge
+			}
+			if job != nil {
+				store.UpdateLogJob(job.ID, map[string]interface{}{"status": "failed", "errorMsg": msg})
+			}
+			jsonError(w, msg, code)
+		}
 
 		for {
 			part, err := reader.NextPart()
@@ -916,8 +957,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 				break
 			}
 			if err != nil {
-				cleanupOnError()
-				jsonError(w, "multipart read error: "+err.Error(), http.StatusBadRequest)
+				failUpload("multipart read error: "+err.Error(), err, http.StatusBadRequest)
 				return
 			}
 
@@ -928,6 +968,10 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 				formatHint = strings.TrimSpace(string(buf[:n]))
 				io.Copy(io.Discard, part)
 			case "file", "files", "files[]":
+				if len(destPaths) >= maxLogUploadFiles {
+					failUpload(fmt.Sprintf("at most %d files per upload", maxLogUploadFiles), nil, http.StatusBadRequest)
+					return
+				}
 				safeName := filepath.Base(part.FileName())
 				if safeName == "." || safeName == ".." || safeName == "" {
 					cleanupOnError()
@@ -1008,12 +1052,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 				}
 				if readErr != nil {
 					os.Remove(destPath)
-					cleanupOnError()
-					store.UpdateLogJob(job.ID, map[string]interface{}{
-						"status":   "failed",
-						"errorMsg": readErr.Error(),
-					})
-					jsonError(w, "upload failed: "+readErr.Error(), http.StatusInternalServerError)
+					failUpload("upload failed: "+readErr.Error(), readErr, http.StatusInternalServerError)
 					return
 				}
 				destPaths = append(destPaths, destPath)
@@ -1069,7 +1108,10 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		go manager.runLogAnalysisMulti(job.ID, destPaths, destFilenames, logs.Format(formatHint))
+		reserved = false // released by the queue when the analysis ends
+		go manager.logQueue.run(func() {
+			manager.runLogAnalysisMulti(job.ID, destPaths, destFilenames, logs.Format(formatHint))
+		})
 	})
 
 	mux.HandleFunc("GET /api/logs", func(w http.ResponseWriter, r *http.Request) {

@@ -366,7 +366,7 @@
                       <div class="text-[10px] uppercase text-fg-2/60 font-medium mb-1.5">Timeline</div>
                       <div class="flex flex-wrap gap-1.5 items-center text-xs">
                         {#each crawl.events as event, i}
-                          {@const color = event.type === 'completed' ? 'text-green-400' : event.type === 'failed' ? 'text-red-400' : event.type === 'paused' || event.type === 'cancelled' || event.type === 'limit' ? 'text-yellow-400' : 'text-fg-2'}
+                          {@const color = event.type === 'completed' ? 'text-green-400' : event.type === 'failed' ? 'text-red-400' : event.type === 'paused' || event.type === 'cancelled' || event.type === 'limit' || event.type === 'warning' ? 'text-yellow-400' : 'text-fg-2'}
                           {#if i > 0}<span class="text-fg-2/30">&rarr;</span>{/if}
                           <span class="{color}">
                             {event.type}

@@ -828,8 +828,8 @@
               className="w-24 px-3 py-1.5 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent" />
           </div>
           <div>
-            <label for="snippets" class="block text-xs font-medium text-fg-2 mb-1">Snippet file paths (one per line)</label>
-            <textarea id="snippets" bind:value={snippets} rows="2" placeholder="/path/to/snippet.js"
+            <label for="snippets" class="block text-xs font-medium text-fg-2 mb-1">Snippet files in ~/.micelio/snippets (one per line)</label>
+            <textarea id="snippets" bind:value={snippets} rows="2" placeholder="snippet.js"
               class="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm font-mono focus:outline-none focus:border-accent resize-y"></textarea>
           </div>
         {/if}
@@ -963,8 +963,8 @@
                   className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent" />
               </div>
               <div class="col-span-2">
-                <label for="gscKey" class="block text-xs font-medium text-fg-2 mb-1">Service Account Key File</label>
-                <input id="gscKey" type="text" bind:value={gscKeyFile} placeholder="/path/to/key.json"
+                <label for="gscKey" class="block text-xs font-medium text-fg-2 mb-1">Service Account Key File (in ~/.micelio/keys)</label>
+                <input id="gscKey" type="text" bind:value={gscKeyFile} placeholder="key.json"
                   class="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent" />
               </div>
             </div>
@@ -988,8 +988,8 @@
                   className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent" />
               </div>
               <div class="col-span-2">
-                <label for="ga4Key" class="block text-xs font-medium text-fg-2 mb-1">Service Account Key File</label>
-                <input id="ga4Key" type="text" bind:value={ga4KeyFile} placeholder="/path/to/key.json"
+                <label for="ga4Key" class="block text-xs font-medium text-fg-2 mb-1">Service Account Key File (in ~/.micelio/keys)</label>
+                <input id="ga4Key" type="text" bind:value={ga4KeyFile} placeholder="key.json"
                   class="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent" />
               </div>
             </div>

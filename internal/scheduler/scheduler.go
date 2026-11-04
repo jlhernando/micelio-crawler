@@ -42,6 +42,9 @@ type State struct {
 	LastCrawlID    string `json:"lastCrawlId,omitempty"` // dashboard crawl job of the last run
 	Running        bool   `json:"running,omitempty"`
 	Paused         bool   `json:"paused,omitempty"` // waiting for the check to pass again
+	// Warning says what was dropped or changed from a saved config that
+	// newer checks refuse (e.g. a key file outside ~/.micelio/keys).
+	Warning string `json:"warning,omitempty"`
 
 	CrawlConfig map[string]interface{} `json:"crawlConfig,omitempty"`
 	Precheck    *Precheck              `json:"precheck,omitempty"`
@@ -65,6 +68,7 @@ type Config struct {
 	Source   string                 // "ui" (dashboard) or "cli"; default "cli"
 	CrawlMap map[string]interface{} // dashboard-format config, persisted for "ui" schedules
 	Precheck *Precheck
+	Warning  string // shown with the schedule (State.Warning)
 	// Runner executes one crawl. Nil runs crawler.Crawl directly and writes
 	// the output file (CLI behaviour).
 	Runner Runner
@@ -190,6 +194,7 @@ func New(cfg Config) (*Scheduler, error) {
 	s.state.Name, s.state.Source = cfg.Name, cfg.Source
 	s.state.CrawlConfig, s.state.Precheck = cfg.CrawlMap, cfg.Precheck
 	s.state.Running, s.state.Paused = false, false
+	s.state.Warning = cfg.Warning
 	if cfg.Webhook != nil {
 		s.state.Webhook = cfg.Webhook.URL
 	}

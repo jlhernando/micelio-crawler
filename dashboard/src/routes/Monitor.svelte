@@ -28,6 +28,8 @@
   // Per-page tracking — batch updates to reduce GC pressure
   let recentPages = $state<{ url: string; statusCode: number; responseTimeMs: number; error?: string }[]>([]);
   let errors = $state<{ url: string; error: string }[]>([]);
+  // Notes from the server about the config (e.g. a GSC key file it dropped).
+  let warnings = $state<string[]>([]);
 
   // Status code distribution — mutated in place, batch-flushed
   let statusCodes = $state<Record<string, number>>({});
@@ -201,6 +203,9 @@
       total = (msg.data.total as number) || 0;
       elapsedMs = (msg.data.elapsedMs as number) || (Date.now() - startedAt);
       recordSpeed(elapsedMs, completed + failed);
+    } else if (msg.type === 'warning') {
+      const note = msg.data.message as string;
+      if (note && !warnings.includes(note)) warnings = [...warnings, note];
     } else if (msg.type === 'tuned') {
       total = (msg.data.limit as number) || total;
       if (!tuneBusy) {
@@ -287,6 +292,7 @@
 
   function resetState() {
     status = 'running';
+    warnings = [];
     completed = 0;
     failed = 0;
     pending = 0;
@@ -316,6 +322,9 @@
   let jobCompare = $state<unknown>(null);
 
   function hydrateFromJob(job: Record<string, unknown>) {
+    const notes = ((job.events as { type: string; note?: string }[] | undefined) ?? [])
+      .filter(e => e.type === 'warning' && e.note).map(e => e.note as string);
+    warnings = [...new Set([...notes, ...warnings])];
     jobDevice = (job.config as Record<string, unknown> | undefined)?.device ?? null;
     jobCompare = (job.config as Record<string, unknown> | undefined)?.compareDevice ?? null;
     if (job.status === 'completed') {
@@ -438,6 +447,12 @@
       >
         View Results
       </button>
+    </div>
+  {/if}
+
+  {#if warnings.length}
+    <div class="rounded-md border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-fg-1 space-y-1" role="status">
+      {#each warnings as w}<div>{w}</div>{/each}
     </div>
   {/if}
 

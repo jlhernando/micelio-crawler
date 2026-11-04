@@ -48,6 +48,7 @@ export interface ScheduleState {
   lastStatus?: 'success' | 'failed' | 'skipped' | 'stopped' | string;
   lastReason?: string;
   lastCrawlId?: string;
+  warning?: string;
   running?: boolean;
   paused?: boolean;
   nextRun: string;

@@ -603,6 +603,46 @@ MICELIO_ALERT_WEBHOOK=https://example.com/hook
 MICELIO_DASHBOARD_URL=http://127.0.0.1:3100
 ```
 
+**Files the dashboard reads, and its limits.** Crawls started from the
+dashboard, schedules and MCP only read local files from two folders:
+
+- GSC and GA4 service-account key files: `~/.micelio/keys`. Give a file name
+  (`sa.json`) or a full path directly in that folder. Symlinks are refused.
+- JS snippets: `~/.micelio/snippets`, the same way.
+
+A dashboard crawl always writes to its own database in `~/.micelio/ui/crawls`.
+`outputPath` and `dbPath` sent by the dashboard or the API are ignored (the CLI
+still uses `-o` and `--db`). A schedule's output folder must be a relative path
+inside the folder `micelio ui` runs in.
+
+Each request is also capped. Change a cap with an environment variable (also
+read from `~/.micelio/micelio.env`); the CLI does not use them:
+
+| Variable | Default | Caps |
+|---|---|---|
+| `MICELIO_MAX_CRAWL_PAGES` | 10,000,000 | Page limit of one crawl |
+| `MICELIO_MAX_LOG_UPLOAD_GB` | 64 | One log upload, all files together |
+| `MICELIO_MAX_LOG_ANALYSES` | 2 | Log analyses running at once (more wait) |
+| `MICELIO_MAX_LOG_PENDING` | 8 | Running plus waiting log analyses |
+| `MICELIO_MAX_IMPORT_GB` | 32 | One imported crawl file |
+| `MICELIO_MAX_IMPORT_DECOMPRESSED_GB` | 64 | A `.gz`/`.zst` JSONL import once decompressed |
+
+Concurrency (100), depth (1,000), render timeout (600 s) and link suggestions
+(100,000) have fixed caps.
+
+**Upgrading from an older version.** Move key files into `~/.micelio/keys` and
+snippets into `~/.micelio/snippets`, then select them again in Settings or New
+Crawl. Until then:
+
+- New Crawl and Recrawl refuse a config whose GSC/GA4 or JS rendering is on
+  with a file outside those folders, and the error names the file.
+- Resume and scheduled runs go ahead without the file. The crawl's Monitor and
+  History timeline show a warning saying which file was not used.
+- Schedules saved before the upgrade keep running. A key file, snippet or output
+  folder that no longer passes is dropped (output goes to `scheduled-crawls`),
+  numbers above the caps are lowered, and the Schedules page shows a note.
+  Recreate the schedule to clear it.
+
 Settings also define default crawl limits, robots behavior, user agent, content
 analysis, link intelligence, output, and alerts (**Default Crawl Settings** and
 the sections below it). New Crawl starts from these defaults, and Settings' own

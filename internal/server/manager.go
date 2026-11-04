@@ -119,6 +119,8 @@ type CrawlManager struct {
 	// analyzing holds crawls marked completed whose results are not cached
 	// yet (core analysis running). Guarded by mu.
 	analyzing map[string]bool
+	// logQueue bounds concurrent and waiting log analyses (limits.go).
+	logQueue logQueue
 }
 
 // NewCrawlManager creates a new crawl manager.
@@ -484,6 +486,14 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 
 	// Convert map config to CrawlConfig
 	crawlConfig := configFromMap(config)
+	// Configs saved before the key/snippet folders existed (History,
+	// schedules) lose those files here: say so in the crawl's events and
+	// Monitor, else GSC/GA4/snippets just quietly do nothing.
+	for _, w := range confineCrawlConfig(&crawlConfig) {
+		log.Printf("crawl %s: %s", crawlID, w)
+		m.store.AddCrawlEvent(crawlID, "warning", w)
+		m.emit(ProgressEvent{CrawlID: crawlID, Type: "warning", Data: map[string]interface{}{"crawlId": crawlID, "message": w}})
+	}
 	crawlConfig.SkipSSRF = m.SkipSSRF
 
 	// Memory optimization: use SQLite crawl DB so the crawler keeps only

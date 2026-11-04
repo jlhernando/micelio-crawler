@@ -124,7 +124,16 @@ type scheduleRequest struct {
 	Precheck  *scheduler.Precheck    `json:"precheck"`
 	// Legacy flat fields (older dashboards).
 	Depth, Limit, Concurrency, Delay *float64
+
+	// resumed marks a saved schedule restarted at server start: a config the
+	// newer checks refuse is fixed (bad key files, snippets and outputDir
+	// dropped, numbers clamped) and noted in warning instead of refused, so
+	// the schedule keeps running.
+	resumed bool
+	warning string
 }
+
+const defaultScheduleOutputDir = "scheduled-crawls"
 
 func (m *CrawlManager) newUISchedule(store *UiStore, req scheduleRequest) (*scheduler.Scheduler, error) {
 	if req.Cron == "" {
@@ -138,6 +147,14 @@ func (m *CrawlManager) newUISchedule(store *UiStore, req scheduleRequest) (*sche
 				config[k] = *v
 			}
 		}
+	}
+	// The same checks as POST /api/crawl/start: a schedule must not keep
+	// (and re-run) a config the start endpoint would refuse.
+	var warnings []string
+	if req.resumed {
+		warnings = relaxCrawlConfig(config)
+	} else if err := sanitizeCrawlConfig(config); err != nil {
+		return nil, err
 	}
 	siteURL := req.URL
 	if siteURL == "" {
@@ -164,10 +181,20 @@ func (m *CrawlManager) newUISchedule(store *UiStore, req scheduleRequest) (*sche
 	}
 	outputDir := req.OutputDir
 	if outputDir == "" {
-		outputDir = "scheduled-crawls"
+		outputDir = defaultScheduleOutputDir
 	}
-	if filepath.IsAbs(outputDir) {
-		return nil, fmt.Errorf("outputDir must be a relative path")
+	if !filepath.IsLocal(outputDir) {
+		if !req.resumed {
+			return nil, fmt.Errorf("outputDir must be a relative path inside the working directory")
+		}
+		warnings = append(warnings, fmt.Sprintf("outputDir %s is outside the working directory; using %s", outputDir, defaultScheduleOutputDir))
+		outputDir = defaultScheduleOutputDir
+	}
+	warning := strings.Join(warnings, ". ")
+	if warning == "" {
+		// The first resume saved the fixed config, so later resumes find
+		// nothing to fix: keep the note until the schedule is recreated.
+		warning = req.warning
 	}
 	cfg := scheduler.Config{
 		URL:       siteURL,
@@ -177,6 +204,7 @@ func (m *CrawlManager) newUISchedule(store *UiStore, req scheduleRequest) (*sche
 		Source:    "ui",
 		CrawlMap:  config,
 		Precheck:  req.Precheck,
+		Warning:   warning,
 		Runner:    jobRunner{store: store, manager: m},
 		OnRunDone: m.emailScheduleRun,
 	}
@@ -199,7 +227,8 @@ func (m *CrawlManager) ResumeUISchedules(store *UiStore) {
 		if st.Source != "ui" || m.IsSchedulerActive(st.ID) {
 			continue
 		}
-		req := scheduleRequest{URL: st.URL, Name: st.Name, Cron: st.Cron, OutputDir: st.OutputDir, Webhook: st.Webhook, Config: st.CrawlConfig, Precheck: st.Precheck}
+		req := scheduleRequest{URL: st.URL, Name: st.Name, Cron: st.Cron, OutputDir: st.OutputDir, Webhook: st.Webhook, Config: st.CrawlConfig, Precheck: st.Precheck,
+			resumed: true, warning: st.Warning}
 		if req.Precheck != nil {
 			req.Precheck.Command = "" // never from saved UI state
 		}
@@ -211,6 +240,9 @@ func (m *CrawlManager) ResumeUISchedules(store *UiStore) {
 		go s.Run()
 		m.TrackScheduler(s)
 		log.Printf("[scheduler] resumed %s (%s)", st.ID, scheduler.DescribeCron(st.Cron))
+		if w := s.GetState().Warning; w != "" && w != st.Warning {
+			log.Printf("[scheduler] %s: %s", st.ID, w)
+		}
 	}
 }
 

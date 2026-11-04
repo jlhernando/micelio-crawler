@@ -138,6 +138,21 @@ export class CrawlStore {
     return rows.map((r) => JSON.parse(r.data) as PageData);
   }
 
+  /**
+   * Pages in insertion order, one batch at a time: rows after `afterRowid`,
+   * at most `limit`. Lets a caller load a big crawl without one long
+   * synchronous read. Pass the returned `lastRowid` to get the next batch.
+   */
+  getPagesBatch(afterRowid: number, limit: number): { pages: PageData[]; lastRowid: number } {
+    const rows = this.db
+      .prepare('SELECT rowid, data FROM pages WHERE rowid > ? ORDER BY rowid LIMIT ?')
+      .all(afterRowid, limit) as { rowid: number; data: string }[];
+    return {
+      pages: rows.map((r) => JSON.parse(r.data) as PageData),
+      lastRowid: rows.length ? rows[rows.length - 1].rowid : afterRowid,
+    };
+  }
+
   getPageCount(): number {
     return (this.stmtPageCount.get() as { count: number }).count;
   }

@@ -5,7 +5,8 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 const UI_DIR = join(homedir(), '.micelio', 'ui');
-const CRAWLS_DIR = join(UI_DIR, 'crawls');
+/** Where dashboard crawls keep their DB, output and stats files. */
+export const CRAWLS_DIR = join(UI_DIR, 'crawls');
 const DB_PATH = join(UI_DIR, 'micelio-ui.db');
 
 export interface CrawlJob {

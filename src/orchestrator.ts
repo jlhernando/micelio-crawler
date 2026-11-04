@@ -367,6 +367,10 @@ export async function crawl(
     return queue.totalSeen;
   }
 
+  // Cancelled from the dashboard: skip paid and slow work (PSI, AI,
+  // external checks, embeddings) and return as soon as the queue stops
+  const cancelled = (): boolean => control.signal?.aborted === true;
+
   // Conditional termination tracking
   let crawlAborted = false;
   const crawlStartMs = Date.now();
@@ -563,12 +567,12 @@ export async function crawl(
 
           // Phase 4: PageSpeed Insights (within concurrent crawl tasks)
           // B2 fix: fetchPageSpeed handles errors internally, no outer catch needed
-          if (usePsi && !pageData.error && pageData.statusCode === 200) {
+          if (usePsi && !pageData.error && pageData.statusCode === 200 && !cancelled()) {
             pageData.pagespeed = await fetchPageSpeed(pageData.finalUrl, config.psiKey);
           }
 
           // Phase 4: AI Analysis
-          if (aiConfig && !pageData.error && pageData.statusCode === 200) {
+          if (aiConfig && !pageData.error && pageData.statusCode === 200 && !cancelled()) {
             try {
               const AI_HTML_SAMPLE_LIMIT = 20_000;
               const htmlSample = fetchResult.html.substring(0, AI_HTML_SAMPLE_LIMIT);
@@ -696,7 +700,7 @@ export async function crawl(
   }
 
   // Phase 6: Page weight — resolve resource sizes via HEAD requests
-  if (config.pageWeight && resourceRefsMap.size > 0) {
+  if (config.pageWeight && resourceRefsMap.size > 0 && !cancelled()) {
     process.stderr.write(`\nPage weight analysis...\n`);
     const resourceSizeCache = new Map<string, number | null>();
 
@@ -716,7 +720,8 @@ export async function crawl(
 
       for (const resUrl of uniqueResourceUrls) {
         const t = resLimit(async () => {
-          const size = await headResourceSize(resUrl, config.userAgent);
+          if (cancelled()) return;
+          const size = await headResourceSize(resUrl, config.userAgent, control.signal);
           resourceSizeCache.set(resUrl, size);
           resChecked++;
           if (resChecked % 20 === 0) {
@@ -768,7 +773,7 @@ export async function crawl(
 
   // 1.5: Check external links
   const externalLinkResults: ExternalLinkResult[] = [];
-  if (config.checkExternal && externalLinkMap.size > 0) {
+  if (config.checkExternal && externalLinkMap.size > 0 && !cancelled()) {
     process.stderr.write(`\n\nChecking ${externalLinkMap.size} external links...\n`);
     const extLimit = pLimit(config.concurrency);
     const extTasks: Promise<void>[] = [];
@@ -776,7 +781,9 @@ export async function crawl(
 
     for (const [extUrl, foundOn] of externalLinkMap) {
       const t = extLimit(async () => {
-        const result = await checkExternalUrl(extUrl, config.userAgent);
+        if (cancelled()) return;
+        const result = await checkExternalUrl(extUrl, config.userAgent, control.signal);
+        if (cancelled()) return; // aborted request, not a broken link
         extChecked++;
         if (result.statusCode >= 400 || result.statusCode === 0) {
           externalLinkResults.push({
@@ -811,7 +818,7 @@ export async function crawl(
   resourceRefsMap.clear();
 
   // Phase 6: Re-write output file if post-crawl enrichment was applied
-  const hasPostCrawlEnrichment = results.some((p) => p.sitemapData !== null || p.pageWeight !== null);
+  const hasPostCrawlEnrichment = !cancelled() && results.some((p) => p.sitemapData !== null || p.pageWeight !== null);
   if (hasPostCrawlEnrichment) {
     process.stderr.write(`Updating output with post-crawl data...\n`);
     const rewriter = new ResultWriter(config.outputPath, config.outputFormat);
@@ -841,7 +848,7 @@ export async function crawl(
         results.length = 0;
         allPages = store.getAllPages();
       }
-      store.markCrawlComplete();
+      if (!cancelled()) store.markCrawlComplete();
       const resumedCount = isResuming ? (allPages.length - newCount) : 0;
       // MINOR-4 fix: Separate previously crawled from newly crawled in output
       if (resumedCount > 0) {
@@ -873,7 +880,9 @@ export async function crawl(
 
   // Phase 13.2: Compute semantic similarity via embeddings
   let embeddingStats: EmbeddingStats | null = null;
-  if (bodyTextMap && config.embeddings && !(config.aiProvider === 'openai' || config.aiProvider === 'ollama')) {
+  if (bodyTextMap && cancelled()) {
+    bodyTextMap.clear();
+  } else if (bodyTextMap && config.embeddings && !(config.aiProvider === 'openai' || config.aiProvider === 'ollama')) {
     process.stderr.write('\n--embeddings requires --ai-provider openai or ollama\n');
   } else if (bodyTextMap && bodyTextMap.size >= 2 && config.aiProvider && (config.aiProvider === 'openai' || config.aiProvider === 'ollama')) {
     process.stderr.write('\nComputing semantic similarity embeddings...\n');
@@ -891,6 +900,7 @@ export async function crawl(
         (done, total) => {
           process.stderr.write(`  Embedding progress: ${done}/${total} pages\r`);
         },
+        control.signal,
       );
       process.stderr.write(`\nEmbeddings complete: ${embeddingStats.pagesEmbedded} pages, ${embeddingStats.similarPairs.length} similar pairs found\n`);
     } catch (err) {

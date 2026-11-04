@@ -1,5 +1,7 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import type { UiStore } from './ui-store.js';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { CRAWLS_DIR, type UiStore } from './ui-store.js';
 import type { CrawlConfig, PageData, CrawlStats } from './types.js';
 import type { CrawlProgress } from './orchestrator.js';
 import { CrawlStore } from './db-store.js';
@@ -29,14 +31,64 @@ export function statsPathFor(dbPath: string): string {
   return dbPath.replace(/\.db$/, '') + '.stats.json';
 }
 
+/** Every file a dashboard crawl writes next to its crawl DB. */
+export function crawlFilesFor(dbPath: string): string[] {
+  return [
+    dbPath, `${dbPath}-wal`, `${dbPath}-shm`,
+    outputPathFor(dbPath, 'jsonl'), outputPathFor(dbPath, 'csv'), statsPathFor(dbPath),
+  ];
+}
+
+type CrawlResults = { pages: unknown[]; stats: unknown };
+
+export interface UiCrawlManagerOptions {
+  /** Only crawl files inside this directory are ever deleted. */
+  crawlsDir?: string;
+  /** Results kept in memory: at most this many crawls... */
+  maxCachedResults?: number;
+  /** ...and at most this many pages in total (the newest crawl always stays). */
+  maxCachedPages?: number;
+}
+
+/** Pages read from a crawl DB per batch before yielding to the event loop. */
+const LOAD_BATCH = 500;
+
 export class UiCrawlManager {
   private store: UiStore;
   private activeCrawl: ActiveCrawl | null = null;
   private onProgress: ProgressCallback | null = null;
-  private results: Map<string, { pages: unknown[]; stats: unknown }> = new Map();
+  /** LRU: Map order is use order, the first entry is the oldest. */
+  private results: Map<string, CrawlResults> = new Map();
+  /** Loads in progress, so two requests for one crawl read it once. */
+  private loading: Map<string, Promise<CrawlResults | null>> = new Map();
+  private crawlsDir: string;
+  private maxCachedResults: number;
+  private maxCachedPages: number;
 
-  constructor(store: UiStore) {
+  constructor(store: UiStore, options: UiCrawlManagerOptions = {}) {
     this.store = store;
+    this.crawlsDir = resolve(options.crawlsDir ?? CRAWLS_DIR);
+    this.maxCachedResults = options.maxCachedResults ?? 3;
+    this.maxCachedPages = options.maxCachedPages ?? 200_000;
+  }
+
+  /** Keep results in memory as the most recent, evicting the oldest past the bounds. */
+  private cacheResults(crawlId: string, results: CrawlResults): void {
+    this.results.delete(crawlId);
+    this.results.set(crawlId, results);
+    let pages = 0;
+    for (const r of this.results.values()) pages += r.pages.length;
+    for (const [id, r] of this.results) {
+      if (this.results.size <= 1) break;
+      if (this.results.size <= this.maxCachedResults && pages <= this.maxCachedPages) break;
+      this.results.delete(id);
+      pages -= r.pages.length;
+    }
+  }
+
+  /** Ids of the crawls whose results are in memory, oldest first. */
+  cachedResultIds(): string[] {
+    return [...this.results.keys()];
   }
 
   setProgressCallback(cb: ProgressCallback): void {
@@ -163,7 +215,7 @@ export class UiCrawlManager {
 
       // Store results in memory; the stats also go next to the crawl DB so
       // getResults can rebuild them after a restart
-      this.results.set(crawlId, { pages, stats });
+      this.cacheResults(crawlId, { pages, stats });
       if (dbPath) {
         try {
           writeFileSync(statsPathFor(dbPath), JSON.stringify(stats), { mode: 0o600 });
@@ -309,31 +361,85 @@ export class UiCrawlManager {
 
   /**
    * Results of a crawl: from memory, or for a completed crawl from a previous
-   * server run, from its crawl DB and saved stats.
+   * server run, from its crawl DB and saved stats. The DB is read in batches
+   * so a big crawl does not block the event loop.
    */
-  getResults(crawlId: string): { pages: unknown[]; stats: unknown } | null {
+  async getResults(crawlId: string): Promise<CrawlResults | null> {
     const cached = this.results.get(crawlId);
-    if (cached) return cached;
+    if (cached) {
+      this.cacheResults(crawlId, cached); // mark as most recently used
+      return cached;
+    }
+    const pending = this.loading.get(crawlId);
+    if (pending) return pending;
+    // deleteCrawl drops the loading entry: then the results are not cached
+    const settle = (): boolean => {
+      const current = this.loading.get(crawlId) === load;
+      if (current) this.loading.delete(crawlId);
+      return current;
+    };
+    const load: Promise<CrawlResults | null> = this.loadResults(crawlId).then(
+      (loaded) => {
+        if (settle() && loaded) this.cacheResults(crawlId, loaded);
+        return loaded;
+      },
+      (err) => {
+        settle();
+        throw err;
+      },
+    );
+    this.loading.set(crawlId, load);
+    return load;
+  }
+
+  private async loadResults(crawlId: string): Promise<CrawlResults | null> {
     const job = this.store.getCrawlJob(crawlId);
     if (!job || job.status !== 'completed' || !job.dbPath || !existsSync(job.dbPath)) return null;
     const statsPath = statsPathFor(job.dbPath);
     if (!existsSync(statsPath)) return null;
     try {
-      const stats = JSON.parse(readFileSync(statsPath, 'utf8'));
+      const stats = JSON.parse(await readFile(statsPath, 'utf8'));
       const crawlStore = new CrawlStore(job.dbPath);
-      let pages: PageData[];
+      const pages: PageData[] = [];
       try {
-        pages = crawlStore.getAllPages();
+        for (let after = 0; ;) {
+          const batch = crawlStore.getPagesBatch(after, LOAD_BATCH);
+          for (const p of batch.pages) pages.push(p);
+          if (batch.pages.length < LOAD_BATCH) break;
+          after = batch.lastRowid;
+          await new Promise((r) => setImmediate(r));
+        }
       } finally {
         crawlStore.close();
       }
-      const loaded = { pages, stats };
-      this.results.set(crawlId, loaded);
-      return loaded;
+      return { pages, stats };
     } catch (err) {
       console.error(`Crawl ${crawlId}: cannot load stored results: ${(err as Error).message}`);
       return null;
     }
+  }
+
+  /**
+   * Delete a crawl job: its row, its results in memory and the files it wrote
+   * in the crawls directory (never files elsewhere). 'running' when it is the
+   * active crawl, which must be cancelled first.
+   */
+  deleteCrawl(crawlId: string): boolean | 'running' {
+    if (this.activeCrawl?.id === crawlId) return 'running';
+    const job = this.store.getCrawlJob(crawlId);
+    const deleted = this.store.deleteCrawlJob(crawlId);
+    this.results.delete(crawlId);
+    this.loading.delete(crawlId);
+    if (job?.dbPath && resolve(job.dbPath) === resolve(this.crawlsDir, `${crawlId}.db`)) {
+      for (const file of crawlFilesFor(job.dbPath)) {
+        try {
+          rmSync(file, { force: true });
+        } catch (err) {
+          console.error(`Crawl ${crawlId}: cannot delete ${file}: ${(err as Error).message}`);
+        }
+      }
+    }
+    return deleted;
   }
 
   getActiveCrawlId(): string | null {

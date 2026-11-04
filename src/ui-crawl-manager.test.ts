@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { CrawlConfig, PageData } from './types.js';
@@ -17,7 +17,7 @@ vi.mock('./orchestrator.js', () => ({
 }));
 vi.mock('./reporter.js', () => ({ generateReport: () => ({ totalPages: 1 }) }));
 
-const { UiCrawlManager, statsPathFor } = await import('./ui-crawl-manager.js');
+const { UiCrawlManager, statsPathFor, crawlFilesFor } = await import('./ui-crawl-manager.js');
 const { CrawlStore } = await import('./db-store.js');
 const { createApiHandler } = await import('./ui-api.js');
 
@@ -26,6 +26,7 @@ type Job = { id: string; status: string; dbPath: string; config: Record<string, 
 function fakeStore(jobs: Record<string, Job>) {
   return {
     getCrawlJob: (id: string) => jobs[id] ?? null,
+    deleteCrawlJob: (id: string) => { const had = id in jobs; delete jobs[id]; return had; },
     updateCrawlJob: (id: string, u: Partial<Job>) => { if (jobs[id]) Object.assign(jobs[id], u); },
   } as unknown as import('./ui-store.js').UiStore;
 }
@@ -100,17 +101,108 @@ describe('UiCrawlManager', () => {
     await vi.waitFor(() => expect(jobs.a.status).toBe('completed'));
 
     const restarted = new UiCrawlManager(fakeStore(jobs));
-    const results = restarted.getResults('a');
+    const results = await restarted.getResults('a');
     expect(results?.stats).toEqual({ totalPages: 1 });
     expect((results?.pages as PageData[]).map((p) => p.url)).toEqual(['https://a.test/']);
   });
 
-  it('returns null for an old job without saved stats', () => {
+  it('returns null for an old job without saved stats', async () => {
     const dbPath = join(dir, 'old.db');
     writeFileSync(dbPath, '');
     const mgr = new UiCrawlManager(fakeStore({ old: { id: 'old', status: 'completed', dbPath, config: {} } }));
-    expect(mgr.getResults('old')).toBeNull();
+    expect(await mgr.getResults('old')).toBeNull();
     expect(statsPathFor(dbPath)).toBe(join(dir, 'old.stats.json'));
+  });
+
+  /** A completed crawl from an earlier server run, with `n` stored pages. */
+  function storedCrawl(jobs: Record<string, Job>, id: string, n = 1): void {
+    const dbPath = join(dir, `${id}.db`);
+    const crawlStore = new CrawlStore(dbPath);
+    for (let i = 0; i < n; i++) {
+      crawlStore.insertPage({ url: `https://${id}.test/${i}`, statusCode: 200, crawledAt: 'now' } as PageData);
+    }
+    crawlStore.close();
+    writeFileSync(statsPathFor(dbPath), '{}');
+    jobs[id] = { id, status: 'completed', dbPath, config: {} };
+  }
+
+  it('loads a big stored crawl in batches, in order', async () => {
+    const jobs: Record<string, Job> = {};
+    storedCrawl(jobs, 'big', 1203);
+    const mgr = new UiCrawlManager(fakeStore(jobs), { crawlsDir: dir });
+    const pages = (await mgr.getResults('big'))?.pages as PageData[];
+    expect(pages).toHaveLength(1203);
+    expect(pages[1202].url).toBe('https://big.test/1202');
+  });
+
+  it('keeps only the most recently used results in memory', async () => {
+    const jobs: Record<string, Job> = {};
+    for (const id of ['a', 'b', 'c']) storedCrawl(jobs, id);
+    const mgr = new UiCrawlManager(fakeStore(jobs), { crawlsDir: dir, maxCachedResults: 2 });
+    await mgr.getResults('a');
+    await mgr.getResults('b');
+    await mgr.getResults('a'); // a is now newer than b
+    await mgr.getResults('c');
+    expect(mgr.cachedResultIds()).toEqual(['a', 'c']);
+  });
+
+  it('bounds the cache by total pages but keeps the newest crawl', async () => {
+    const jobs: Record<string, Job> = {};
+    storedCrawl(jobs, 'a', 3);
+    storedCrawl(jobs, 'b', 5);
+    const mgr = new UiCrawlManager(fakeStore(jobs), { crawlsDir: dir, maxCachedPages: 4 });
+    await mgr.getResults('a');
+    await mgr.getResults('b');
+    expect(mgr.cachedResultIds()).toEqual(['b']);
+  });
+
+  it('delete frees the results and removes the crawl files', async () => {
+    const jobs: Record<string, Job> = {};
+    storedCrawl(jobs, 'a');
+    const files = crawlFilesFor(jobs.a.dbPath);
+    for (const f of files) if (!existsSync(f)) writeFileSync(f, '');
+    const mgr = new UiCrawlManager(fakeStore(jobs), { crawlsDir: dir });
+    await mgr.getResults('a');
+    expect(mgr.deleteCrawl('a')).toBe(true);
+    expect(mgr.cachedResultIds()).toEqual([]);
+    expect(jobs.a).toBeUndefined();
+    for (const f of files) expect(existsSync(f)).toBe(false);
+  });
+
+  it('a crawl deleted while it loads is not cached', async () => {
+    const jobs: Record<string, Job> = {};
+    storedCrawl(jobs, 'a', 1200);
+    const mgr = new UiCrawlManager(fakeStore(jobs), { crawlsDir: dir });
+    const load = mgr.getResults('a');
+    mgr.deleteCrawl('a');
+    await load;
+    expect(mgr.cachedResultIds()).toEqual([]);
+  });
+
+  it('delete never removes files outside the crawls directory', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'micelio-user-'));
+    try {
+      const dbPath = join(outside, 'x.db');
+      writeFileSync(dbPath, '');
+      const jobs: Record<string, Job> = { x: { id: 'x', status: 'completed', dbPath, config: {} } };
+      const mgr = new UiCrawlManager(fakeStore(jobs), { crawlsDir: dir });
+      expect(mgr.deleteCrawl('x')).toBe(true);
+      expect(existsSync(dbPath)).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to delete the running crawl', async () => {
+    const jobs: Record<string, Job> = { a: { id: 'a', status: 'pending', dbPath: join(dir, 'a.db'), config: {} } };
+    writeFileSync(join(dir, 'a.db'), '');
+    const mgr = new UiCrawlManager(fakeStore(jobs), { crawlsDir: dir });
+    await mgr.startCrawl('a', { seedUrl: 'https://a.test/' });
+    await vi.waitFor(() => expect(engine.calls).toHaveLength(1));
+    expect(mgr.deleteCrawl('a')).toBe('running');
+    expect(jobs.a).toBeDefined();
+    expect(existsSync(join(dir, 'a.db'))).toBe(true);
+    engine.calls[0].finish();
   });
 });
 

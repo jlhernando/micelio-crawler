@@ -233,7 +233,7 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
       if (method === 'GET' && resultsMatch) {
         const job = store.getCrawlJob(resultsMatch[1]);
         if (!job) return notFound(res, 'Crawl not found');
-        const results = crawlManager.getResults(job.id);
+        const results = await crawlManager.getResults(job.id);
         json(res, 200, results || { pages: [], stats: null });
         return true;
       }
@@ -243,7 +243,7 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
       if (method === 'GET' && graphMatch) {
         const job = store.getCrawlJob(graphMatch[1]);
         if (!job) return notFound(res, 'Crawl not found');
-        const results = crawlManager.getResults(job.id);
+        const results = await crawlManager.getResults(job.id);
         if (!results) return notFound(res, 'Crawl results not found');
         const graphData = buildGraphResponse(results.pages as PageData[]);
         jsonCompressed(req, res, 200, graphData);
@@ -255,7 +255,7 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
       if (method === 'GET' && csvMatch) {
         const job = store.getCrawlJob(csvMatch[1]);
         if (!job) return notFound(res, 'Crawl not found');
-        const results = crawlManager.getResults(job.id);
+        const results = await crawlManager.getResults(job.id);
         if (!results || !results.pages.length) return notFound(res, 'No results');
         const domain = (results.pages[0] as PageData).url.replace(/^https?:\/\//, '').split('/')[0];
         const filename = `micelio-${domain}-${new Date().toISOString().slice(0, 10)}.csv`;
@@ -275,7 +275,11 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
       // DELETE /api/crawl/:id
       const deleteMatch = path.match(/^\/api\/crawl\/([^/]+)$/);
       if (method === 'DELETE' && deleteMatch) {
-        const deleted = store.deleteCrawlJob(deleteMatch[1]);
+        const deleted = crawlManager.deleteCrawl(deleteMatch[1]);
+        if (deleted === 'running') {
+          json(res, 409, { error: { code: 'CRAWL_RUNNING', message: 'Cancel the crawl before deleting it' } });
+          return true;
+        }
         json(res, 200, { deleted });
         return true;
       }
@@ -301,8 +305,8 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
             return true;
           }
         }
-        const oldResults = crawlManager.getResults(oldId);
-        const newResults = crawlManager.getResults(newId);
+        const oldResults = await crawlManager.getResults(oldId);
+        const newResults = await crawlManager.getResults(newId);
         if (!oldResults) {
           json(res, 404, { error: { code: 'NOT_FOUND', message: `Results not found for crawl ${oldId}` } });
           return true;

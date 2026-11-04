@@ -8,6 +8,21 @@ import { crawl } from './orchestrator.js';
 import { mergeConfig } from './config.js';
 import { CrawlStore } from './db-store.js';
 import { setAllowPrivateNetworks } from './net-guard.js';
+import { checkExternalUrl } from './fetcher.js';
+import { computeEmbeddings } from './embeddings.js';
+
+// Post-crawl phases that cost money or time: a cancelled crawl must skip them
+vi.mock('./fetcher.js', async (orig) => ({
+  ...(await orig<typeof import('./fetcher.js')>()),
+  checkExternalUrl: vi.fn(async () => ({ statusCode: 200 })),
+}));
+vi.mock('./embeddings.js', async (orig) => ({
+  ...(await orig<typeof import('./embeddings.js')>()),
+  computeEmbeddings: vi.fn(async () => ({
+    pagesEmbedded: 0, similarPairs: [], cannibalizationGroups: [],
+    provider: 'openai', model: 'm', dimensions: 0, vectors: new Map(),
+  })),
+}));
 
 let server: Server;
 let base = '';
@@ -19,7 +34,7 @@ beforeAll(async () => {
     // Slow enough that a crawl can be paused or cancelled mid-way
     setTimeout(() => {
       res.writeHead(200, { 'content-type': 'text/html' });
-      res.end(`<html><head><title>${req.url}</title></head><body>page</body></html>`);
+      res.end(`<html><head><title>${req.url}</title></head><body><p>page ${req.url} with enough body text for the embeddings phase to pick it up</p><a href="https://external.example/x">out</a></body></html>`);
     }, 30);
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -33,7 +48,11 @@ afterAll(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.mocked(checkExternalUrl).mockClear();
+  vi.mocked(computeEmbeddings).mockClear();
+});
 
 const listConfig = (n: number, extra: Record<string, unknown> = {}) => mergeConfig({
   mode: 'list',
@@ -63,6 +82,31 @@ describe('crawl', () => {
     }, { signal: ac.signal });
     expect(result.pages.length).toBeGreaterThanOrEqual(2);
     expect(result.pages.length).toBeLessThan(30);
+  });
+
+  const postCrawl = { checkExternal: true, embeddings: true, aiProvider: 'openai', aiKey: 'k' };
+
+  it('runs external checks and embeddings after a full crawl', async () => {
+    await crawl(listConfig(3, postCrawl));
+    expect(checkExternalUrl).toHaveBeenCalled();
+    expect(computeEmbeddings).toHaveBeenCalled();
+  });
+
+  it('skips external checks and embeddings once cancelled', async () => {
+    const ac = new AbortController();
+    const dbPath = join(dir, `cancel-${Math.random().toString(36).slice(2)}.db`);
+    const result = await crawl(listConfig(30, { ...postCrawl, dbPath }), (p) => {
+      if (p.completed >= 3) ac.abort();
+    }, { signal: ac.signal });
+    expect(result.pages.length).toBeGreaterThanOrEqual(3);
+    expect(result.pages.length).toBeLessThan(30);
+    expect(checkExternalUrl).not.toHaveBeenCalled();
+    expect(computeEmbeddings).not.toHaveBeenCalled();
+    expect(result.embeddingStats).toBeNull();
+    // Store closed and not marked complete
+    const store = new CrawlStore(dbPath);
+    expect(store.getCrawlStatus()).not.toBe('complete');
+    store.close();
   });
 
   it('starts no page while paused', async () => {

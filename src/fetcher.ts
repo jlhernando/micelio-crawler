@@ -206,9 +206,10 @@ export async function fetchPage(
 export async function checkExternalUrl(
   url: string,
   userAgent: string,
+  signal?: AbortSignal,
 ): Promise<{ statusCode: number; error?: string }> {
   try {
-    const { statusCode } = await guardedHead(url, userAgent);
+    const { statusCode } = await guardedHead(url, userAgent, signal);
     return { statusCode };
   } catch (err) {
     return { statusCode: 0, error: formatError(err) };
@@ -224,6 +225,7 @@ const MAX_HEAD_REDIRECTS = 5;
 async function guardedHead(
   url: string,
   userAgent: string,
+  signal?: AbortSignal,
 ): Promise<{ statusCode: number; headers: Record<string, string | string[] | undefined> }> {
   let currentUrl = url;
   for (let hop = 0; ; hop++) {
@@ -235,6 +237,7 @@ async function guardedHead(
       headersTimeout: EXTERNAL_CHECK_TIMEOUT_MS,
       bodyTimeout: EXTERNAL_CHECK_TIMEOUT_MS,
       dispatcher: guardedDispatcher(),
+      signal,
     });
     await body.dump();
     const location = typeof headers.location === 'string' ? headers.location.trim() : '';
@@ -250,9 +253,10 @@ async function guardedHead(
 export async function headResourceSize(
   url: string,
   userAgent: string,
+  signal?: AbortSignal,
 ): Promise<number | null> {
   try {
-    const { headers } = await guardedHead(url, userAgent);
+    const { headers } = await guardedHead(url, userAgent, signal);
     const cl = headers['content-length'];
     if (typeof cl === 'string') {
       const size = parseInt(cl, 10);

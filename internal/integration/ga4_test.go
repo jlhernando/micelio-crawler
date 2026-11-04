@@ -51,6 +51,7 @@ func TestGA4Fetch(t *testing.T) {
 	defer func() { setGa4Endpoint(origEndpoint) }()
 	setGa4Endpoint(ga4Server.URL)
 
+	useTokenServer(t, tokenServer.URL)
 	keyJSON := generateTestKeyJSON(t, tokenServer.URL)
 	client, err := NewGA4Client(keyJSON, "123456789", 90)
 	if err != nil {

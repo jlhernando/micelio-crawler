@@ -33,6 +33,39 @@ func generateTestKeyJSON(t *testing.T, tokenURL string) []byte {
 	return data
 }
 
+// useTokenServer points the pinned Google token endpoint at a fake server.
+func useTokenServer(t *testing.T, u string) {
+	t.Helper()
+	old := googleTokenURL
+	googleTokenURL = u
+	t.Cleanup(func() { googleTokenURL = old })
+}
+
+func TestServiceAccountTokenURIPinned(t *testing.T) {
+	for _, uri := range []string{"", "https://oauth2.googleapis.com/token", "https://accounts.google.com/o/oauth2/token"} {
+		if _, err := NewGscClient(generateTestKeyJSON(t, uri), "https://example.com/", 90); err != nil {
+			t.Errorf("gsc token_uri %q rejected: %v", uri, err)
+		}
+		if _, err := NewGA4Client(generateTestKeyJSON(t, uri), "1", 90); err != nil {
+			t.Errorf("ga4 token_uri %q rejected: %v", uri, err)
+		}
+	}
+	for _, uri := range []string{
+		"http://127.0.0.1:8080/token",
+		"http://169.254.169.254/latest/meta-data",
+		"https://evil.example/token",
+		"http://oauth2.googleapis.com/token",
+		"https://oauth2.googleapis.com.evil.example/token",
+	} {
+		if _, err := NewGscClient(generateTestKeyJSON(t, uri), "https://example.com/", 90); err == nil {
+			t.Errorf("gsc accepted token_uri %q", uri)
+		}
+		if _, err := NewGA4Client(generateTestKeyJSON(t, uri), "1", 90); err == nil {
+			t.Errorf("ga4 accepted token_uri %q", uri)
+		}
+	}
+}
+
 func TestGscFetch(t *testing.T) {
 	// Token server
 	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +108,7 @@ func TestGscFetch(t *testing.T) {
 	defer func() { setGscEndpoint(origEndpoint) }()
 	setGscEndpoint(gscServer.URL)
 
+	useTokenServer(t, tokenServer.URL)
 	keyJSON := generateTestKeyJSON(t, tokenServer.URL)
 	client, err := NewGscClient(keyJSON, "https://example.com/", 90)
 	if err != nil {

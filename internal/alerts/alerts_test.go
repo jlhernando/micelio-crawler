@@ -196,8 +196,8 @@ func TestEvaluateLowActiveRateWithAnalytics(t *testing.T) {
 		TotalPages: 100,
 		GscStats:   &types.GscStats{}, // Analytics connected
 		SeoFunnelStats: &types.SeoFunnelStats{
-			Crawled:  100,
-			Active:   0,
+			Crawled:   100,
+			Active:    0,
 			PctActive: 0,
 		},
 	}
@@ -221,8 +221,8 @@ func TestEvaluateLowActiveRateNoAnalytics(t *testing.T) {
 		TotalPages: 100,
 		// No GscStats, Ga4Stats, or PlausibleStats → analytics not connected
 		SeoFunnelStats: &types.SeoFunnelStats{
-			Crawled:  100,
-			Active:   0,
+			Crawled:   100,
+			Active:    0,
 			PctActive: 0,
 		},
 	}
@@ -266,9 +266,14 @@ func TestValidateSlackURL(t *testing.T) {
 		wantErr bool
 	}{
 		{"https://hooks.slack.com/services/T00/B00/xxx", false},
-		{"http://hooks.slack.com/services/T00/B00/xxx", true},  // must be HTTPS
-		{"https://evil.com/services/T00/B00/xxx", true},        // not slack.com
-		{"https://hooks.slack.com.evil.com/services", true},     // subdomain attack
+		{"https://hooks.slack-gov.com/services/T00/B00/xxx", false}, // GovSlack
+		{"https://hooks.slack-gov.com.evil.com/services", true},
+		{"http://hooks.slack.com/services/T00/B00/xxx", true}, // must be HTTPS
+		{"https://evil.com/services/T00/B00/xxx", true},       // not slack.com
+		{"https://hooks.slack.com.evil.com/services", true},   // subdomain attack
+		{"https://attacker-slack.com/services", true},         // suffix lookalike
+		{"https://evil.slack.com/services", true},             // only hooks.slack.com
+		{"https://x@hooks.slack.com/services", true},          // userinfo
 	}
 	for _, tt := range tests {
 		err := validateSlackURL(tt.url)

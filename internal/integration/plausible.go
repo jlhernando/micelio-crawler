@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"github.com/micelio/micelio/internal/netguard"
 	"github.com/micelio/micelio/internal/types"
 	"github.com/micelio/micelio/internal/urlutil"
 )
@@ -30,7 +32,10 @@ type PlausibleClient struct {
 	days       int
 }
 
-// NewPlausibleClient creates a new Plausible Analytics client.
+// NewPlausibleClient creates a new Plausible Analytics client. Its requests
+// never reach a private, loopback or link-local address (checked after DNS
+// and on every redirect); call AllowPrivateHost for a self-hosted Plausible
+// on the local network that the CLI user chose.
 func NewPlausibleClient(apiKey, siteID string, days int, host string) *PlausibleClient {
 	if host == "" {
 		host = plausibleDefaultHost
@@ -43,8 +48,48 @@ func NewPlausibleClient(apiKey, siteID string, days int, host string) *Plausible
 		siteID:     siteID,
 		host:       strings.TrimRight(host, "/"),
 		days:       days,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: netguard.HTTPClient(30 * time.Second),
 	}
+}
+
+// AllowPrivateHost lets the client reach a private or loopback Plausible
+// host. Only for a host the local CLI user set, never for dashboard input.
+func (c *PlausibleClient) AllowPrivateHost() *PlausibleClient {
+	c.httpClient = &http.Client{Timeout: 30 * time.Second}
+	return c
+}
+
+// ValidatePlausibleHost checks a Plausible base URL ("" means plausible.io)
+// and returns it without a trailing slash. It must be https, with no user
+// info, query or fragment (they could rewrite the /api/v2/query path).
+// Unless trusted, the host may not be localhost or a private address. A
+// trusted host (set by the CLI user) may also use http, on any host, for a
+// self-hosted Plausible on this computer or the local network.
+func ValidatePlausibleHost(raw string, trusted bool) (string, error) {
+	if raw == "" {
+		return plausibleDefaultHost, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("plausible host: %w", err)
+	}
+	if u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.ContainsAny(raw, "?#") {
+		return "", fmt.Errorf("plausible host must be a plain URL like https://plausible.example.com")
+	}
+	host := u.Hostname()
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if !trusted {
+			return "", fmt.Errorf("plausible host must use https (http only for a Plausible set from the CLI)")
+		}
+	default:
+		return "", fmt.Errorf("plausible host must use https, got %q", u.Scheme)
+	}
+	if !trusted && netguard.BlockedHost(host) {
+		return "", fmt.Errorf("plausible host %s is a private or local address", host)
+	}
+	return strings.TrimRight(raw, "/"), nil
 }
 
 // FetchBatch fetches Plausible data for multiple URLs, chunked in batches.

@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
-	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/micelio/micelio/internal/netguard"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -289,6 +289,10 @@ func validateWebhookURL(rawURL string) error {
 	return nil
 }
 
+// slackWebhookHosts are the hosts Slack incoming webhooks live on
+// (commercial Slack and GovSlack).
+var slackWebhookHosts = []string{"hooks.slack.com", "hooks.slack-gov.com"}
+
 // validateSlackURL validates a Slack incoming webhook URL.
 func validateSlackURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
@@ -298,28 +302,24 @@ func validateSlackURL(rawURL string) error {
 	if u.Scheme != "https" {
 		return fmt.Errorf("slack webhooks must use HTTPS")
 	}
-	if !strings.HasSuffix(u.Hostname(), "slack.com") {
-		return fmt.Errorf("slack webhook must be on slack.com domain")
+	if !slices.Contains(slackWebhookHosts, strings.ToLower(u.Hostname())) || u.User != nil {
+		return fmt.Errorf("slack webhook must be on %s", strings.Join(slackWebhookHosts, " or "))
 	}
 	return nil
 }
 
-// isPrivateHost returns true if the host resolves to a private/loopback address.
+// isPrivateHost returns true if the host is localhost or a private/loopback
+// address. Host names that resolve to one are refused when dialling
+// (newSafeClient), which also covers DNS rebinding and redirects.
 func isPrivateHost(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		// Try resolving hostname
-		ips, err := net.LookupIP(host)
-		if err != nil || len(ips) == 0 {
-			return false
-		}
-		ip = ips[0]
-	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	return netguard.BlockedHost(host)
 }
+
+// newSafeClient returns the client every alert delivery to a user-set URL
+// uses: private addresses refused after DNS and on every redirect, and
+// environment proxies used only after the target is checked (GuardProxy).
+// Tests swap it to reach a local server.
+var newSafeClient = netguard.HTTPClient
 
 func sendWebhook(target string, summary *types.AlertSummary, seedURL string) {
 	payload := map[string]interface{}{
@@ -337,7 +337,7 @@ func sendWebhook(target string, summary *types.AlertSummary, seedURL string) {
 		return
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := newSafeClient(10 * time.Second)
 	resp, err := client.Post(target, "application/json", bytes.NewReader(body))
 	if err != nil {
 		log.Printf("[alerts] webhook send error: %v", err)
@@ -376,7 +376,7 @@ func sendSlack(webhookURL string, summary *types.AlertSummary, seedURL string) {
 		return
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := newSafeClient(10 * time.Second)
 	resp, err := client.Post(webhookURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		log.Printf("[alerts] slack send error: %v", err)

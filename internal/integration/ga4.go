@@ -25,7 +25,6 @@ var ga4Endpoint = "https://analyticsdata.googleapis.com/v1beta"
 const (
 	ga4BatchSize   = 100000
 	ga4MaxBodySize = 4 << 20 // 4 MB
-	ga4TokenURL    = "https://oauth2.googleapis.com/token"
 	ga4Scope       = "https://www.googleapis.com/auth/analytics.readonly"
 )
 
@@ -65,9 +64,9 @@ func NewGA4Client(keyJSON []byte, propertyID string, days int) (*GA4Client, erro
 		return nil, fmt.Errorf("ga4: key is not RSA")
 	}
 
-	tokenURL := kf.TokenURI
-	if tokenURL == "" {
-		tokenURL = ga4TokenURL
+	tokenURL, err := serviceAccountTokenURL(kf.TokenURI)
+	if err != nil {
+		return nil, fmt.Errorf("ga4: %w", err)
 	}
 
 	if days <= 0 {

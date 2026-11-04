@@ -582,18 +582,63 @@ micelio ui [flags]
 | Flag | Default | Meaning |
 |---|---:|---|
 | `-p, --port` | `3100` | HTTP port |
-| `--host` | `127.0.0.1` | Bind address |
-| `--auth-token` | environment | Require a bearer token for API requests |
+| `--host` | `127.0.0.1` | Bind address. Any address that is not loopback needs a token |
+| `--auth-token` | `MICELIO_AUTH_TOKEN` | Require a token on `/api/*`, `/ws` and `/debug/pprof/` |
+| `--insecure-no-auth` | off | Allow a non-loopback `--host` without a token (only behind a proxy that authenticates) |
+| `--allowed-host <name>` | `MICELIO_ALLOWED_HOSTS` (comma-separated) | Public host name of a reverse proxy or tunnel in front of the dashboard. Repeatable. It passes the `Host` check and counts as the dashboard's own origin |
+| `--pprof` | off | Serve `/debug/pprof/` on a non-loopback `--host` too (always on for loopback) |
 
 ```bash
 micelio ui                     # 127.0.0.1:3100
 micelio ui --port 8080         # custom port
-MICELIO_AUTH_TOKEN='replace-me' micelio ui --host 0.0.0.0
+MICELIO_AUTH_TOKEN="$(openssl rand -hex 32)" micelio ui --host 0.0.0.0
 ```
 
-Use authentication whenever the dashboard is exposed beyond localhost. TLS and
-network access control should be provided by a trusted reverse proxy or host
-firewall.
+`micelio ui --host 0.0.0.0` (or any address that is not loopback) refuses to
+start without a token. Prefer the `MICELIO_AUTH_TOKEN` environment variable to
+the flag: a flag value shows in the process list. TLS and network access
+control should be provided by a trusted reverse proxy or host firewall.
+
+With a token, CLI and MCP clients send `Authorization: Bearer <token>`. In a
+browser, open the dashboard once as `http://host:3100/?token=<token>`: Micelio
+sets an HttpOnly, SameSite=Strict cookie and removes the token from the address
+bar. The cookie holds a value derived from the token (HMAC-SHA256), not the
+token itself, and its name includes the port (`micelio_session_3100`), so two
+dashboards on one host keep separate logins. Changing the token logs browsers
+out.
+
+The dashboard also refuses requests a web page could send through your browser:
+API calls from another site's origin (`Origin` or `Sec-Fetch-Site: cross-site`)
+get 403, and a tokenless loopback dashboard only answers a `Host` header that
+names this computer (DNS rebinding). Pages on `localhost` or `127.0.0.1` at any
+port (the Vite dev server) stay allowed, and so do clients that send no
+`Origin` (curl, the CLI, `micelio mcp`) and requests with a valid
+`Authorization: Bearer` token (a web page cannot add that header without the
+token).
+
+### Behind a reverse proxy or tunnel
+
+The browser sends `Origin: https://<public name>`. Micelio accepts it when the
+public name matches the `Host` header it receives, the first
+`X-Forwarded-Host`, or an `--allowed-host`. Otherwise every POST, PUT, DELETE
+and `/ws` from the browser gets 403. Do one of these:
+
+- Keep the public `Host`: nginx `proxy_set_header Host $host;` (Caddy and
+  cloudflared keep it by default).
+- Send `X-Forwarded-Host`: nginx `proxy_set_header X-Forwarded-Host $host;`.
+- Name the public host: `micelio ui --allowed-host micelio.example.com`.
+
+A tokenless dashboard on loopback answers only `Host` headers that name this
+computer, so a local proxy or tunnel that keeps the public `Host` gets 421
+until you pass `--allowed-host <name>`. Use it only when the proxy itself
+authenticates users: everyone who reaches the proxy controls the dashboard.
+The proxy also needs WebSocket upgrades on `/ws` (nginx:
+`proxy_http_version 1.1;`, `proxy_set_header Upgrade $http_upgrade;`,
+`proxy_set_header Connection "upgrade";`).
+
+```bash
+MICELIO_AUTH_TOKEN="$(openssl rand -hex 32)" micelio ui --allowed-host micelio.example.com
+```
 
 ## `mcp`: Let AI agents read your crawls
 
@@ -610,7 +655,7 @@ guide: [MCP.md](MCP.md).
 | Flag | Default | Meaning |
 |---|---:|---|
 | `--server <url>` | `http://127.0.0.1:3100` | Dashboard to read crawls from |
-| `--auth-token <token>` | `MICELIO_AUTH_TOKEN` | Dashboard token, if it was started with `--auth-token` |
+| `--auth-token <token>` | `MICELIO_AUTH_TOKEN` | Dashboard token, if it was started with `--auth-token`. Sent only over `https://` or to this computer |
 | `--allow-crawl` | off | Also let the agent start, wait for and stop crawls (capped) |
 | `--no-autostart` | off | Fail with a clear error instead of starting the dashboard |
 
@@ -642,6 +687,7 @@ Explicit flags take precedence over environment variables.
 | Variable | Used by |
 |---|---|
 | `MICELIO_AUTH_TOKEN` | `ui --auth-token` fallback |
+| `MICELIO_ALLOWED_HOSTS` | `ui --allowed-host` names, comma-separated (added to the flags) |
 | `PSI_API_KEY` | CLI PageSpeed Insights key fallback |
 | `CRUX_API_KEY` | CLI CrUX key fallback |
 | `OPENAI_API_KEY` | CLI OpenAI analysis and embeddings fallback |

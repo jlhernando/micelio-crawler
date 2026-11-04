@@ -136,7 +136,8 @@ func SendTelegram(token, chatID, text string) error {
 	body, _ := json.Marshal(map[string]interface{}{
 		"chat_id": chatID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": true,
 	})
-	return postJSON(telegramAPI+"/bot"+token+"/sendMessage", body, token)
+	// telegramAPI is a fixed host, so a plain client is fine here.
+	return postJSON(&http.Client{Timeout: 15 * time.Second}, telegramAPI+"/bot"+token+"/sendMessage", body, token)
 }
 
 // TelegramChat is a chat that recently wrote to the bot.
@@ -272,13 +273,12 @@ func SendSlack(webhookURL, text string) error {
 		return err
 	}
 	body, _ := json.Marshal(map[string]string{"text": text})
-	return postJSON(webhookURL, body, "")
+	return postJSON(newSafeClient(15*time.Second), webhookURL, body, "")
 }
 
 // ── helpers ──
 
-func postJSON(url string, body []byte, secret string) error {
-	client := &http.Client{Timeout: 15 * time.Second}
+func postJSON(client *http.Client, url string, body []byte, secret string) error {
 	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return scrub(err, secret)

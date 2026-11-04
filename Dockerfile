@@ -2,7 +2,12 @@
 #
 # Build:  docker build -t micelio .
 #         docker build -t micelio --build-arg WITH_CHROMIUM=true .   # JS rendering
-# Run UI: docker run --rm -p 3100:3100 -v micelio-data:/home/micelio/.micelio micelio
+# Run UI: the dashboard listens on all interfaces inside the container, so it
+#         refuses to start without a token:
+#           export MICELIO_AUTH_TOKEN="$(openssl rand -hex 32)"
+#           docker run --rm -p 127.0.0.1:3100:3100 -e MICELIO_AUTH_TOKEN \
+#             -v micelio-data:/home/micelio/.micelio micelio
+#         then open http://localhost:3100/?token=<the token> once in the browser.
 # CLI:    docker run --rm micelio crawl https://example.com --max-pages 100
 #
 # The legacy TypeScript crawler in src/ is not part of this image.
@@ -46,4 +51,5 @@ WORKDIR /home/micelio
 VOLUME ["/home/micelio/.micelio"]
 EXPOSE 3100
 ENTRYPOINT ["micelio"]
+# Needs MICELIO_AUTH_TOKEN (see above); micelio ui exits with an error without it.
 CMD ["ui", "--host", "0.0.0.0", "--port", "3100"]

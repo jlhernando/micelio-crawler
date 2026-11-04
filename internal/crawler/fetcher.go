@@ -183,21 +183,21 @@ func newClient(timeout time.Duration, proxy *url.URL, ssrfProtect bool, cache *d
 
 // SafeClientFollowRedirects returns an SSRF-protected client that follows redirects (max 10).
 // Use for webhook dispatch or other cases where redirect following is needed.
+// Environment proxies are used, but a proxy resolves and reaches the target
+// itself, past the dialer's private-address check, so the target is checked
+// before the request goes to the proxy (netguard.GuardProxy). Every redirect
+// hop is checked too (netguard.CheckRedirect).
 func SafeClientFollowRedirects(timeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = netguard.GuardProxy(http.ProxyFromEnvironment)
 	transport.DialContext = ssrfSafeDialer(&net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}, nil)
 	return &http.Client{
-		Timeout: timeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return fmt.Errorf("too many redirects")
-			}
-			return nil
-		},
-		Transport: transport,
+		Timeout:       timeout,
+		CheckRedirect: netguard.CheckRedirect,
+		Transport:     transport,
 	}
 }
 

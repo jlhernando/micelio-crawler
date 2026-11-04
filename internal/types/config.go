@@ -132,6 +132,9 @@ type CrawlConfig struct {
 	TorRotateEvery      int     `json:"torRotateEvery"`
 	NoDB                bool    `json:"-"`
 	SkipSSRF            bool    `json:"-"`
+	// PlausibleHostTrusted lets PlausibleHost be a private or loopback
+	// address (self-hosted Plausible). Set only by the CLI, never from JSON.
+	PlausibleHostTrusted bool `json:"-"`
 }
 
 // DefaultRetries is used when CrawlConfig.Retries is not set.

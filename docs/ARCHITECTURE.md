@@ -113,7 +113,13 @@ large files. It was tested with 3 files of 6.5 GB each (19.4 GB, 28M lines):
   and crawl jobs stuck in "running" or "paused" are marked "failed", because
   their goroutines are gone after a restart.
 - **Profiling.** pprof endpoints are served at `/debug/pprof/` for CPU profiles
-  and PGO builds.
+  and PGO builds: always on a loopback listener, on other addresses only with
+  `micelio ui --pprof`, and behind the `--auth-token` when one is set.
+- **Access control.** `internal/server/guard.go`: a non-loopback listener needs
+  a token (`--insecure-no-auth` to override); cross-site browser requests
+  (foreign `Origin`, `Sec-Fetch-Site: cross-site` except navigations) get 403;
+  a tokenless loopback dashboard refuses a `Host` that is not this computer
+  (DNS rebinding). Browsers log in once with `/?token=` (HttpOnly cookie).
 
 For how memory stays bounded on large crawls, see
 [Memory management](MEMORY-MANAGEMENT.md).

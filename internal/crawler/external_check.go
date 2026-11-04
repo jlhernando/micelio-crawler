@@ -72,7 +72,8 @@ type ExternalCheckSummary struct {
 	Total int
 	// Checked is how many were actually requested.
 	Checked int
-	// Skipped is how many were left unchecked (cap or cancellation).
+	// Skipped is how many were left unchecked (cap, cancellation, or the
+	// HTTP(S)_PROXY in use could not be reached).
 	Skipped int
 	// RateLimited is how many URLs (part of Skipped) were left unchecked
 	// because their host kept answering 429 Too Many Requests.
@@ -320,6 +321,9 @@ func CheckExternalLinks(ctx context.Context, links map[string][]string, opts Ext
 				}
 				continue
 			}
+			if proxyFailed(r.err) {
+				continue // our proxy is down, not the link: leave it unchecked
+			}
 			report(r.t, r.status, r.err)
 			if hostUnreachable(r.err, r.t.site) {
 				dead[r.t.site] = r.err
@@ -394,6 +398,13 @@ func hostUnreachable(err error, site string) bool {
 	var dnsErr *net.DNSError
 	return (errors.As(err, &dnsErr) && dnsErr.IsNotFound) ||
 		errors.Is(err, syscall.ECONNREFUSED) || isBlockedErr(err)
+}
+
+// proxyFailed reports a failure to reach the environment proxy (connection
+// refused, timeout, TLS to the proxy). It says nothing about the link.
+func proxyFailed(err error) bool {
+	var op *net.OpError
+	return err != nil && errors.As(err, &op) && op.Op == "proxyconnect"
 }
 
 func limitRedirects(_ *http.Request, via []*http.Request) error {

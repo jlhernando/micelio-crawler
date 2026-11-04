@@ -8,6 +8,21 @@ export function formatError(err: unknown): string {
 }
 
 /**
+ * JSON safe to place inside an HTML <script> element: `<`, `>` and `&` become
+ * <, > and &, so no end tag (any case), comment opener or
+ * entity can appear, and U+2028/U+2029 are escaped for older JavaScript
+ * parsers. The value parses back to exactly the same data.
+ */
+export function jsonForScript(value: unknown): string {
+  return (JSON.stringify(value) ?? 'null')
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+/**
  * Format a Date as YYYY-MM-DD string for API queries.
  */
 export function formatDateYmd(date: Date): string {

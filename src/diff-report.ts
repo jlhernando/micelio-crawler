@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import type { DiffResult } from './types.js';
+import { jsonForScript } from './utils.js';
 
 /**
  * Print a terminal report summarizing the crawl diff.
@@ -90,12 +92,16 @@ export function printDiffReport(result: DiffResult): void {
  * Generate an HTML comparison dashboard.
  */
 export function generateDiffHtml(result: DiffResult): string {
-  const resultJson = JSON.stringify(result).replace(/<\//g, '<\\/');
+  // Crawl data (URLs, titles, headings) is hostile input: no `<`, `>` or `&`
+  // may reach the HTML parser inside the script, whatever the case or form
+  // (</ScRiPt>, <!--, <script).
+  const resultJson = jsonForScript(result);
 
-  return `<!DOCTYPE html>
+  const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="${CSP_PLACEHOLDER}">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Micelio Crawl Comparison</title>
 <style>
@@ -213,4 +219,14 @@ document.querySelectorAll('.tab').forEach(function(tab) {
 </script>
 </body>
 </html>`;
+
+  // Only the report's own script may run: injected markup cannot add an
+  // inline handler or another script even if it ever got into the page.
+  const start = html.indexOf('<script>') + '<script>'.length;
+  const script = html.slice(start, html.indexOf('</script>', start));
+  const hash = createHash('sha256').update(script, 'utf8').digest('base64');
+  const csp = `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${hash}'; base-uri 'none'; form-action 'none'`;
+  return html.replace(CSP_PLACEHOLDER, csp);
 }
+
+const CSP_PLACEHOLDER = '__MICELIO_CSP__';

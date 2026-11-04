@@ -2,7 +2,7 @@ import { request, type Dispatcher } from 'undici';
 import type { FetchResult, HeadResult, RedirectHop } from './types.js';
 import { renderPage } from './browser.js';
 import { formatError } from './utils.js';
-import { assertPublicUrl, BlockedAddressError, guardedDispatcher, stripCredentialsOnCrossOrigin, urlBlockReason } from './net-guard.js';
+import { assertPublicUrl, BlockedAddressError, credentialHostAllowed, guardedDispatcher, stripCredentialsOnCrossOrigin, urlBlockReason } from './net-guard.js';
 
 const MAX_RETRIES = 3;
 const MAX_REDIRECTS = 10;
@@ -32,10 +32,11 @@ export interface FetchOptions {
    */
   dispatcher?: Dispatcher;
   /**
-   * Hosts allowed to receive cookies and custom headers. When set, a request
-   * to any other host is sent without them. Credential headers are dropped
-   * after a redirect that leaves the site (other than apex <-> www or a
-   * subdomain), downgrades https -> http, or changes port.
+   * Hosts allowed to receive cookies and custom headers (their www/apex twin
+   * too, other subdomains not). A request to any other host is sent without
+   * them, and so is every redirect hop to another host, an https -> http
+   * downgrade or a port change. Without a set, only the requested URL's host
+   * and its www/apex twin get them.
    */
   credentialHosts?: ReadonlySet<string>;
 }
@@ -50,7 +51,7 @@ function initialHeaders(url: string, base: Record<string, string>, options: Fetc
   const { customHeaders = {}, cookies = '', credentialHosts } = options;
   let host = '';
   try { host = new URL(url).hostname; } catch { /* checked by urlBlockReason */ }
-  if (credentialHosts && !credentialHosts.has(host)) return base;
+  if (credentialHosts && !credentialHostAllowed(host, credentialHosts)) return base;
   const headers: Record<string, string> = { ...base, ...customHeaders };
   if (cookies) headers['Cookie'] = cookies;
   return headers;
@@ -121,7 +122,7 @@ export async function fetchPage(
             };
           }
 
-          requestHeaders = stripCredentialsOnCrossOrigin(requestHeaders, currentUrl, resolvedLocation, url);
+          requestHeaders = stripCredentialsOnCrossOrigin(requestHeaders, currentUrl, resolvedLocation, url, options.credentialHosts);
           currentUrl = resolvedLocation;
           continue;
         }
@@ -345,7 +346,7 @@ export async function fetchHead(
               error: `Redirect to private address blocked: ${resolved}`,
             };
           }
-          requestHeaders = stripCredentialsOnCrossOrigin(requestHeaders, currentUrl, resolved, url);
+          requestHeaders = stripCredentialsOnCrossOrigin(requestHeaders, currentUrl, resolved, url, options.credentialHosts);
           currentUrl = resolved;
           continue;
         }

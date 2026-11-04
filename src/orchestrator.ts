@@ -6,7 +6,7 @@ import { CrawlQueue } from './queue.js';
 import { RobotsChecker } from './robots.js';
 import { fetchPage, checkExternalUrl, headResourceSize, type FetchOptions } from './fetcher.js';
 import { formatError } from './utils.js';
-import { urlBlockReason } from './net-guard.js';
+import { credentialHostSet, urlBlockReason } from './net-guard.js';
 import { extractPageData, extractResourceRefs, extractBodyText, type ExtractionOptions } from './extractor.js';
 import { ResultWriter } from './writer.js';
 import { closeBrowser, setBrowserProxy } from './browser.js';
@@ -207,7 +207,13 @@ export async function crawl(
   const writePage = (page: PageData) => writer.write(page).catch(() => {});
 
   const limit = pLimit(config.concurrency);
+  // In-memory pages, only without a DB. With a DB each page goes to the DB
+  // and is dropped, so memory does not grow with the crawl; the pages are
+  // read back once after the crawl for post-crawl work and the reporter.
   const results: PageData[] = [];
+  const keepPage = (page: PageData) => { if (!store) results.push(page); };
+  // Pages stored after this rowid belong to this run (resume adds to a DB).
+  const startRowid = store ? store.lastPageRowid() : 0;
   const stats = { completed: 0, failed: 0 };
   // When resuming, start stats from existing DB page count
   if (isResuming) {
@@ -244,12 +250,14 @@ export async function crawl(
   }
 
   // Cookies and custom headers only go to the hosts the user named (seed,
-  // list URLs, sitemap URLs, --allowed-domains), never to hosts discovered
-  // in sitemaps or reached by a redirect.
-  const credentialHosts = new Set<string>(config.allowedDomains);
+  // list URLs, sitemap URLs, --allowed-domains) and their www/apex twin,
+  // never to other subdomains, hosts discovered in sitemaps or hosts reached
+  // by a redirect. The set is fixed here: a seed redirect never extends it.
+  const namedHosts: string[] = [...config.allowedDomains];
   for (const u of [config.seedUrl, ...config.urls, ...config.sitemapUrls]) {
-    try { if (u) credentialHosts.add(new URL(u).hostname); } catch { /* invalid URL */ }
+    try { if (u) namedHosts.push(new URL(u).hostname); } catch { /* invalid URL */ }
   }
+  const credentialHosts: ReadonlySet<string> = credentialHostSet(namedHosts);
 
   const fetchOpts: FetchOptions = {
     userAgent: config.userAgent,
@@ -479,7 +487,7 @@ export async function crawl(
             pageRank: 0,
           };
           await writePage(blockedPage);
-          results.push(blockedPage);
+          keepPage(blockedPage);
           if (store) {
             try { store.insertPage(blockedPage); } catch (e) { process.stderr.write(`  [warn] Failed to store blocked page ${blockedPage.url}: ${e}\n`); }
           }
@@ -504,11 +512,8 @@ export async function crawl(
               const finalHostname = new URL(fetchResult.finalUrl).hostname;
               if (finalHostname !== seedDomain) {
                 process.stderr.write(`\n  Redirect detected: ${seedDomain} → ${finalHostname}. Updating seed domain.\n`);
-                // Credentials follow only a www/apex move of the same site
-                if (credentialHosts.has(seedDomain) &&
-                    (finalHostname === `www.${seedDomain}` || seedDomain === `www.${finalHostname}`)) {
-                  credentialHosts.add(finalHostname);
-                }
+                // credentialHosts is not extended: a www/apex move is already
+                // covered, and a move to another site must not get credentials.
                 seedDomain = finalHostname;
                 queue.updateSeedDomain(finalHostname);
                 // Re-extract with the corrected seedDomain so links are classified correctly
@@ -617,7 +622,7 @@ export async function crawl(
           }
 
           await writePage(pageData);
-          results.push(pageData);
+          keepPage(pageData);
           // Phase 12.1: Persist to DB immediately (auto-save)
           // ISSUE-2 fix: Graceful handling of DB write failures
           if (store) {
@@ -687,12 +692,26 @@ export async function crawl(
   await Promise.all([...allTasks]);
   await writer.close();
 
+  // The reporter and link intelligence need every page in memory. With a DB
+  // the pages are read back here, once: `allPages` is every page in the DB
+  // (earlier runs too on resume), `newPages` the ones this run stored.
+  let allPages: PageData[];
+  let newPages: PageData[];
+  if (store) {
+    allPages = store.getAllPages();
+    const stored = store.countPagesAfter(startRowid);
+    newPages = stored >= allPages.length ? allPages : allPages.slice(allPages.length - stored);
+  } else {
+    allPages = results;
+    newPages = results;
+  }
+
   // Phase 6: Sitemap audit — annotate pages with sitemap presence
   if (isSpiderMode || isSitemapMode) {
     const sitemapEntryMap = robots.getSitemapEntryMap();
     if (sitemapEntryMap.size > 0) {
-      process.stderr.write(`\nSitemap audit: cross-referencing ${sitemapEntryMap.size} sitemap URLs with ${results.length} crawled pages...\n`);
-      for (const page of results) {
+      process.stderr.write(`\nSitemap audit: cross-referencing ${sitemapEntryMap.size} sitemap URLs with ${newPages.length} crawled pages...\n`);
+      for (const page of newPages) {
         const entry = sitemapEntryMap.get(page.url) || sitemapEntryMap.get(page.finalUrl);
         if (entry) {
           page.sitemapData = { inSitemap: true, sitemapLastmod: entry.lastmod };
@@ -739,7 +758,7 @@ export async function crawl(
     }
 
     // Build PageWeightData for each page
-    for (const page of results) {
+    for (const page of newPages) {
       const resources = resourceRefsMap.get(page.url);
       if (!resources) continue;
 
@@ -822,36 +841,25 @@ export async function crawl(
   resourceRefsMap.clear();
 
   // Phase 6: Re-write output file if post-crawl enrichment was applied
-  const hasPostCrawlEnrichment = !cancelled() && results.some((p) => p.sitemapData !== null || p.pageWeight !== null);
+  const hasPostCrawlEnrichment = !cancelled() && newPages.some((p) => p.sitemapData !== null || p.pageWeight !== null);
   if (hasPostCrawlEnrichment) {
     process.stderr.write(`Updating output with post-crawl data...\n`);
     const rewriter = new ResultWriter(config.outputPath, config.outputFormat);
-    for (const page of results) {
+    for (const page of newPages) {
       await rewriter.write(page);
     }
     await rewriter.close();
 
     // Phase 12.1: Update enriched pages in DB
     if (store) {
-      store.updatePages(results);
+      store.updatePages(newPages);
     }
   }
 
-  // Phase 12.1: Close DB (with try/finally for ISSUE-3). The reporter still
-  // needs every page in memory, but never two copies: when the DB holds only
-  // this run's pages, `results` already is that list and is not reloaded.
-  // When it also holds pages from an earlier run (resume), `results` is
-  // released before the full reload.
-  const newCount = results.length;
-  let allPages: PageData[];
+  // Phase 12.1: Close DB (with try/finally for ISSUE-3)
+  const newCount = newPages.length;
   if (store) {
     try {
-      if (!isResuming && store.getPageCount() === newCount) {
-        allPages = results;
-      } else {
-        results.length = 0;
-        allPages = store.getAllPages();
-      }
       if (!cancelled()) store.markCrawlComplete();
       const resumedCount = isResuming ? (allPages.length - newCount) : 0;
       // MINOR-4 fix: Separate previously crawled from newly crawled in output
@@ -863,8 +871,6 @@ export async function crawl(
     } finally {
       store.close();
     }
-  } else {
-    allPages = results;
   }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);

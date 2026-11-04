@@ -133,9 +133,28 @@ export class CrawlStore {
     return row ? JSON.parse(row.data) as PageData : null;
   }
 
+  /**
+   * Every page in insertion order. Rows are read one at a time, so only the
+   * parsed pages are held, not every row's JSON text as well.
+   */
   getAllPages(): PageData[] {
-    const rows = this.stmtGetAllPages.all() as { data: string }[];
-    return rows.map((r) => JSON.parse(r.data) as PageData);
+    const pages: PageData[] = [];
+    for (const r of this.stmtGetAllPages.iterate() as IterableIterator<{ data: string }>) {
+      pages.push(JSON.parse(r.data) as PageData);
+    }
+    return pages;
+  }
+
+  /** Highest page rowid so far (0 when empty). Pages stored later have a higher one. */
+  lastPageRowid(): number {
+    const row = this.db.prepare('SELECT MAX(rowid) AS id FROM pages').get() as { id: number | null };
+    return row.id ?? 0;
+  }
+
+  /** Number of pages stored after `rowid` (INSERT OR REPLACE gives a new rowid). */
+  countPagesAfter(rowid: number): number {
+    const row = this.db.prepare('SELECT COUNT(*) AS count FROM pages WHERE rowid > ?').get(rowid) as { count: number };
+    return row.count;
   }
 
   /**

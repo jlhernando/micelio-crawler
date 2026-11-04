@@ -204,9 +204,19 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
         }
         const config = unmaskConfig(raw as Record<string, unknown>, applyEnvFallbacks(store.getSettings()));
         await validateCrawlRequest(config);
+        // Refuse before creating a job, so a second start leaves no pending job
+        if (crawlManager.getActiveCrawlId()) return crawlAlreadyRunning(res);
         // The stored job keeps no credentials; the crawl gets the real config
         const job = store.createCrawlJob(redactConfig(config));
-        crawlManager.startCrawl(job.id, config);
+        try {
+          // Awaited: a rejection (two starts racing) is handled here instead
+          // of becoming an unhandled rejection that ends the process.
+          await crawlManager.startCrawl(job.id, config);
+        } catch (err) {
+          store.deleteCrawlJob(job.id);
+          if (crawlManager.getActiveCrawlId()) return crawlAlreadyRunning(res);
+          throw err;
+        }
         json(res, 200, { id: job.id, status: 'running' });
         return true;
       }
@@ -405,6 +415,11 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
       return true;
     }
   };
+}
+
+function crawlAlreadyRunning(res: ServerResponse): true {
+  json(res, 409, { error: { code: 'CRAWL_RUNNING', message: 'A crawl is already running. Cancel it first.' } });
+  return true;
 }
 
 function notRunning(res: ServerResponse): true {

@@ -235,6 +235,73 @@ describe('crawl control API', () => {
   });
 });
 
+describe('POST /api/crawl/start while a crawl runs', () => {
+  async function start(handler: ReturnType<typeof createApiHandler>) {
+    let status = 0;
+    let body = '';
+    const req = Object.assign(Readable.from([Buffer.from(JSON.stringify({ seedUrl: 'https://93.184.215.14/' }))]), {
+      url: '/api/crawl/start', method: 'POST', headers: { host: 'x' },
+    });
+    const res = {
+      writeHead: (s: number) => { status = s; },
+      setHeader: () => {},
+      end: (b: string) => { body = b; },
+    };
+    await handler(req as never, res as never);
+    return { status, body: JSON.parse(body) };
+  }
+
+  function api() {
+    const jobs: Record<string, Job> = {};
+    let n = 0;
+    const store = {
+      ...fakeStore(jobs),
+      getSettings: () => ({}),
+      createCrawlJob: (config: Record<string, unknown>) => {
+        const job = { id: `j${n++}`, status: 'pending', dbPath: join(dir, 'j.db'), config };
+        jobs[job.id] = job;
+        return job;
+      },
+    } as unknown as import('./ui-store.js').UiStore;
+    return { jobs, handler: createApiHandler(store, new UiCrawlManager(store)) };
+  }
+
+  it('answers 409, creates no job and leaves no unhandled rejection', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const { jobs, handler } = api();
+      const first = await start(handler);
+      expect(first.status).toBe(200);
+      const second = await start(handler);
+      expect(second.status).toBe(409);
+      expect(second.body.error.code).toBe('CRAWL_RUNNING');
+      // Two starts at once: one wins, the other gets 409 and its job is removed
+      const both = await Promise.all([start(handler), start(handler)]);
+      expect(both.map((r) => r.status)).toEqual([409, 409]);
+      await tick();
+      expect(Object.keys(jobs)).toEqual([first.body.id]);
+      expect(jobs[first.body.id].status).toBe('running');
+      await new Promise((r) => setTimeout(r, 20));
+      expect(unhandled).toEqual([]);
+      await vi.waitFor(() => expect(engine.calls).toHaveLength(1));
+      engine.calls[0].finish();
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('two starts racing: one runs, the other gets 409 and no job', async () => {
+    const { jobs, handler } = api();
+    const both = await Promise.all([start(handler), start(handler)]);
+    expect(both.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect(Object.keys(jobs)).toHaveLength(1);
+    await vi.waitFor(() => expect(engine.calls).toHaveLength(1));
+    engine.calls[0].finish();
+  });
+});
+
 describe('proxy in dashboard crawls', () => {
   afterEach(() => setTrustedProxy(''));
 

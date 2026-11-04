@@ -125,7 +125,9 @@ function blockedIPv4(o: number[]): boolean {
 
 /**
  * Whether an IP literal is an address crawls must never reach. Anything that
- * is not a valid IP literal is reported as blocked (fail closed).
+ * is not a valid IP literal is reported as blocked (fail closed). IPv6
+ * transition addresses (NAT64, 6to4, Teredo) are judged by the IPv4 address
+ * they carry.
  */
 export function isBlockedIp(ip: string): boolean {
   const v4 = parseIPv4(ip);
@@ -143,8 +145,16 @@ export function isBlockedIp(ip: string): boolean {
   if (w[0] === 0x64 && w[1] === 0xff9b && w.slice(2, 6).every((x) => x === 0)) {
     return blockedIPv4(embeddedV4);
   }
+  // The rest mirrors Go internal/netguard BlockedIP.
+  // Local-use NAT64 64:ff9b:1::/48 (RFC 8215) translates into a local network.
+  if (w[0] === 0x64 && w[1] === 0xff9b && w[2] === 0x0001) return true;
+  // 6to4 2002::/16: the IPv4 address sits in bits 16-47.
+  if (w[0] === 0x2002) return blockedIPv4([w[1] >> 8, w[1] & 0xff, w[2] >> 8, w[2] & 0xff]);
+  // Teredo 2001::/32: the client IPv4 is the last 32 bits, each byte inverted.
+  if (w[0] === 0x2001 && w[1] === 0) return blockedIPv4(embeddedV4.map((b) => b ^ 0xff));
   if ((w[0] & 0xfe00) === 0xfc00) return true; // unique local fc00::/7
   if ((w[0] & 0xffc0) === 0xfe80) return true; // link-local fe80::/10
+  if ((w[0] & 0xffc0) === 0xfec0) return true; // deprecated site-local fec0::/10
   if ((w[0] & 0xff00) === 0xff00) return true; // multicast ff00::/8
   return false;
 }
@@ -259,48 +269,71 @@ export function guardedDispatcher(): Dispatcher {
 }
 
 /**
- * Header names that carry secrets. User-Agent, Accept-Language and other
- * non-secret overrides do not match, so they survive a cross-site redirect.
+ * Request headers that never carry a secret, kept on every hop. Every other
+ * header the user supplied (custom headers, Cookie) counts as a credential,
+ * whatever its name: X-Signature, X-License or X-Tenant can be secrets too.
  */
-const CREDENTIAL_HEADER_RE = /^(authorization|proxy-authorization|cookie)$|auth|token|key|secret|session|passw|^x-api-/i;
+const SAFE_HEADERS = new Set([
+  'user-agent', 'accept', 'accept-language', 'accept-encoding', 'cache-control',
+  'pragma', 'dnt', 'upgrade-insecure-requests',
+]);
 
+/** True for every header that is not on the short non-secret list. */
 export function isCredentialHeader(name: string): boolean {
-  return CREDENTIAL_HEADER_RE.test(name);
+  return !SAFE_HEADERS.has(name.toLowerCase());
+}
+
+/** The www/apex twin of a host: www.acme.com <-> acme.com. */
+function twinHost(host: string): string {
+  return host.startsWith('www.') ? host.slice(4) : `www.${host}`;
+}
+
+/** Lower-cased host set without brackets or trailing dots. */
+export function credentialHostSet(hosts: Iterable<string>): Set<string> {
+  const out = new Set<string>();
+  for (const h of hosts) {
+    const b = bareHost(h.trim());
+    if (b) out.add(b);
+  }
+  return out;
 }
 
 /**
- * True when credentials sent to credentialHost may follow a redirect to
- * toHost: same host, apex <-> www move, or a subdomain of credentialHost.
+ * True when a host may receive the crawl's cookies and custom headers: it is
+ * one of the hosts the user named (seed, list and sitemap URL hosts,
+ * --allowed-domains) or the www/apex twin of one. Other subdomains do not
+ * count: a tenant or taken-over subdomain can belong to someone else.
  */
-export function sameSiteHost(credentialHost: string, toHost: string): boolean {
-  const c = credentialHost.toLowerCase().replace(/\.$/, '');
-  const t = toHost.toLowerCase().replace(/\.$/, '');
-  return t === c || t === `www.${c}` || c === `www.${t}` || t.endsWith(`.${c}`);
+export function credentialHostAllowed(host: string, credentialHosts: ReadonlySet<string>): boolean {
+  const h = bareHost(host);
+  if (!h) return false;
+  return credentialHosts.has(h) || credentialHosts.has(twinHost(h));
 }
 
 /**
- * Headers for the next redirect hop. Credential headers (Authorization,
- * Cookie, Proxy-Authorization and any header whose name looks like a secret:
- * *auth*, *token*, *key*, *secret*, *session*, x-api-*) are dropped when the
- * redirect leaves the credential host's site (see sameSiteHost), downgrades
- * https -> http, or changes port. An http -> https upgrade keeps them. Once
- * dropped they never come back on a later hop. Other headers, including user
- * overrides like User-Agent, are always kept.
+ * Headers for the next redirect hop. Credential headers (Cookie and every
+ * header not on the non-secret list, see isCredentialHeader) are dropped
+ * when the target host is not a credential host (see credentialHostAllowed),
+ * when the redirect downgrades https -> http, or when it changes port. An
+ * http -> https upgrade keeps them. Callers pass the previous hop's headers,
+ * so once dropped they never come back on a later hop.
  *
- * credentialUrl is the URL the credentials were first sent to (the request
- * URL before any redirect); it defaults to fromUrl.
+ * credentialHosts are the hosts allowed to receive credentials. Without a
+ * set, only the host of credentialUrl (the URL the credentials were first
+ * sent to, default fromUrl) and its www/apex twin are.
  */
 export function stripCredentialsOnCrossOrigin(
   headers: Record<string, string>,
   fromUrl: string,
   toUrl: string,
   credentialUrl: string = fromUrl,
+  credentialHosts?: ReadonlySet<string>,
 ): Record<string, string> {
   const from = new URL(fromUrl);
   const to = new URL(toUrl);
   const downgrade = from.protocol === 'https:' && to.protocol !== 'https:';
-  if (!downgrade && from.port === to.port &&
-      sameSiteHost(bareHost(new URL(credentialUrl).hostname), bareHost(to.hostname))) {
+  const hosts = credentialHosts ?? credentialHostSet([new URL(credentialUrl).hostname]);
+  if (!downgrade && from.port === to.port && credentialHostAllowed(to.hostname, hosts)) {
     return headers;
   }
   const out: Record<string, string> = {};

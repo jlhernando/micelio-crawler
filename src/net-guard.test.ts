@@ -4,8 +4,8 @@ import { connect as netConnect, type AddressInfo } from 'node:net';
 import { ProxyAgent, request } from 'undici';
 import {
   isBlockedIp, urlBlockReason, guardedLookup, guardedDispatcher, assertPublicUrl,
-  setAllowPrivateNetworks, stripCredentialsOnCrossOrigin, isCredentialHeader, sameSiteHost,
-  setDnsLookupForTests,
+  setAllowPrivateNetworks, stripCredentialsOnCrossOrigin, isCredentialHeader, credentialHostAllowed,
+  credentialHostSet, setDnsLookupForTests,
 } from './net-guard.js';
 import { fetchPage, fetchHead, checkExternalUrl, headResourceSize } from './fetcher.js';
 
@@ -28,6 +28,32 @@ describe('isBlockedIp', () => {
       expect(isBlockedIp(ip)).toBe(false);
     },
   );
+
+  // IPv6 transition and site-local ranges (mirrors Go internal/netguard)
+  it.each([
+    'fec0::1', 'feff:ffff::1', // deprecated site-local fec0::/10
+    '64:ff9b:1::1', '64:ff9b:1:ffff::8.8.8.8', // local-use NAT64 64:ff9b:1::/48, even with a public tail
+    '64:ff9b::127.0.0.1', '64:ff9b::10.0.0.1', // NAT64 well-known prefix, private IPv4
+    '2002:7f00:1::', '2002:a00:1::1', '2002:a9fe:a9fe::', '2002:c0a8:101::', // 6to4 of 127/8, 10/8, 169.254/16, 192.168/16
+    '2001:0:4136:e378:8000:63bf:80ff:fffe', // Teredo, client 127.0.0.1 (inverted 80ff:fffe)
+    '2001::f5ff:fffe', // Teredo, client 10.0.0.1
+  ])('blocks transition/site-local %s', (ip) => {
+    expect(isBlockedIp(ip)).toBe(true);
+  });
+
+  it.each([
+    '64:ff9b::8.8.8.8', '2002:808:808::1', // NAT64 / 6to4 of 8.8.8.8
+    '2001:0:4136:e378:8000:63bf:f7f7:f7f7', // Teredo, client 8.8.8.8
+    '2001:db8::1', '2001:4860:4860::8888', // 2001::/32 is only Teredo, not all of 2001::/16
+  ])('allows public transition address %s', (ip) => {
+    expect(isBlockedIp(ip)).toBe(false);
+  });
+
+  it('blocks transition literals in URLs too', () => {
+    for (const u of ['http://[fec0::1]/', 'http://[2002:7f00:1::]/', 'http://[64:ff9b:1::1]/', 'http://[2001::f5ff:fffe]/']) {
+      expect(urlBlockReason(u), u).not.toBeNull();
+    }
+  });
 
   it('fails closed on garbage', () => {
     expect(isBlockedIp('not-an-ip')).toBe(true);
@@ -68,6 +94,17 @@ describe('guardedLookup / guardedDispatcher', () => {
     await expect(assertPublicUrl('http://localhost/')).rejects.toThrow(/Blocked/);
   });
 
+  it('refuses a DNS answer in a site-local or transition range that hides a private address', async () => {
+    try {
+      for (const address of ['fec0::1', '2002:7f00:1::', '64:ff9b:1::1', '2001::f5ff:fffe']) {
+        setDnsLookupForTests((_h, _o, cb) => cb(null, [{ address, family: 6 }]));
+        await expect(assertPublicUrl('http://sneaky.test/'), address).rejects.toThrow(/Blocked/);
+      }
+    } finally {
+      setDnsLookupForTests(null);
+    }
+  });
+
   it('refuses the connection itself, after DNS, even without a prior URL check', async () => {
     await expect(request('http://localhost:9/', { dispatcher: guardedDispatcher() })).rejects.toThrow(/Blocked/);
     await expect(request('http://127.0.0.1:9/', { dispatcher: guardedDispatcher() })).rejects.toThrow(/Blocked/);
@@ -76,12 +113,14 @@ describe('guardedLookup / guardedDispatcher', () => {
 
 describe('stripCredentialsOnCrossOrigin', () => {
   const headers = {
-    'User-Agent': 'Googlebot', 'Accept-Language': 'es', 'X-Tenant': 'acme',
+    'User-Agent': 'Googlebot', 'Accept-Language': 'es', Accept: '*/*', 'X-Tenant': 'acme',
     Cookie: 'c=1', Authorization: 'Basic t', 'Proxy-Authorization': 'p', 'X-Api-Key': 'k',
-    'X-Auth-User': 'u', 'X-CSRF-Token': 't', 'X-Client-Secret': 's', 'X-Session-Id': 'i', 'X-Api-Version': '2',
+    'X-Signature': 's', 'X-Credential': 'c', 'X-License': 'l', 'X-Api-Version': '2',
   };
-  const stripped = { 'User-Agent': 'Googlebot', 'Accept-Language': 'es', 'X-Tenant': 'acme' };
-  const strip = (from: string, to: string, cred?: string) => stripCredentialsOnCrossOrigin(headers, from, to, cred);
+  // Only non-secret headers survive; every other user header is a credential
+  const stripped = { 'User-Agent': 'Googlebot', 'Accept-Language': 'es', Accept: '*/*' };
+  const strip = (from: string, to: string, cred?: string, hosts?: ReadonlySet<string>) =>
+    stripCredentialsOnCrossOrigin(headers, from, to, cred, hosts);
 
   it('keeps credentials on the same host', () => {
     expect(strip('https://acme.com/x', 'https://acme.com/y')).toEqual(headers);
@@ -97,15 +136,26 @@ describe('stripCredentialsOnCrossOrigin', () => {
     expect(strip('http://acme.com/', 'https://www.acme.com/')).toEqual(headers);
   });
 
-  it('keeps credentials on a subdomain of the credential host', () => {
-    expect(strip('https://acme.com/', 'https://shop.acme.com/')).toEqual(headers);
+  it('drops credentials on a subdomain of the credential host', () => {
+    expect(strip('https://acme.com/', 'https://shop.acme.com/')).toEqual(stripped);
+    expect(strip('https://acme.com/', 'https://attacker.acme.com/')).toEqual(stripped);
+    expect(strip('https://www.acme.com/', 'https://a.b.acme.com/')).toEqual(stripped);
     // Later hop: checked against the first request URL, not the previous hop
     expect(strip('https://shop.acme.com/', 'https://acme.com/', 'https://acme.com/')).toEqual(headers);
     expect(strip('https://shop.acme.com/', 'https://evil.com/', 'https://acme.com/')).toEqual(stripped);
   });
 
+  it('keeps credentials only for the named hosts (and their www twin) when given', () => {
+    const hosts = credentialHostSet(['acme.com', 'Partner.example.']);
+    expect(strip('https://acme.com/', 'https://partner.example/', undefined, hosts)).toEqual(headers);
+    expect(strip('https://acme.com/', 'https://www.partner.example/', undefined, hosts)).toEqual(headers);
+    expect(strip('https://acme.com/', 'https://shop.acme.com/', undefined, hosts)).toEqual(stripped);
+    expect(strip('https://acme.com/', 'https://evil.com/', undefined, hosts)).toEqual(stripped);
+  });
+
   it('drops credentials on an https -> http downgrade', () => {
     expect(strip('https://acme.com/', 'http://acme.com/')).toEqual(stripped);
+    expect(strip('https://acme.com/', 'http://www.acme.com/')).toEqual(stripped);
   });
 
   it('drops credentials on a port change', () => {
@@ -122,21 +172,26 @@ describe('stripCredentialsOnCrossOrigin', () => {
   });
 });
 
-describe('isCredentialHeader / sameSiteHost', () => {
-  it('flags secret-looking names only', () => {
-    for (const h of ['Authorization', 'cookie', 'Proxy-Authorization', 'X-Api-Key', 'x-api-version', 'X-Auth-Token', 'Api-Key', 'X-Secret', 'X-Session']) {
+describe('isCredentialHeader / credentialHostAllowed', () => {
+  it('treats every header but a short non-secret list as a credential', () => {
+    for (const h of ['Authorization', 'cookie', 'Proxy-Authorization', 'X-Api-Key', 'X-Signature',
+      'X-Credential', 'X-License', 'X-Tenant', 'Referer', 'X-Whatever']) {
       expect(isCredentialHeader(h)).toBe(true);
     }
-    for (const h of ['User-Agent', 'Accept', 'Accept-Language', 'X-Tenant', 'Referer']) {
+    for (const h of ['User-Agent', 'user-agent', 'Accept', 'Accept-Language', 'Accept-Encoding', 'Cache-Control']) {
       expect(isCredentialHeader(h)).toBe(false);
     }
   });
 
-  it('matches same site hosts', () => {
-    expect(sameSiteHost('acme.com', 'ACME.com.')).toBe(true);
-    expect(sameSiteHost('acme.com', 'a.b.acme.com')).toBe(true);
-    expect(sameSiteHost('acme.com', 'wwwacme.com')).toBe(false);
-    expect(sameSiteHost('acme.com', 'acme.com.evil.com')).toBe(false);
+  it('allows named hosts and their www/apex twin only', () => {
+    const hosts = credentialHostSet(['acme.com', 'www.shop.example']);
+    expect(credentialHostAllowed('ACME.com.', hosts)).toBe(true);
+    expect(credentialHostAllowed('www.acme.com', hosts)).toBe(true);
+    expect(credentialHostAllowed('shop.example', hosts)).toBe(true);
+    expect(credentialHostAllowed('a.b.acme.com', hosts)).toBe(false);
+    expect(credentialHostAllowed('wwwacme.com', hosts)).toBe(false);
+    expect(credentialHostAllowed('acme.com.evil.com', hosts)).toBe(false);
+    expect(credentialHostAllowed('', hosts)).toBe(false);
   });
 });
 
@@ -197,12 +252,15 @@ describe('fetcher SSRF and credential handling (local servers)', () => {
     expect(page.html).toContain('secret');
   });
 
-  it('drops cookies and credential headers on a cross-origin redirect, keeps overrides', async () => {
+  it('drops cookies and every custom header on a cross-origin redirect, keeps the User-Agent override', async () => {
     setAllowPrivateNetworks(true);
     seen.length = 0;
     const opts = {
       userAgent: 't', cookies: 'sid=1',
-      customHeaders: { Authorization: 'Bearer t', 'X-Api-Key': 'k', 'X-Tenant': 'acme', 'User-Agent': 'Googlebot' },
+      customHeaders: {
+        Authorization: 'Bearer t', 'X-Api-Key': 'k', 'X-Tenant': 'acme', 'X-Signature': 'sig',
+        'X-License': 'lic', 'User-Agent': 'Googlebot',
+      },
     };
     const page = await fetchPage(`${originUrl}/cross`, opts);
     expect(page.statusCode).toBe(200);
@@ -210,7 +268,9 @@ describe('fetcher SSRF and credential handling (local servers)', () => {
     expect(seen[0].cookie).toBeUndefined();
     expect(seen[0].authorization).toBeUndefined();
     expect(seen[0]['x-api-key']).toBeUndefined();
-    expect(seen[0]['x-tenant']).toBe('acme');
+    expect(seen[0]['x-signature']).toBeUndefined();
+    expect(seen[0]['x-license']).toBeUndefined();
+    expect(seen[0]['x-tenant']).toBeUndefined();
     expect(seen[0]['user-agent']).toBe('Googlebot');
 
     seen.length = 0;
@@ -231,6 +291,93 @@ describe('fetcher SSRF and credential handling (local servers)', () => {
     await fetchPage(`${originUrl}/same`, { ...opts, credentialHosts: new Set(['example.com']) });
     expect(seen[0].cookie).toBeUndefined();
     expect(seen[0]['x-tenant']).toBeUndefined();
+  });
+});
+
+describe('fetcher credentials across hosts of one site (fake DNS)', () => {
+  // One server answers every name; fake DNS points acme.test and its
+  // subdomains at it, so the redirect keeps the port and only the host moves.
+  let server: Server;
+  let port = 0;
+  const seen: { host: string; headers: IncomingHttpHeaders }[] = [];
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      const host = (req.headers.host || '').split(':')[0];
+      seen.push({ host, headers: req.headers });
+      const to = new URL(req.url || '/', 'http://x').searchParams.get('to');
+      if (to) {
+        res.writeHead(302, { Location: `http://${to}:${port}/landing` });
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+      }
+      res.end();
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    port = (server.address() as AddressInfo).port;
+    setDnsLookupForTests((hostname, _opts, cb) => {
+      if (hostname === 'acme.test' || hostname.endsWith('.acme.test') || hostname === 'other.test') {
+        return cb(null, [{ address: '127.0.0.1', family: 4 }]);
+      }
+      cb(Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }), []);
+    });
+  });
+
+  afterAll(() => {
+    setDnsLookupForTests(null);
+    server.close();
+  });
+
+  const opts = (credentialHosts?: ReadonlySet<string>) => ({
+    userAgent: 't', cookies: 'sid=1', credentialHosts,
+    customHeaders: { Authorization: 'Bearer t', 'X-Signature': 'sig' },
+  });
+  const landing = () => seen[seen.length - 1];
+
+  it('does not forward credentials to a subdomain (tenant / takeover) of the credential host', async () => {
+    setAllowPrivateNetworks(true);
+    for (const hosts of [undefined, credentialHostSet(['acme.test'])]) {
+      seen.length = 0;
+      const page = await fetchPage(`http://acme.test:${port}/?to=attacker.acme.test`, opts(hosts));
+      expect(page.statusCode).toBe(200);
+      expect(seen[0].headers.cookie).toBe('sid=1');
+      expect(landing().host).toBe('attacker.acme.test');
+      expect(landing().headers.cookie).toBeUndefined();
+      expect(landing().headers.authorization).toBeUndefined();
+      expect(landing().headers['x-signature']).toBeUndefined();
+
+      seen.length = 0;
+      await fetchHead(`http://acme.test:${port}/?to=attacker.acme.test`, opts(hosts));
+      expect(landing().headers.cookie).toBeUndefined();
+      expect(landing().headers['x-signature']).toBeUndefined();
+    }
+  });
+
+  it('keeps credentials on an apex -> www move and to another host the user named', async () => {
+    setAllowPrivateNetworks(true);
+    seen.length = 0;
+    await fetchPage(`http://acme.test:${port}/?to=www.acme.test`, opts(credentialHostSet(['acme.test'])));
+    expect(landing().host).toBe('www.acme.test');
+    expect(landing().headers.cookie).toBe('sid=1');
+    expect(landing().headers['x-signature']).toBe('sig');
+
+    seen.length = 0;
+    await fetchPage(`http://acme.test:${port}/?to=other.test`, opts(credentialHostSet(['acme.test', 'other.test'])));
+    expect(landing().headers.cookie).toBe('sid=1');
+
+    seen.length = 0;
+    await fetchPage(`http://acme.test:${port}/?to=other.test`, opts(credentialHostSet(['acme.test'])));
+    expect(landing().headers.cookie).toBeUndefined();
+  });
+
+  it('never sends credentials to a first-hop host outside the named ones, www twin aside', async () => {
+    setAllowPrivateNetworks(true);
+    seen.length = 0;
+    await fetchPage(`http://shop.acme.test:${port}/`, opts(credentialHostSet(['acme.test'])));
+    expect(seen[0].headers.cookie).toBeUndefined();
+    seen.length = 0;
+    await fetchPage(`http://www.acme.test:${port}/`, opts(credentialHostSet(['acme.test'])));
+    expect(seen[0].headers.cookie).toBe('sid=1');
   });
 });
 

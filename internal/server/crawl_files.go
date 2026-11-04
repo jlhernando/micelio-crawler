@@ -27,7 +27,7 @@ func (m *CrawlManager) DeleteCrawl(id string) (bool, error) {
 	case m.active != nil && m.active.ID == id:
 		m.mu.Unlock()
 		return false, fmt.Errorf("crawl %s is running: cancel it first", id)
-	case m.jobHolds[id] > 0:
+	case m.jobHolds[id] > m.softHolds[id]:
 		m.mu.Unlock()
 		return false, fmt.Errorf("%w: crawl %s is still being imported or analysed, try again when it ends", ErrCrawlBusy, id)
 	case m.deleting[id]:
@@ -54,6 +54,7 @@ func (m *CrawlManager) DeleteCrawl(id string) (bool, error) {
 		return deleted, err
 	}
 	m.mu.Lock()
+	m.cancelDeferredLocked(id) // its external check and link intelligence
 	if old := m.results[id]; old != nil && old.loadCancel != nil {
 		old.loadCancel()
 	}
@@ -64,6 +65,15 @@ func (m *CrawlManager) DeleteCrawl(id string) (bool, error) {
 			m.resultOrder = append(m.resultOrder[:i], m.resultOrder[i+1:]...)
 			break
 		}
+	}
+	if job != nil && m.jobHolds[id] > 0 {
+		// Cancelled deferred analysis may still read the crawl DB: remove
+		// it when its hold ends (holdJobLocked's release).
+		if m.pendingRemove == nil {
+			m.pendingRemove = map[string]string{}
+		}
+		m.pendingRemove[id] = job.DBPath
+		job = nil
 	}
 	m.mu.Unlock()
 	if job != nil {
@@ -98,10 +108,40 @@ func (m *CrawlManager) holdJobLocked(id string) func() {
 	return func() {
 		once.Do(func() {
 			m.mu.Lock()
+			var remove string
 			if m.jobHolds[id]--; m.jobHolds[id] <= 0 {
 				delete(m.jobHolds, id)
+				remove = m.pendingRemove[id]
+				delete(m.pendingRemove, id)
 			}
 			m.mu.Unlock()
+			if remove != "" {
+				m.store.removeCrawlFile(remove)
+			}
+		})
+	}
+}
+
+// retainSoft is retainJob for work DeleteCrawl cancels instead of waiting
+// for (deferred analysis): the crawl can be deleted while it runs, and its
+// DB file is removed when the work ends.
+func (m *CrawlManager) retainSoft(id string) func() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.softHolds == nil {
+		m.softHolds = map[string]int{}
+	}
+	m.softHolds[id]++
+	release := m.holdJobLocked(id)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.mu.Lock()
+			if m.softHolds[id]--; m.softHolds[id] <= 0 {
+				delete(m.softHolds, id)
+			}
+			m.mu.Unlock()
+			release()
 		})
 	}
 }

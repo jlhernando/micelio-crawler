@@ -13,17 +13,16 @@ import (
 
 // checkExternalLinks runs the post-crawl external link check for a dashboard
 // crawl, emitting "external_check" phase progress so the Monitor shows activity.
-// When the crawl was gracefully stopped its context is already cancelled, so
-// the manager context is used instead (same rule as post-crawl analysis).
-func (m *CrawlManager) checkExternalLinks(ctx context.Context, crawlID string, cfg types.CrawlConfig, links map[string][]string, stopping bool) *crawler.ExternalCheckSummary {
-	checkCtx := ctx
-	if stopping {
-		checkCtx = m.ctx
-	}
+// ctx is the crawl's deferred-analysis context (startDeferred): deleting or
+// restarting the crawl cancels the check, and no progress is reported after.
+func (m *CrawlManager) checkExternalLinks(ctx context.Context, crawlID string, cfg types.CrawlConfig, links map[string][]string) *crawler.ExternalCheckSummary {
 	start := time.Now()
 	// Runs after the results are shown, so progress goes to the Results page
 	// (analysis_progress) and to /stats for a page opened mid-check.
 	emitPhase := func(loaded, total int) {
+		if ctx.Err() != nil {
+			return // a restarted run with the same ID owns the progress now
+		}
 		m.mu.RLock()
 		res := m.results[crawlID]
 		m.mu.RUnlock()
@@ -47,7 +46,7 @@ func (m *CrawlManager) checkExternalLinks(ctx context.Context, crawlID string, c
 		emitMu   sync.Mutex
 		lastEmit time.Time
 	)
-	summary := crawler.CheckExternalLinks(checkCtx, links, crawler.ExternalCheckOptions{
+	summary := crawler.CheckExternalLinks(ctx, links, crawler.ExternalCheckOptions{
 		UserAgent:   cfg.UserAgent,
 		Concurrency: crawler.DefaultExternalCheckConcurrency,
 		Timeout:     crawler.DefaultExternalCheckTimeout,

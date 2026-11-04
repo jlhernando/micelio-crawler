@@ -43,11 +43,15 @@ FROM alpine:3.22
 ARG WITH_CHROMIUM=false
 RUN apk add --no-cache ca-certificates tzdata \
     && if [ "$WITH_CHROMIUM" = "true" ]; then apk add --no-cache chromium nss freetype harfbuzz ttf-freefont; fi \
-    && adduser -D -h /home/micelio micelio
+    && adduser -D -h /home/micelio micelio \
+    && install -d -o micelio -g micelio -m 700 /home/micelio/.micelio
 COPY --from=build /out/micelio /usr/local/bin/micelio
 USER micelio
 WORKDIR /home/micelio
 # UI state (crawl history, settings) lives in ~/.micelio: mount a volume there.
+# The directory is created above owned by micelio, so a fresh named or
+# anonymous volume starts writable for the non-root user (Docker copies the
+# mount point's owner). A bind mount must be writable by the micelio user (uid 1000).
 VOLUME ["/home/micelio/.micelio"]
 EXPOSE 3100
 ENTRYPOINT ["micelio"]

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/micelio/micelio/internal/analysis"
@@ -41,26 +42,34 @@ func registerPageRoute(mux *http.ServeMux, manager *CrawlManager) {
 		if len(page.InternalLinks) > 0 {
 			outlinks = append(outlinks, page.InternalLinks...)
 		}
+		out.InternalLinks = nil
+		// Encode while holding the lock: the copy still shares maps, slices
+		// and pointers that deferred analysis swaps and strips under it.
+		pageJSON, err := json.Marshal(&out)
 		inlinks := page.Inlinks
 		if results.InlinkIndex != nil {
 			inlinks = results.InlinkIndex.Count(page.URL)
 		}
+		pageURL = page.URL
 		dbPath, graph := results.DBPath, results.Graph
 		results.mu.RUnlock()
+		if err != nil {
+			jsonError(w, "encode page: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 
 		// The crawl DB keeps every internal link; the graph only links
 		// between crawled pages, so it is the last resort.
 		if outlinks == nil && dbPath != "" {
-			outlinks = dbOutlinks(dbPath, page.URL)
+			outlinks = dbOutlinks(dbPath, pageURL)
 		}
 		if outlinks == nil {
-			outlinks = graphOutlinks(graph, page.URL)
+			outlinks = graphOutlinks(graph, pageURL)
 		}
 		if outlinks == nil {
 			outlinks = []string{}
 		}
-		out.InternalLinks = nil
-		jsonOK(w, map[string]interface{}{"page": &out, "outlinks": outlinks, "inlinkCount": inlinks})
+		jsonOK(w, map[string]interface{}{"page": json.RawMessage(pageJSON), "outlinks": outlinks, "inlinkCount": inlinks})
 	})
 }
 

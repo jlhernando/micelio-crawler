@@ -189,3 +189,48 @@ func TestDeleteCrawlBlocksNewWork(t *testing.T) {
 		t.Errorf("leftover state: holds %v deleting %v", m.jobHolds, m.deleting)
 	}
 }
+
+// Deferred analysis does not make a delete wait: the delete cancels it and
+// the crawl DB is removed when the analysis lets go of it. A hard hold
+// (import, crawl) still refuses the delete.
+func TestDeleteCrawlCancelsDeferredAndRemovesFileLater(t *testing.T) {
+	s := newTestStore(t)
+	m := newTestManager(t, s)
+	job, _ := s.CreateCrawlJob(map[string]interface{}{"seedUrl": "https://a.test/"})
+	if err := os.WriteFile(job.DBPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.UpdateCrawlJob(job.ID, map[string]interface{}{"status": "completed"})
+
+	ctx, done := m.startDeferred(job.ID)
+	soft := m.retainSoft(job.ID)
+	hard, err := m.holdJob(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.DeleteCrawl(job.ID); !errors.Is(err, ErrCrawlBusy) {
+		t.Errorf("delete with a hard hold = %v, want ErrCrawlBusy", err)
+	}
+	hard()
+
+	ok, err := m.DeleteCrawl(job.ID)
+	if err != nil || !ok {
+		t.Fatalf("delete during deferred analysis = %v, %v", ok, err)
+	}
+	if ctx.Err() == nil {
+		t.Error("deferred analysis not cancelled")
+	}
+	if _, err := os.Stat(job.DBPath); err != nil {
+		t.Errorf("crawl DB removed while deferred analysis still holds it: %v", err)
+	}
+	done()
+	soft()
+	if _, err := os.Stat(job.DBPath); !os.IsNotExist(err) {
+		t.Errorf("crawl DB kept after the last hold ended: %v", err)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.jobHolds)+len(m.softHolds)+len(m.pendingRemove) != 0 {
+		t.Errorf("leftover state: holds %v soft %v pending %v", m.jobHolds, m.softHolds, m.pendingRemove)
+	}
+}

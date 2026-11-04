@@ -119,12 +119,21 @@ type CrawlManager struct {
 	// analyzing holds crawls marked completed whose results are not cached
 	// yet (core analysis running). Guarded by mu.
 	analyzing map[string]bool
+	// deferred holds the cancel func of each crawl's background analysis
+	// (external link check, link intelligence), so deleting or restarting
+	// the crawl stops it. Guarded by mu.
+	deferred map[string]*deferredRun
 	// logQueue bounds concurrent and waiting log analyses (limits.go).
 	logQueue logQueue
 	// jobHolds counts work using each crawl's job or DB; deleting marks
 	// crawls DeleteCrawl is removing (crawl_files.go). Guarded by mu.
 	jobHolds map[string]int
 	deleting map[string]bool
+	// softHolds counts the jobHolds that DeleteCrawl may cancel (deferred
+	// analysis) instead of refusing; pendingRemove holds the crawl DB of a
+	// deleted crawl until its last hold ends. Guarded by mu.
+	softHolds     map[string]int
+	pendingRemove map[string]string
 }
 
 // NewCrawlManager creates a new crawl manager.
@@ -136,6 +145,7 @@ func NewCrawlManager(store *UiStore) *CrawlManager {
 		resultSize: make(map[string]int64),
 		loads:      newResultLoads(),
 		schedulers: make(map[string]*scheduler.Scheduler),
+		deferred:   make(map[string]*deferredRun),
 		ctx:        ctx,
 		cancel:     cancel,
 	}
@@ -231,6 +241,9 @@ func (m *CrawlManager) StartCrawl(crawlID string, config map[string]interface{})
 	}
 	release := m.holdJobLocked(crawlID)
 
+	// A resumed crawl reuses its ID: stop the old run's background analysis
+	// so it cannot write over the new run.
+	m.cancelDeferredLocked(crawlID)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.active = &ActiveCrawl{
 		ID:          crawlID,
@@ -266,6 +279,13 @@ func (m *CrawlManager) PauseCrawl(crawlID string) error {
 		return fmt.Errorf("no active crawl with id %s", crawlID)
 	}
 	m.active.pauseMu.Lock()
+	if m.active.pauseCh != nil {
+		// Already paused. A new channel would strand the workers waiting
+		// on the old one: ResumeCrawl only closes the current channel.
+		m.active.pauseMu.Unlock()
+		m.mu.Unlock()
+		return nil
+	}
 	m.active.Paused = true
 	m.active.pauseCh = make(chan struct{})
 	m.active.pauseMu.Unlock()
@@ -865,11 +885,11 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 
 	// Check if deferred analysis (link intelligence, embeddings) is needed
 	needsDeferred := crawlConfig.LinkIntelligence || (crawlConfig.Embeddings && crawlConfig.EmbeddingKey != "") || len(r.externalLinks) > 0
-	var checkExternal func() *crawler.ExternalCheckSummary
+	var checkExternal func(context.Context) *crawler.ExternalCheckSummary
 	if len(r.externalLinks) > 0 {
 		links := r.externalLinks
-		checkExternal = func() *crawler.ExternalCheckSummary {
-			return m.checkExternalLinks(m.ctx, crawlID, crawlConfig, links, true)
+		checkExternal = func(ctx context.Context) *crawler.ExternalCheckSummary {
+			return m.checkExternalLinks(ctx, crawlID, crawlConfig, links)
 		}
 	}
 
@@ -947,19 +967,24 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 	// Launch deferred analysis (link intelligence, embeddings) in background.
 	// Pass crawlStats directly to avoid JSON round-trip precision loss.
 	if needsDeferred {
-		// The crawl/import holding the job returns before this ends.
-		release := m.retainJob(crawlID)
+		// Its own context: deleting or restarting the crawl cancels it. The
+		// crawl context is not used, Stop & Analyze has already cancelled it.
+		// A soft hold keeps the crawl DB until it ends, without making
+		// DeleteCrawl wait (see DeleteCrawl).
+		deferCtx, deferDone := m.startDeferred(crawlID)
+		release := m.retainSoft(crawlID)
 		m.background.Add(1)
 		go func() {
 			defer m.background.Done()
 			defer release()
+			defer deferDone()
 			defer func() {
 				if intLinksClose != nil {
 					intLinksClose()
 				}
 			}()
 			coreSnap.save(dbPath)
-			m.runDeferredAnalysis(crawlID, pages, postCfg, crawlStats, dbPath, checkExternal)
+			m.runDeferredAnalysis(deferCtx, crawlID, newResult, postCfg, crawlStats, dbPath, checkExternal)
 		}()
 	} else {
 		if intLinksClose != nil {
@@ -978,10 +1003,98 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 
 }
 
+// deferredRun is the background analysis of one crawl run.
+type deferredRun struct{ cancel context.CancelFunc }
+
+// startDeferred returns the context of a crawl's background analysis and a
+// func to call when it ends. A previous run of the same crawl is cancelled.
+func (m *CrawlManager) startDeferred(crawlID string) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(m.ctx)
+	run := &deferredRun{cancel: cancel}
+	m.mu.Lock()
+	m.cancelDeferredLocked(crawlID)
+	if m.deferred == nil {
+		m.deferred = make(map[string]*deferredRun)
+	}
+	m.deferred[crawlID] = run
+	m.mu.Unlock()
+	return ctx, func() {
+		m.mu.Lock()
+		if m.deferred[crawlID] == run {
+			delete(m.deferred, crawlID)
+		}
+		m.mu.Unlock()
+		cancel()
+	}
+}
+
+// cancelDeferredLocked stops the background analysis of a crawl that is
+// deleted or started again. Caller holds m.mu.
+func (m *CrawlManager) cancelDeferredLocked(crawlID string) {
+	if run := m.deferred[crawlID]; run != nil {
+		run.cancel()
+		delete(m.deferred, crawlID)
+	}
+}
+
+// deferredPages returns the pages deferred analysis works on. Link
+// intelligence clears link slices, swaps pages for small stubs and writes
+// scores; doing that on the cached pages raced with HTTP handlers reading
+// them. The copies share the heavy data (read only) and own every field the
+// analysis writes, including the structs it changes through pointers.
+func deferredPages(pages []*types.PageData) []*types.PageData {
+	work := make([]*types.PageData, len(pages))
+	for i, p := range pages {
+		cp := *p
+		if p.Topicality != nil {
+			t := *p.Topicality
+			cp.Topicality = &t
+		}
+		if p.AutoSegments != nil {
+			a := *p.AutoSegments
+			cp.AutoSegments = &a
+		}
+		if p.LinkIntelligence != nil {
+			li := *p.LinkIntelligence
+			cp.LinkIntelligence = &li
+		}
+		work[i] = &cp
+	}
+	return work
+}
+
+// releaseLinkData frees what link intelligence would free on the cached
+// pages: link slices (counts kept) and the fields stripped for the cache.
+// The analysis copies keep what they need. Caller holds the result lock.
+func releaseLinkData(pages []*types.PageData) {
+	for _, p := range pages {
+		if len(p.InternalLinks) > 0 {
+			p.InternalLinkCount = len(p.InternalLinks)
+		}
+		if len(p.ExternalLinks) > 0 {
+			p.ExternalLinkCount = len(p.ExternalLinks)
+		}
+		p.InternalLinks = nil
+		p.ExternalLinks = nil
+	}
+	stripPagesForCache(pages)
+}
+
 // runDeferredAnalysis runs link intelligence and embeddings in the background.
 // Updates cached results and persists stats when complete.
 // Receives crawlStats directly from RunCoreAnalysis to avoid JSON round-trip.
-func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageData, cfg analysis.PostProcessConfig, crawlStats types.CrawlStats, dbPath string, checkExternal func() *crawler.ExternalCheckSummary) {
+// own is the cached result holding the pages; they change only under its
+// write lock. ctx is cancelled when the crawl is deleted or restarted: the
+// run then stops without publishing anything.
+func (m *CrawlManager) runDeferredAnalysis(ctx context.Context, crawlID string, own *CrawlResults, cfg analysis.PostProcessConfig, crawlStats types.CrawlStats, dbPath string, checkExternal func(context.Context) *crawler.ExternalCheckSummary) {
+	pages := own.Pages
+	// finish strips the cached pages and clears the pending flag.
+	finish := func() {
+		own.mu.Lock()
+		stripPagesForCache(pages)
+		own.AnalysisPending = false
+		own.mu.Unlock()
+	}
 	// Panic recovery: if analysis panics, clear pending flag so UI doesn't hang.
 	defer func() {
 		if r := recover(); r != nil {
@@ -991,18 +1104,30 @@ func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageDa
 				res.AnalysisPending = false
 			}
 			m.mu.Unlock()
-			stripPagesForCache(pages)
+			finish()
 			m.emit(ProgressEvent{
 				CrawlID: crawlID, Type: "analysis_complete",
 				Data: map[string]interface{}{"crawlId": crawlID, "error": fmt.Sprintf("%v", r)},
 			})
 		}
 	}()
+	stale := func() bool {
+		if ctx.Err() == nil {
+			return false
+		}
+		log.Printf("deferred analysis for crawl %s cancelled (crawl deleted or restarted)", crawlID)
+		finish()
+		return true
+	}
 
 	// External links first: their results are short and users wait for them.
 	// Stats are saved and the Results page refreshed as soon as they finish.
 	if checkExternal != nil {
-		if sum := checkExternal(); sum != nil {
+		sum := checkExternal(ctx)
+		if stale() {
+			return
+		}
+		if sum != nil {
 			for _, ext := range sum.Broken {
 				if ext.StatusCode >= 400 || ext.Error != "" {
 					crawlStats.BrokenExternalLinks = append(crawlStats.BrokenExternalLinks, ext)
@@ -1029,6 +1154,9 @@ func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageDa
 
 	// Set LI phase progress callback for granular WebSocket updates
 	cfg.OnLIPhase = func(phase string) {
+		if ctx.Err() != nil {
+			return
+		}
 		m.emit(ProgressEvent{
 			CrawlID: crawlID, Type: "analysis_progress",
 			Data: map[string]interface{}{"crawlId": crawlID, "phase": "li_" + phase},
@@ -1036,21 +1164,38 @@ func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageDa
 	}
 
 	// Persist stats after each LI phase so completed phases survive a crash.
-	cfg.OnPersist = func() { m.publishStats(crawlID, crawlStats) }
+	cfg.OnPersist = func() {
+		if ctx.Err() == nil {
+			m.publishStats(crawlID, crawlStats)
+		}
+	}
+
+	// The analysis runs on copies; the cached pages drop now what link
+	// intelligence would drop, so memory peaks as before.
+	work := deferredPages(pages)
+	if cfg.LinkIntelligence {
+		own.mu.Lock()
+		releaseLinkData(pages)
+		own.mu.Unlock()
+	}
 
 	// Run deferred analysis (link intelligence + embeddings)
-	graph := analysis.RunDeferredAnalysis(m.ctx, pages, cfg, &crawlStats)
+	graph := analysis.RunDeferredAnalysis(ctx, work, cfg, &crawlStats)
 	// Link intelligence adds graph in-degree; refresh segment inlink averages.
-	refreshAutoSegmentStats(pages, &crawlStats)
+	refreshAutoSegmentStats(work, &crawlStats)
+	if stale() {
+		return
+	}
 	// Store HITS scores with PageRank (the graph was stored after core analysis).
 	if dbPath != "" && graph != nil {
-		snapshotAnalysis(pages, graph, false).save(dbPath)
+		snapshotAnalysis(work, graph, false).save(dbPath)
 	}
 
 	// Convert updated stats to map for JSON API
 	updatedData, err := json.Marshal(crawlStats)
 	if err != nil {
 		log.Printf("store: marshal deferred stats for crawl %s: %v", crawlID, err)
+		finish()
 		return
 	}
 	var updatedMap map[string]interface{}
@@ -1063,22 +1208,30 @@ func (m *CrawlManager) runDeferredAnalysis(crawlID string, pages []*types.PageDa
 		log.Printf("store: persist deferred stats for crawl %s: %v", crawlID, persistErr)
 	}
 
-	// Lock the result during strip+update to prevent HTTP handlers from
-	// reading partially-stripped pages.
+	// Swap in the analysed pages and strip them under the write lock, so
+	// HTTP handlers never read a page while it changes.
 	m.mu.RLock()
 	res := m.results[crawlID]
 	m.mu.RUnlock()
-	if res != nil {
-		res.mu.Lock()
-		stripPagesForCache(pages)
-		res.Stats = updatedMap
+	update := func(r *CrawlResults) {
+		r.Stats = updatedMap
 		if graph != nil {
-			res.Graph = graph
+			r.Graph = graph
 		}
-		res.AnalysisPending = false
+		r.AnalysisPending = false
+	}
+	own.mu.Lock()
+	copy(pages, work)
+	stripPagesForCache(pages)
+	own.AnalysisPending = false
+	if res == own {
+		update(own)
+	}
+	own.mu.Unlock()
+	if res != nil && res != own { // evicted and reloaded meanwhile
+		res.mu.Lock()
+		update(res)
 		res.mu.Unlock()
-	} else {
-		stripPagesForCache(pages)
 	}
 
 	// Release deferred analysis memory

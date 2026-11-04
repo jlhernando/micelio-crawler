@@ -1,5 +1,7 @@
 /** Fetch wrapper for REST API calls */
 
+import { markUnauthorized } from './stores/auth.svelte';
+
 export interface UpdateStatus {
   current: string;
   latest?: string;
@@ -73,6 +75,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
   const res = await fetch(`${BASE}${path}`, opts);
   if (!res.ok) {
+    markUnauthorized(res.status);
     const err = await res.json().catch(() => ({ error: res.statusText }));
     const msg = typeof err.error === 'string' ? err.error : err.error?.message;
     throw new Error(msg || `API error: ${res.status}`);
@@ -265,6 +268,7 @@ export const api = {
       xhr.setRequestHeader('Content-Type', 'application/octet-stream');
       xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100)); };
       xhr.onload = () => {
+        markUnauthorized(xhr.status);
         let body: { error?: string | { message?: string } } & Record<string, unknown> = {};
         try { body = JSON.parse(xhr.responseText); } catch { /* not JSON */ }
         if (xhr.status >= 200 && xhr.status < 300) resolve(body as unknown as { id: string; seedUrl: string; status: string });
@@ -281,6 +285,7 @@ export const api = {
     if (format) form.append('format', format);
     const res = await fetch(`${BASE}/api/logs/upload`, { method: 'POST', body: form });
     if (!res.ok) {
+      markUnauthorized(res.status);
       const err = await res.json().catch(() => ({ error: { message: res.statusText } }));
       throw new Error(err.error?.message || `Upload failed: ${res.status}`);
     }

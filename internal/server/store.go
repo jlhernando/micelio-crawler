@@ -64,14 +64,24 @@ type UiStore struct {
 	// allows concurrent reads + one writer across connections.
 	urlConn *sqlite.Conn
 	urlMu   sync.Mutex
+	// unlock releases the dashboard's lock on uiDir (NewUiStore only).
+	unlock func()
 }
 
-// NewUiStore opens or creates the UI database at ~/.micelio/ui/.
-func NewUiStore() (*UiStore, error) {
+// NewUiStore opens or creates the UI database at ~/.micelio/ui/ for the
+// dashboard server. It fails when another dashboard already serves that
+// folder: owner (pid and address) is shown to the next one that tries.
+func NewUiStore(owner string) (*UiStore, error) {
 	s, err := OpenUiStore()
 	if err != nil {
 		return nil, err
 	}
+	unlock, err := lockUIDir(s.uiDir, owner)
+	if err != nil {
+		s.Close()
+		return nil, err
+	}
+	s.unlock = unlock
 	s.recoverStaleJobs()
 	s.removeOrphanCrawlFiles()
 	return s, nil
@@ -675,7 +685,12 @@ func (s *UiStore) DeleteCrawlJobsByDBPath(keepID, dbPath string) (int, error) {
 
 // Close closes the database connection.
 func (s *UiStore) Close() error {
-	return s.conn.Close()
+	err := s.conn.Close()
+	if s.unlock != nil {
+		s.unlock()
+		s.unlock = nil
+	}
+	return err
 }
 
 func rowToJob(stmt *sqlite.Stmt) *CrawlJob {

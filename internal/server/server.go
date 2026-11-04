@@ -133,7 +133,7 @@ func StartUIServerWithOptions(opts ServerOptions, dashboardFS fs.FS) error {
 	if !IsLoopbackHost(host) && authToken == "" {
 		log.Println("WARNING: --insecure-no-auth: API endpoints are unauthenticated on " + host)
 	}
-	store, err := NewUiStore()
+	store, err := NewUiStore(fmt.Sprintf("pid %d, http://%s", os.Getpid(), net.JoinHostPort(host, strconv.Itoa(port))))
 	if err != nil {
 		return fmt.Errorf("init store: %w", err)
 	}

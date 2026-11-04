@@ -452,18 +452,16 @@ func copyCrawlDB(src, dst string) error {
 }
 
 // importedConfigMap turns the stored crawl config into the dashboard's job
-// config. Credentials are dropped: the imported crawl does not need them.
+// config. Credentials are dropped at any depth (customHeaders such as
+// Authorization, cookies, keys, proxy passwords): the imported crawl does not
+// need them.
 func importedConfigMap(cfg *types.CrawlConfig, name string) map[string]interface{} {
 	data, _ := json.Marshal(cfg)
 	m := map[string]interface{}{}
 	json.Unmarshal(data, &m)
-	for k := range m {
-		lk := strings.ToLower(k)
-		if strings.Contains(lk, "key") || strings.Contains(lk, "token") || strings.Contains(lk, "secret") ||
-			strings.Contains(lk, "password") || strings.Contains(lk, "credential") || lk == "cookies" {
-			delete(m, k)
-		}
-	}
+	dropConfigSecrets(m)
+	delete(m, "customHeaders")
+	delete(m, "proxy")
 	delete(m, "dbPath")
 	delete(m, "outputPath")
 	if cfg.SeedURL == "" {
@@ -534,6 +532,6 @@ func registerImportRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlMana
 			jsonError(w, err.Error(), code)
 			return
 		}
-		jsonOK(w, job)
+		jsonOK(w, redactedJob(job))
 	})
 }

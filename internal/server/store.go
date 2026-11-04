@@ -121,6 +121,12 @@ func OpenUiStore() (*UiStore, error) {
 	sqlitex.Execute(urlConn, "PRAGMA synchronous = NORMAL;", nil)
 	sqlitex.Execute(urlConn, "PRAGMA cache_size = -64000;", nil)
 
+	// Settings and crawl configs hold credentials (SMTP password, API keys,
+	// cookies, auth headers): only the owner may read the database.
+	for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		os.Chmod(p, 0o600)
+	}
+
 	s := &UiStore{conn: conn, urlConn: urlConn, uiDir: uiDir, crawlDir: crawlDir}
 	if err := s.migrate(); err != nil {
 		conn.Close()

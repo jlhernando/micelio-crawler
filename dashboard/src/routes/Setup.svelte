@@ -232,10 +232,19 @@
       for (const c of data.crawls) {
         if (!c.seedUrl) continue;
         try {
-          const d = new URL(c.seedUrl).hostname.replace(/^www\./, '');
+          const u = new URL(c.seedUrl);
+          const d = u.hostname.replace(/^www\./, '');
           if (!seen.has(d)) {
             seen.add(d);
-            sites.push({ domain: d, url: c.seedUrl });
+            // The API masks URL passwords; a chip fills in the URL without
+            // credentials (type them again if the site needs them).
+            let chipUrl = c.seedUrl;
+            if (u.username || u.password) {
+              u.username = '';
+              u.password = '';
+              chipUrl = u.toString();
+            }
+            sites.push({ domain: d, url: chipUrl });
           }
         } catch { /* skip invalid URLs */ }
         if (sites.length >= 8) break;

@@ -158,9 +158,12 @@ func New(cfg Config) (*Scheduler, error) {
 		return nil, fmt.Errorf("get home dir: %w", err)
 	}
 	stateDir := filepath.Join(homeDir, ".micelio", "schedules")
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+	// State files hold the crawl config (cookies, auth headers, API keys)
+	// and the webhook URL: owner only.
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create state dir: %w", err)
 	}
+	os.Chmod(stateDir, 0o700)
 
 	if cfg.Source == "" {
 		cfg.Source = "cli"
@@ -516,7 +519,8 @@ func (s *Scheduler) saveState() {
 	}
 	path := filepath.Join(s.stateDir, stateCopy.ID+".json")
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+	os.Remove(tmpPath) // WriteFile keeps the mode of an existing file
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
 		log.Printf("[scheduler] write state error: %v", err)
 		return
 	}

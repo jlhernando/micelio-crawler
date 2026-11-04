@@ -100,6 +100,10 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if err := restoreFromCrawl(store, config); err != nil { // Recrawl sends back masked secrets
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		if err := sanitizeCrawlConfig(config); err != nil {
 			jsonError(w, err.Error(), http.StatusBadRequest)
 			return
@@ -132,6 +136,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, "crawl not found", http.StatusNotFound)
 			return
 		}
+		job = redactedJob(job)
 		// A crawl is marked completed before its analysis runs: "analyzing"
 		// says its results are not available yet (crawls and imports).
 		analyzing := job.Status == "completed" && manager.IsAnalyzing(id)
@@ -184,6 +189,15 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			configOverride, err = readJSON(r)
 			if err != nil {
 				jsonError(w, "invalid request body", http.StatusBadRequest)
+				return
+			}
+			// Resume with edits sends back the masked secrets it read.
+			var orig map[string]interface{}
+			if old, err := store.GetCrawlJob(r.PathValue("id")); err == nil && old != nil {
+				orig = old.Config
+			}
+			if err := restoreConfigSecrets(configOverride, orig); err != nil {
+				jsonError(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			if err := sanitizeCrawlConfig(configOverride); err != nil {
@@ -725,7 +739,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		jsonOK(w, map[string]interface{}{"crawls": jobs, "total": len(jobs)})
+		jsonOK(w, map[string]interface{}{"crawls": redactedJobs(jobs), "total": len(jobs)})
 	})
 
 	mux.HandleFunc("POST /api/crawl/diff", func(w http.ResponseWriter, r *http.Request) {
@@ -772,6 +786,9 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		for i, p := range presets {
+			presets[i] = redactedPreset(p)
+		}
 		jsonOK(w, presets)
 	})
 
@@ -792,7 +809,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		jsonOK(w, preset)
+		jsonOK(w, redactedPreset(preset))
 	})
 
 	mux.HandleFunc("DELETE /api/presets/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -861,7 +878,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		result := make([]scheduleWithMeta, len(schedules))
 		for i, s := range schedules {
 			result[i] = scheduleWithMeta{
-				State:       s,
+				State:       redactedSchedule(s),
 				Description: scheduler.DescribeCron(s.Cron),
 				Active:      manager.IsSchedulerActive(s.ID),
 			}
@@ -1710,6 +1727,8 @@ func validateSettings(input map[string]interface{}) (valid map[string]interface{
 var secretSettingKeys = map[string]bool{
 	"psiKey": true, "aiKey": true, "cruxKey": true, "plausibleApiKey": true,
 	"alertEmailPassword": true, "alertTelegramToken": true,
+	// Webhook URLs: whoever has one can post to the channel.
+	"alertSlackUrl": true, "alertWebhookUrl": true,
 }
 
 // maskSecrets replaces secret values with a masked placeholder.

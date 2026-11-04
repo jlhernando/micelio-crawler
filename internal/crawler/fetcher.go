@@ -234,6 +234,9 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 	redirectChain := make([]types.RedirectHop, 0)
 	currentURL := rawURL
 	retries := 0
+	// Cookies and custom headers go to rawURL's host only, not to another
+	// site a redirect leads to.
+	credScope, _ := url.Parse(rawURL)
 
 	for {
 		req, err := newRequest(ctx, http.MethodGet, currentURL)
@@ -247,7 +250,7 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 			}
 		}
 
-		setHeaders(req, opts)
+		setHeadersFor(req, opts, credentialsAllowed(credScope, req.URL))
 
 		resp, err := clock.do(client, req, opts.Pace)
 		if err != nil {
@@ -418,6 +421,7 @@ func FetchHead(ctx context.Context, rawURL string, opts FetchOptions) types.Head
 	redirectChain := make([]types.RedirectHop, 0)
 	currentURL := rawURL
 	retries := 0
+	credScope, _ := url.Parse(rawURL)
 
 	for {
 		req, err := newRequest(ctx, http.MethodHead, currentURL)
@@ -431,7 +435,7 @@ func FetchHead(ctx context.Context, rawURL string, opts FetchOptions) types.Head
 			}
 		}
 
-		setHeaders(req, opts)
+		setHeadersFor(req, opts, credentialsAllowed(credScope, req.URL))
 
 		resp, err := clock.do(client, req, opts.Pace)
 		if err != nil {
@@ -620,6 +624,36 @@ func isChromeUA(ua string) bool {
 }
 
 func setHeaders(req *http.Request, opts FetchOptions) {
+	setHeadersFor(req, opts, true)
+}
+
+// credentialsAllowed reports whether the crawl's cookies and custom headers
+// (Authorization, X-Api-Key...), meant for the site at from, may be sent to
+// to. Like net/http on redirects: same host or a subdomain of it, plus the
+// www/apex pair (www.example.com <-> example.com, a common first redirect),
+// and never after a downgrade from https to http.
+func credentialsAllowed(from, to *url.URL) bool {
+	if from == nil || to == nil {
+		return false
+	}
+	if strings.EqualFold(from.Scheme, "https") && !strings.EqualFold(to.Scheme, "https") {
+		return false
+	}
+	fh, th := strings.ToLower(from.Hostname()), strings.ToLower(to.Hostname())
+	if fh == "" {
+		return false
+	}
+	return th == fh || strings.HasSuffix(th, "."+fh) ||
+		strings.TrimPrefix(th, "www.") == strings.TrimPrefix(fh, "www.")
+}
+
+// setHeadersFor sets the request headers. With creds false the custom
+// headers and cookies are left out: a redirect or a reference led to another
+// site, which must not receive the crawl's credentials.
+func setHeadersFor(req *http.Request, opts FetchOptions, creds bool) {
+	if !creds {
+		opts.CustomHeaders, opts.Cookies = nil, ""
+	}
 	req.Header.Set("User-Agent", opts.UserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")

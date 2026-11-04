@@ -139,6 +139,7 @@ var overlayFields = map[string]copyField{
 	"no-db":            func(d, s *types.CrawlConfig) { d.NoDB = s.NoDB },
 	"resume":           func(d, s *types.CrawlConfig) { d.Resume = s.Resume },
 	"no-soft404-probe": func(d, s *types.CrawlConfig) { d.NoSoft404Probe = s.NoSoft404Probe },
+	"no-agent-check":   func(d, s *types.CrawlConfig) { d.NoAgentCheck = s.NoAgentCheck },
 
 	"adaptive-rate":     func(d, s *types.CrawlConfig) { d.AdaptiveRate = s.AdaptiveRate },
 	"delay-factor":      func(d, s *types.CrawlConfig) { d.DelayFactor = s.DelayFactor },

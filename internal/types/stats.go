@@ -111,6 +111,7 @@ type NonDescriptiveAnchor struct {
 type HreflangIssue struct {
 	URL   string `json:"url"`
 	Issue string `json:"issue"`
+	Type  string `json:"type,omitempty"` // Hreflang* issue id; details in CrawlStats.Hreflang
 }
 
 // NearDuplicateGroup is a group of near-duplicate URLs (SimHash).
@@ -186,8 +187,10 @@ type CrawlStats struct {
 	NearDuplicateGroups      []NearDuplicateGroup   `json:"nearDuplicateGroups"`
 	SegmentStats             []SegmentStat          `json:"segmentStats"`
 	HreflangIssues           []HreflangIssue        `json:"hreflangIssues"`
+	Hreflang                 *HreflangStats         `json:"hreflang,omitempty"`
 	Soft404Pages             []string               `json:"soft404Pages"`
 	Soft404Stats             *Soft404Stats          `json:"soft404Stats,omitempty"`
+	AgentReadiness           *AgentReadinessStats   `json:"agentReadiness,omitempty"`
 	OrphanPages              []string               `json:"orphanPages"` // capped at StatsListCap; see TotalOrphanPages
 	TotalOrphanPages         int                    `json:"totalOrphanPages,omitempty"`
 	OrphanMethodology        string                 `json:"orphanMethodology,omitempty"` // "reporter" (basic) or "graph" (redirect-aware via link intelligence)

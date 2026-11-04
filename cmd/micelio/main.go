@@ -97,6 +97,7 @@ func main() {
 		headCmd(),
 		uiCmd(),
 		robotsTestCmd(),
+		agentCheckCmd(),
 		verifyBotCmd(),
 		generateSitemapCmd(),
 		diffCmd(),
@@ -1463,6 +1464,8 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 			ppCfg.SitemapEntries = result.DiscoveredSitemapURLs
 		}
 		ppCfg.Soft404Probes = result.Soft404Probes
+		ppCfg.SitemapHreflang = result.SitemapHreflang
+		ppCfg.AgentReadiness = result.AgentReadiness
 		if result.InternalLinksIter != nil {
 			ppCfg.InternalLinksIter = result.InternalLinksIter
 		}

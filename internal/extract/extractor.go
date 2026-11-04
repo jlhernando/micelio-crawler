@@ -104,6 +104,7 @@ func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
 
 	// Hreflang
 	page.Hreflang = extractHreflang(doc)
+	page.Hreflang = append(page.Hreflang, HreflangFromLinkHeader(opts.Headers["link"])...)
 
 	// Structured data
 	page.StructuredData = extractStructuredData(doc)
@@ -493,6 +494,68 @@ func extractHreflang(doc *goquery.Document) []types.HreflangEntry {
 		}
 	})
 	return entries
+}
+
+// HreflangFromLinkHeader reads hreflang alternates from an HTTP Link header:
+// <https://example.com/de/>; rel="alternate"; hreflang="de", <...>; ...
+func HreflangFromLinkHeader(header string) []types.HreflangEntry {
+	if header == "" || !strings.Contains(strings.ToLower(header), "hreflang") {
+		return nil
+	}
+	var out []types.HreflangEntry
+	for _, part := range splitLinkHeader(header) {
+		open, close := strings.Index(part, "<"), strings.Index(part, ">")
+		if open < 0 || close < open {
+			continue
+		}
+		href := strings.TrimSpace(part[open+1 : close])
+		var rel, lang string
+		for _, param := range strings.Split(part[close+1:], ";") {
+			k, v, ok := strings.Cut(strings.TrimSpace(param), "=")
+			if !ok {
+				continue
+			}
+			v = strings.Trim(strings.TrimSpace(v), `"'`)
+			switch strings.ToLower(strings.TrimSpace(k)) {
+			case "rel":
+				rel = strings.ToLower(v)
+			case "hreflang":
+				lang = v
+			}
+		}
+		if lang == "" || !strings.Contains(" "+rel+" ", " alternate ") {
+			continue
+		}
+		out = append(out, types.HreflangEntry{Lang: lang, Href: href, Source: types.HreflangSourceHeader})
+	}
+	return out
+}
+
+// splitLinkHeader splits a Link header on the commas between links, not
+// those inside <...> or quotes.
+func splitLinkHeader(h string) []string {
+	var parts []string
+	inURL, inQuote, start := false, false, 0
+	for i := 0; i < len(h); i++ {
+		switch h[i] {
+		case '<':
+			if !inQuote {
+				inURL = true
+			}
+		case '>':
+			inURL = false
+		case '"':
+			if !inURL {
+				inQuote = !inQuote
+			}
+		case ',':
+			if !inURL && !inQuote {
+				parts = append(parts, h[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(parts, h[start:])
 }
 
 // --- Structured Data ---

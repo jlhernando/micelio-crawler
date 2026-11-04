@@ -135,6 +135,32 @@ func TestFetchStripsCredentialsOnCrossHostRedirect(t *testing.T) {
 	}
 }
 
+func TestAgentReadinessKeepsCredentialsOnSite(t *testing.T) {
+	evil := newEvil(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			w.Write([]byte("User-agent: *\nAllow: /\n"))
+		case "/.well-known/ai-plugin.json":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"schema_version":"v1","api":{"type":"openapi","url":"` + evil.srv.URL + `/openapi.json"}}`))
+		default:
+			http.Redirect(w, r, evil.srv.URL+r.URL.Path, http.StatusFound)
+		}
+	}))
+	defer srv.Close()
+	opts := agentOpts()
+	opts.Fetch.Cookies = "session=s3cret"
+	opts.Fetch.CustomHeaders = map[string]string{"Authorization": "Bearer tok", "X-Api-Key": "k"}
+	rep := CheckAgentReadiness(context.Background(), srv.URL, opts)
+	if rep.Requests == 0 {
+		t.Fatal("no requests sent")
+	}
+	if got := evil.got(); len(got) != 0 {
+		t.Fatalf("other host received credentials: %v", got)
+	}
+}
+
 func TestSoft404ProbeKeepsCredentialsOnSite(t *testing.T) {
 	evil := newEvil(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +174,7 @@ func TestSoft404ProbeKeepsCredentialsOnSite(t *testing.T) {
 	defer srv.Close()
 	cfg := types.CrawlConfig{
 		SeedURL: srv.URL + "/", Mode: types.ModeSpider, MaxDepth: 0, MaxPages: 1, Concurrency: 1,
-		SkipSSRF:      true,
+		SkipSSRF: true, NoAgentCheck: true,
 		Cookies:       "session=s3cret",
 		CustomHeaders: map[string]string{"Authorization": "Bearer tok", "X-Api-Key": "k"},
 	}

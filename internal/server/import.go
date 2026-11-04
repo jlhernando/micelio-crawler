@@ -239,6 +239,10 @@ func (m *CrawlManager) runImport(ctx context.Context, p *pendingImport) error {
 	if raw, _ := cs.GetMeta(crawler.Soft404ProbeMetaKey); raw != "" {
 		json.Unmarshal([]byte(raw), &postCfg.Soft404Probes)
 	}
+	postCfg.SitemapHreflang, _ = cs.LoadSitemapHreflang()
+	if raw, _ := cs.GetMeta(crawler.AgentReadinessMetaKey); raw != "" {
+		json.Unmarshal([]byte(raw), &postCfg.AgentReadiness)
+	}
 	m.analyzeAndCache(analysisRun{
 		ctx: ctx, crawlID: job.ID, job: job, config: *p.cfg, pages: pages,
 		postCfg: postCfg, crawlStore: cs, closeLinks: func() { cs.Close() },

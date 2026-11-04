@@ -452,6 +452,22 @@ function renderOverview(){
     h+='</div>';
   }
 
+  // Agent readiness
+  if(s.agentReadiness&&s.agentReadiness.hosts&&s.agentReadiness.hosts.length){
+    const sc={pass:'var(--green)',warn:'var(--yellow)',fail:'var(--red)',na:'var(--text-muted)'},lb={pass:'PASS',warn:'WARN',fail:'FAIL',na:'N/A'};
+    s.agentReadiness.hosts.forEach(ar=>{
+      const col=ar.score>=80?'var(--green)':ar.score>=60?'var(--yellow)':'var(--red)';
+      h+='<div class="chart-card" style="margin-bottom:16px"><h4>Agent readiness: '+esc(ar.host)+' <span style="color:'+col+'">'+ar.score+'/100 · '+esc(ar.level)+'</span></h4>';
+      h+='<div style="margin-bottom:8px;font-size:12px;color:var(--text-muted)">robots.txt AI rules, llms.txt, markdown, /.well-known agent files and structured data · '+ar.requests+' requests</div>';
+      (ar.checks||[]).slice().sort((a,b)=>({fail:0,warn:1,pass:2,na:3}[a.status])-({fail:0,warn:1,pass:2,na:3}[b.status])).forEach(c=>{
+        h+='<div style="display:flex;gap:8px;padding:3px 0;border-top:1px solid var(--border);font-size:12px"><span style="width:40px;flex:none;font-weight:600;color:'+sc[c.status]+'">'+lb[c.status]+'</span><span style="width:260px;flex:none">'+esc(c.title)+'</span><span style="color:var(--text-muted)">'+esc(c.evidence||'')+(c.fix?'<br><span style="color:var(--text)">Fix: '+esc(c.fix)+'</span>':'')+'</span></div>';
+      });
+      const bots=(ar.bots||[]).filter(b=>b.allowed===false);
+      if(bots.length)h+='<div style="margin-top:8px;font-size:12px;color:var(--text-muted)">Blocked in robots.txt: '+bots.map(b=>esc(b.bot)).join(', ')+'</div>';
+      h+='</div>';
+    });
+  }
+
   // SEO Funnel
   if(s.seoFunnelStats){
     const sf=s.seoFunnelStats;
@@ -614,6 +630,18 @@ function renderContent(){
     h+='<div class="card"><div class="label">Empty Alt</div><div class="value '+(ia.emptyAlt>0?'warn':'good')+'">'+comma(ia.emptyAlt)+'</div></div>';
     h+='<div class="card"><div class="label">Missing Dimensions</div><div class="value '+(ia.missingDimensions>0?'warn':'good')+'">'+comma(ia.missingDimensions)+'</div></div>';
     h+='<div class="card"><div class="label">Oversized</div><div class="value '+(ia.oversizedImages&&ia.oversizedImages.length>0?'bad':'good')+'">'+(ia.oversizedImages?ia.oversizedImages.length:0)+'</div></div>';
+    h+='</div>';
+  }
+
+  // Hreflang (HTML, Link header and sitemap alternates)
+  if(stats.hreflang&&stats.hreflang.pagesWithHreflang){
+    const hl=stats.hreflang,src=hl.bySource||{},sevC={error:'var(--red)',warning:'var(--orange)',info:'var(--accent)'};
+    h+='<div class="chart-card" style="margin-bottom:16px"><h4>Hreflang</h4>';
+    h+='<div class="sub" style="margin-bottom:8px">'+comma(hl.pagesWithHreflang)+' pages declare hreflang ('+['html','header','sitemap'].filter(k=>src[k]).map(k=>esc(k)+' '+comma(src[k])).join(', ')+') · '+comma((hl.codes||[]).length)+' codes · x-default on '+comma(hl.xDefaultPages)+' pages · '+comma(hl.targets)+' alternate URLs</div>';
+    const bad=(hl.codes||[]).filter(c=>!c.valid);
+    if(bad.length){h+='<div style="margin-bottom:8px">';bad.slice(0,20).forEach(c=>{h+='<span class="type-tag" title="'+esc(c.hint||'')+'" style="color:var(--red)">'+esc(c.code)+' <b>'+comma(c.pages)+'</b></span>'});h+='</div>'}
+    (hl.issues||[]).forEach(g=>{h+='<div class="funnel-row"><div class="funnel-label" style="width:300px" title="'+esc(g.id)+'">'+esc(g.label)+'</div><div class="funnel-bar-wrap"><div class="funnel-bar" style="width:'+pctN(g.pages,hl.pagesWithHreflang)+'%;background:'+(sevC[g.severity]||'var(--orange)')+'">'+comma(g.pages)+'</div></div><div class="funnel-pct">'+comma(g.count)+'×</div></div>'});
+    if(!(hl.issues||[]).length)h+='<div class="sub">No hreflang problems found.</div>';
     h+='</div>';
   }
 

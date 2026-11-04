@@ -28,6 +28,10 @@ type ReportConfig struct {
 	AnchorAggregator *AnchorAggregator
 	// Soft404Probes are the crawl-time "URL that cannot exist" requests.
 	Soft404Probes []types.Soft404Probe
+	// SitemapHreflang holds the <xhtml:link> alternates of the sitemaps.
+	SitemapHreflang *types.SitemapHreflang
+	// AgentReadiness are the crawl-time agent-readiness probes, one per host.
+	AgentReadiness []types.AgentHostReport
 }
 
 // SitemapExtCounts holds sitemap extension type counts.
@@ -56,6 +60,10 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 
 	// Soft-404 candidates first: the main loop reads IsSoft404.
 	stats.Soft404Stats = DetectSoft404(pages, cfg.Soft404Probes, cfg.SeedURL)
+	// Hreflang from HTML, Link headers and sitemaps (hreflang.go).
+	stats.Hreflang = AnalyzeHreflang(pages, cfg.SitemapHreflang)
+	stats.HreflangIssues = HreflangLegacyIssues(stats.Hreflang)
+	stats.AgentReadiness = BuildAgentReadiness(cfg.AgentReadiness, pages)
 
 	if cfg.GscDays == 0 {
 		cfg.GscDays = 90
@@ -196,16 +204,6 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 		// Content hash duplicates
 		if p.ContentHash != "" && p.StatusCode == 200 {
 			contentHashMap[p.ContentHash] = append(contentHashMap[p.ContentHash], p.URL)
-		}
-
-		// Hreflang issues
-		for _, h := range p.Hreflang {
-			if h.Href == "" {
-				stats.HreflangIssues = append(stats.HreflangIssues, types.HreflangIssue{
-					URL:   p.URL,
-					Issue: "missing href for lang " + h.Lang,
-				})
-			}
 		}
 
 		// Non-descriptive anchors

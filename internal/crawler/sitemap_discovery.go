@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/micelio/micelio/internal/types"
 )
 
 type sitemapURLSet struct {
@@ -19,7 +21,34 @@ type sitemapURLSet struct {
 
 type sitemapURL struct {
 	Loc string `xml:"loc"`
+	// <xhtml:link rel="alternate" hreflang="de-AT" href="..."/>. A tag
+	// without a namespace matches any, so sitemaps that forget to declare
+	// xmlns:xhtml still parse.
+	Links []sitemapLink `xml:"link"`
 }
+
+type sitemapLink struct {
+	Rel      string `xml:"rel,attr"`
+	Hreflang string `xml:"hreflang,attr"`
+	Href     string `xml:"href,attr"`
+}
+
+// sitemapAlternates returns the hreflang alternates of one sitemap <url>.
+func sitemapAlternates(u sitemapURL) []types.HreflangEntry {
+	var out []types.HreflangEntry
+	for _, l := range u.Links {
+		lang := strings.TrimSpace(l.Hreflang)
+		if lang == "" || !strings.EqualFold(strings.TrimSpace(l.Rel), "alternate") {
+			continue
+		}
+		out = append(out, types.HreflangEntry{Lang: lang, Href: strings.TrimSpace(l.Href), Source: types.HreflangSourceSitemap})
+	}
+	return out
+}
+
+// sitemapEmit receives the page URLs of one urlset file and, parallel to
+// them, their hreflang alternates (nil when the file declares none).
+type sitemapEmit func(urls []string, alts [][]types.HreflangEntry)
 
 type sitemapIndex struct {
 	Sitemaps []sitemapEntry `xml:"sitemap"`
@@ -36,7 +65,7 @@ func DiscoverSitemapURLs(ctx context.Context, seedURL string, robotsSitemaps []s
 	var all []string
 	err := discoverSitemaps(ctx, seedURL, robotsSitemaps, client, userAgent, nil, func(urls []string) {
 		all = append(all, urls...)
-	})
+	}, nil)
 	return all, err
 }
 
@@ -44,8 +73,9 @@ func DiscoverSitemapURLs(ctx context.Context, seedURL string, robotsSitemaps []s
 // URLs of each sitemap file as soon as it is parsed, so a crawl can start
 // on them while the rest download (a news site's index can take minutes).
 // pace (FetchOptions.Pace, may be nil) spaces the downloads with the crawl's
-// own requests to the same host.
-func discoverSitemaps(ctx context.Context, seedURL string, robotsSitemaps []string, client *http.Client, userAgent string, pace func(context.Context, string) func(), emit func([]string)) error {
+// own requests to the same host. hreflang (may be nil) receives the
+// alternates of every sitemap <url> that declares them, same-domain or not.
+func discoverSitemaps(ctx context.Context, seedURL string, robotsSitemaps []string, client *http.Client, userAgent string, pace func(context.Context, string) func(), emit func([]string), hreflang *types.SitemapHreflang) error {
 	parsed, err := url.Parse(seedURL)
 	if err != nil {
 		return fmt.Errorf("parse seed URL: %w", err)
@@ -64,7 +94,12 @@ func discoverSitemaps(ctx context.Context, seedURL string, robotsSitemaps []stri
 	}
 
 	seen := make(map[string]bool)
-	keep := func(urls []string) {
+	keep := func(urls []string, alts [][]types.HreflangEntry) {
+		if hreflang != nil {
+			for i, a := range alts {
+				hreflang.Add(urls[i], a)
+			}
+		}
 		var out []string
 		for _, u := range urls {
 			normalized := normalizeURL(u)
@@ -98,7 +133,7 @@ func discoverSitemaps(ctx context.Context, seedURL string, robotsSitemaps []stri
 // fetchSitemap fetches and parses a single sitemap URL. Handles both urlset and sitemapindex.
 // maxDepth prevents infinite recursion in nested sitemap indexes.
 // Page URLs go to emit, one call per urlset file.
-func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, userAgent string, pace func(context.Context, string) func(), depth int, emit func([]string)) error {
+func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, userAgent string, pace func(context.Context, string) func(), depth int, emit sitemapEmit) error {
 	if depth > 3 {
 		return fmt.Errorf("sitemap nesting too deep")
 	}
@@ -147,12 +182,25 @@ func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, u
 	var urlset sitemapURLSet
 	if xml.Unmarshal(body, &urlset) == nil && len(urlset.URLs) > 0 {
 		urls := make([]string, 0, len(urlset.URLs))
+		var alts [][]types.HreflangEntry
 		for _, u := range urlset.URLs {
-			if loc := strings.TrimSpace(u.Loc); loc != "" {
-				urls = append(urls, loc)
+			loc := strings.TrimSpace(u.Loc)
+			if loc == "" {
+				continue
 			}
+			if a := sitemapAlternates(u); len(a) > 0 {
+				if alts == nil {
+					alts = make([][]types.HreflangEntry, len(urls), cap(urls))
+				}
+				alts = append(alts, a)
+			} else if alts != nil {
+				alts = append(alts, nil)
+			}
+			urls = append(urls, loc)
 		}
-		emit(urls)
+		// Drop the parsed tree before handing over (large files).
+		urlset.URLs = nil
+		emit(urls, alts)
 		return nil
 	}
 

@@ -35,6 +35,8 @@ type PostProcessConfig struct {
 	SimilarityThreshold float64
 	SitemapEntries      []string
 	Soft404Probes       []types.Soft404Probe
+	SitemapHreflang     *types.SitemapHreflang
+	AgentReadiness      []types.AgentHostReport
 	// ExternalLinkResults are post-crawl external link check results; broken
 	// ones surface as CrawlStats.BrokenExternalLinks.
 	ExternalLinkResults []types.ExternalLinkResult
@@ -82,6 +84,8 @@ func RunCoreAnalysisWithGraph(ctx context.Context, pages []*types.PageData, cfg 
 		TotalSitemapURLs:  len(cfg.SitemapEntries),
 		AnchorAggregator:  cfg.AnchorAggregator,
 		Soft404Probes:     cfg.Soft404Probes,
+		SitemapHreflang:   cfg.SitemapHreflang,
+		AgentReadiness:    cfg.AgentReadiness,
 	}
 	reportCfg.ExternalLinkResults = cfg.ExternalLinkResults
 	stats, graph := GenerateReportWithGraph(pages, cfg.CrawlDurationMs, reportCfg)

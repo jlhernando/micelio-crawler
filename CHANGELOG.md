@@ -4,6 +4,21 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+### Added
+
+- **PDF report.** Results → *Export PDF* (CLI `--pdf <path>`) writes a client-ready A4 report in the dashboard's style: cover, summary, health scorecard, structure and speed, strongest pages. With the dashboard running it adds the site's **Universe** map, and a map inside each ticket it proves (errors, redirects, click depth, PageRank).
+- **SEO and GEO backlog.** Findings become tickets (SEO-1…, GEO-1…) with priority, effort, owner, example URLs, fix steps and a measurable *Done when*, plus an impact × effort matrix and a Now / Next / Later board. *Export backlog* (CLI `--backlog <path>`) writes the same tickets as a CSV for JIRA's import, with SEO or GEO as the component.
+- **GEO: ready for AI search?** A page and tickets on whether AI search and agents can reach and read the site: AI bot rules in robots.txt (18 bots), llms.txt, markdown for agents, JSON-LD and answer blocks. These are crawl-time signals, not proof that an AI system cites the site.
+- **Core Web Vitals** in the report: LCP, INP and CLS of real Chrome users (Chrome UX Report, phones and desktop) and a Lighthouse lab run, with a ticket per failing metric. Needs a free Google API key in Settings or `MICELIO_CRUX_KEY` / `MICELIO_PSI_KEY`; the key travels in a header, never in the URL.
+- **CDN & caching.** The report names the CDN and checks whether it caches HTML and static files, compression, HTTP/3, Early Hints and HSTS, with fix steps for the CDN in use.
+- **Hreflang audit** from HTML, HTTP Link headers and XML sitemaps: invalid codes, missing return links and self references, x-default, targets that redirect, fail or are noindex, and HTML vs sitemap conflicts. New Results tab, HTML report section and MCP `crawl_summary.hreflang`.
+- **Agent readiness audit** (`micelio agent-check <url>`, Results tab, `--no-agent-check`): robots.txt AI bot rules, Content-Signal, llms.txt, markdown negotiation, Link headers, /.well-known agent files and a live fetch as AI bots.
+
+### Fixed
+
+- **Off-site redirects** are stored as redirects instead of crawling the other site's page as part of this one. Devices tab compares raw and rendered HTML of both devices.
+- Chrome UX Report CLS was never read.
+
 ### Security
 
 - **Outbound requests can no longer reach this computer or the local network.** Webhooks, alert channels, Plausible and the Google token URL refuse private and loopback addresses, also after DNS and redirects; Chromium goes through the same guard.

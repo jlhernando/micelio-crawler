@@ -76,10 +76,9 @@ func TestWriteMergePagesBulkFailureDoesNotBlockProducer(t *testing.T) {
 		},
 		// An insert fails part way: reading stopped there before the fix.
 		"insert": func(t *testing.T, s *UiStore) {
-			if err := sqlitex.ExecuteScript(s.conn, `CREATE TRIGGER fail_merge BEFORE INSERT ON log_merge_pages
-				WHEN NEW.url LIKE '%/5' BEGIN SELECT RAISE(ABORT, 'disk full'); END;`, nil); err != nil {
-				t.Fatal(err)
-			}
+			// The pair table is created by the writer, so a trigger cannot
+			// be set on it in advance: cap the database size instead.
+			fillDB(t, s)
 		},
 	}
 	for name, setup := range cases {
@@ -166,14 +165,14 @@ func TestStoreTransactionsReportCommitFailure(t *testing.T) {
 	})
 	t.Run("SaveMergePagesBatch", func(t *testing.T) {
 		s := newTestStore(t)
-		failCommits(t, s, []*sqlite.Conn{s.conn}, "log_merge_pages", "INSERT")
+		failCommits(t, s, []*sqlite.Conn{s.conn}, "log_merge_tables", "INSERT")
 		if err := s.SaveMergePagesBatch("log1", "crawl1", mergePages(2, "a")); err == nil {
 			t.Error("SaveMergePagesBatch returned nil after a failed commit")
 		}
 	})
 	t.Run("WriteMergePagesBulk", func(t *testing.T) {
 		s := newTestStore(t)
-		failCommits(t, s, []*sqlite.Conn{s.conn}, "log_merge_pages", "INSERT")
+		failCommits(t, s, []*sqlite.Conn{s.conn}, "log_merge_tables", "INSERT")
 		if err := writeMerge(s, "log1", "crawl1", mergePages(2, "a")); err == nil {
 			t.Error("WriteMergePagesBulk returned nil after a failed commit")
 		}

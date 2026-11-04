@@ -2,6 +2,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -238,35 +240,19 @@ func (s *UiStore) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_log_url_stats_job_bothits
 			ON log_url_stats(job_id, bot_hits DESC);
 
-		-- Per-URL merged result of log×crawl. Acts as a cache: a Run Merge
-		-- click clears+repopulates rows for the (log_id, crawl_id) pair.
-		-- The dashboard's Merge tab queries this table for paginated views.
-		CREATE TABLE IF NOT EXISTS log_merge_pages (
-			log_id          TEXT NOT NULL,
-			crawl_id        TEXT NOT NULL,
-			url             TEXT NOT NULL,
-			segment         TEXT NOT NULL,
-			reason          TEXT,
-			log_hits        INTEGER NOT NULL DEFAULT 0,
-			log_bot_hits    INTEGER NOT NULL DEFAULT 0,
-			log_human_hits  INTEGER NOT NULL DEFAULT 0,
-			log_top_bot     TEXT,
-			log_status      INTEGER,
-			crawl_status    INTEGER,
-			crawl_indexable INTEGER,
-			crawl_canonical TEXT,
-			crawl_depth     INTEGER,
-			crawl_inlinks   INTEGER,
-			crawl_word_count INTEGER,
-			has_noindex     INTEGER,
-			in_crawl        INTEGER,
-			in_logs         INTEGER,
-			PRIMARY KEY (log_id, crawl_id, url)
-		) WITHOUT ROWID;
-		CREATE INDEX IF NOT EXISTS idx_lmp_segment
-			ON log_merge_pages(log_id, crawl_id, segment, log_bot_hits DESC);
-		CREATE INDEX IF NOT EXISTS idx_lmp_bot_hits
-			ON log_merge_pages(log_id, crawl_id, log_bot_hits DESC);
+		-- Per-URL merged result of log×crawl: a cache with one table per
+		-- (log, crawl) pair (see mergeTable), rebuilt by each Run Merge and
+		-- queried by the dashboard's Merge tab. This lists the tables so
+		-- deleting a log job or a crawl can drop its pairs. Older versions
+		-- kept every pair in one shared table, log_merge_pages: it is still
+		-- read as a fallback and dropped once empty (deleteLegacyMerge).
+		CREATE TABLE IF NOT EXISTS log_merge_tables (
+			log_id     TEXT NOT NULL,
+			crawl_id   TEXT NOT NULL,
+			table_name TEXT NOT NULL,
+			PRIMARY KEY (log_id, crawl_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_log_merge_tables_crawl ON log_merge_tables(crawl_id);
 	`, nil); err != nil {
 		return err
 	}
@@ -279,8 +265,13 @@ func (s *UiStore) migrate() error {
 	_ = sqlitex.Execute(s.conn, `ALTER TABLE log_jobs ADD COLUMN analysis_ms INTEGER`, nil)
 	// Add bytes column to per-URL stats (response size tracking).
 	_ = sqlitex.Execute(s.conn, `ALTER TABLE log_url_stats ADD COLUMN bytes INTEGER NOT NULL DEFAULT 0`, nil)
-	// Add log_bytes column to merged pages (response size from logs).
+	// Add log_bytes column to legacy merged pages (response size from logs);
+	// fails harmlessly when there is no legacy table.
 	_ = sqlitex.Execute(s.conn, `ALTER TABLE log_merge_pages ADD COLUMN log_bytes INTEGER NOT NULL DEFAULT 0`, nil)
+	// An empty legacy shared merge table is not needed any more.
+	if err := dropLegacyMergeIfEmpty(s.conn); err != nil {
+		return err
+	}
 	// Add events column for crawl lifecycle tracking.
 	_ = sqlitex.Execute(s.conn, `ALTER TABLE crawl_jobs ADD COLUMN events TEXT NOT NULL DEFAULT '[]'`, nil)
 	return nil
@@ -507,6 +498,11 @@ func (s *UiStore) DeleteCrawlJob(id string) (bool, error) {
 	if err := sqlitex.Execute(s.conn, `DELETE FROM crawl_coverage WHERE crawl_id = ?`, &sqlitex.ExecOptions{Args: []interface{}{id}}); err != nil {
 		return false, err
 	}
+	// Drop this crawl's cached merges. Its rows in a legacy shared table go
+	// with their log job: deleting them by crawl alone scans the whole table.
+	if err := dropMergeTables(s.conn, `crawl_id = ?`, id); err != nil {
+		return false, err
+	}
 	// Delete associated stats first (foreign key target)
 	if err := sqlitex.Execute(s.conn, `DELETE FROM crawl_stats WHERE crawl_id = ?`,
 		&sqlitex.ExecOptions{Args: []interface{}{id}}); err != nil {
@@ -685,6 +681,7 @@ func (s *UiStore) DeleteCrawlJobsByDBPath(keepID, dbPath string) (int, error) {
 		})
 	// Also clean up orphaned stats
 	_ = sqlitex.Execute(s.conn, `DELETE FROM crawl_stats WHERE crawl_id NOT IN (SELECT id FROM crawl_jobs)`, nil)
+	_ = dropMergeTables(s.conn, `crawl_id NOT IN (SELECT id FROM crawl_jobs)`)
 	return deleted, err
 }
 
@@ -951,8 +948,13 @@ func (s *UiStore) DeleteLogJob(id string) (err error) {
 	// Legacy: also clean up shared table if it has rows for this job (pre-migration data).
 	_ = sqlitex.Execute(s.conn, `DELETE FROM log_url_stats WHERE job_id = ?`, &sqlitex.ExecOptions{Args: []interface{}{id}})
 
-	// Clean up merge pages.
-	_ = sqlitex.Execute(s.conn, `DELETE FROM log_merge_pages WHERE log_id = ?`, &sqlitex.ExecOptions{Args: []interface{}{id}})
+	// Drop this log's cached merges, and its rows in a legacy shared table.
+	if err = dropMergeTables(s.conn, `log_id = ?`, id); err != nil {
+		return err
+	}
+	if err = deleteLegacyMerge(s.conn, `log_id = ?`, id); err != nil {
+		return err
+	}
 
 	err = sqlitex.Execute(s.conn, `DELETE FROM log_jobs WHERE id = ?`, &sqlitex.ExecOptions{Args: []interface{}{id}})
 	return err
@@ -1302,12 +1304,223 @@ func (s *UiStore) LoadAllLogURLStats(jobID string) ([]logs.URLStat, error) {
 	return out, err
 }
 
+// ── Merged-page cache (one table per log×crawl pair) ────────────────────────
+//
+// Each (log, crawl) merge lives in its own plain table, like the per-job
+// url_stats_<id> tables: a re-run drops and rebuilds only that table (fast
+// appends, then one index build over its own rows), and other merges are
+// never touched. log_merge_tables lists the tables so deleting a log job or
+// a crawl can drop its pairs. Merges written by older versions stay in the
+// shared legacy table log_merge_pages and are read from there until the pair
+// is re-run or deleted; the legacy table is dropped once it is empty.
+
+const legacyMergeTable = "log_merge_pages"
+
+// mergeTable returns the table name for a (logID, crawlID) pair. The IDs are
+// hashed (length-prefixed so "ab"+"c" and "a"+"bc" differ) and never put into
+// SQL themselves: any ID gives a safe identifier.
+func mergeTable(logID, crawlID string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%s%s", len(logID), logID, crawlID)))
+	return "log_merge_" + hex.EncodeToString(sum[:16])
+}
+
+// validMergeTable guards names read back from log_merge_tables before they
+// go into a DROP statement.
+func validMergeTable(name string) bool {
+	const prefix = "log_merge_"
+	if len(name) != len(prefix)+32 || !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	for _, c := range name[len(prefix):] {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func createMergeTable(conn *sqlite.Conn, table string) error {
+	return sqlitex.Execute(conn, fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
+		url             TEXT NOT NULL,
+		segment         TEXT NOT NULL,
+		reason          TEXT,
+		log_hits        INTEGER NOT NULL DEFAULT 0,
+		log_bot_hits    INTEGER NOT NULL DEFAULT 0,
+		log_human_hits  INTEGER NOT NULL DEFAULT 0,
+		log_top_bot     TEXT,
+		log_status      INTEGER,
+		crawl_status    INTEGER,
+		crawl_indexable INTEGER,
+		crawl_canonical TEXT,
+		crawl_depth     INTEGER,
+		crawl_inlinks   INTEGER,
+		crawl_word_count INTEGER,
+		has_noindex     INTEGER,
+		in_crawl        INTEGER,
+		in_logs         INTEGER,
+		log_bytes       INTEGER NOT NULL DEFAULT 0
+	)`, table), nil)
+}
+
+func createMergeIndexes(conn *sqlite.Conn, table string) error {
+	for _, ddl := range []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS %[1]s_url ON %[1]s(url)`,
+		`CREATE INDEX IF NOT EXISTS %[1]s_segment ON %[1]s(segment, log_bot_hits DESC)`,
+		`CREATE INDEX IF NOT EXISTS %[1]s_bot_hits ON %[1]s(log_bot_hits DESC)`,
+	} {
+		if err := sqlitex.Execute(conn, fmt.Sprintf(ddl, table), nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// registerMergeTable records the pair's table so deletes can find it.
+func registerMergeTable(conn *sqlite.Conn, logID, crawlID, table string) error {
+	return sqlitex.Execute(conn,
+		`INSERT OR REPLACE INTO log_merge_tables (log_id, crawl_id, table_name) VALUES (?, ?, ?)`,
+		&sqlitex.ExecOptions{Args: []interface{}{logID, crawlID, table}})
+}
+
+// hasMergeTable reports whether the pair has its own table.
+func hasMergeTable(conn *sqlite.Conn, logID, crawlID string) (bool, error) {
+	found := false
+	err := sqlitex.Execute(conn,
+		`SELECT 1 FROM log_merge_tables WHERE log_id = ? AND crawl_id = ?`,
+		&sqlitex.ExecOptions{
+			Args:       []interface{}{logID, crawlID},
+			ResultFunc: func(*sqlite.Stmt) error { found = true; return nil },
+		})
+	return found, err
+}
+
+func legacyMergeExists(conn *sqlite.Conn) (bool, error) {
+	found := false
+	err := sqlitex.Execute(conn,
+		`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`,
+		&sqlitex.ExecOptions{
+			Args:       []interface{}{legacyMergeTable},
+			ResultFunc: func(*sqlite.Stmt) error { found = true; return nil },
+		})
+	return found, err
+}
+
+// deleteLegacyMerge removes the legacy rows matching where (log_id and
+// crawl_id lead the legacy key and indexes) and drops the legacy table once
+// it holds no rows.
+func deleteLegacyMerge(conn *sqlite.Conn, where string, args ...interface{}) error {
+	exists, err := legacyMergeExists(conn)
+	if err != nil || !exists {
+		return err
+	}
+	if err := sqlitex.Execute(conn, `DELETE FROM `+legacyMergeTable+` WHERE `+where,
+		&sqlitex.ExecOptions{Args: args}); err != nil {
+		return err
+	}
+	return dropLegacyMergeIfEmpty(conn)
+}
+
+func dropLegacyMergeIfEmpty(conn *sqlite.Conn) error {
+	exists, err := legacyMergeExists(conn)
+	if err != nil || !exists {
+		return err
+	}
+	empty := true
+	if err := sqlitex.Execute(conn, `SELECT 1 FROM `+legacyMergeTable+` LIMIT 1`,
+		&sqlitex.ExecOptions{ResultFunc: func(*sqlite.Stmt) error { empty = false; return nil }}); err != nil {
+		return err
+	}
+	if !empty {
+		return nil
+	}
+	return sqlitex.Execute(conn, `DROP TABLE `+legacyMergeTable, nil)
+}
+
+// dropMergeTables drops every pair table whose log_merge_tables row matches
+// where, and those rows, all or nothing.
+func dropMergeTables(conn *sqlite.Conn, where string, args ...interface{}) (err error) {
+	defer sqlitex.Save(conn)(&err)
+	var tables []string
+	if err = sqlitex.Execute(conn, `SELECT table_name FROM log_merge_tables WHERE `+where,
+		&sqlitex.ExecOptions{Args: args, ResultFunc: func(stmt *sqlite.Stmt) error {
+			tables = append(tables, stmt.ColumnText(0))
+			return nil
+		}}); err != nil {
+		return err
+	}
+	for _, t := range tables {
+		if !validMergeTable(t) {
+			return fmt.Errorf("invalid merge table name %q", t)
+		}
+		if err = sqlitex.Execute(conn, "DROP TABLE IF EXISTS "+t, nil); err != nil {
+			return err
+		}
+	}
+	return sqlitex.Execute(conn, `DELETE FROM log_merge_tables WHERE `+where, &sqlitex.ExecOptions{Args: args})
+}
+
+// bindMergeRow binds one merged page to an insert built from mergeInsertSQL.
+func bindMergeRow(stmt *sqlite.Stmt, mp *logs.MergedPage) {
+	boolOrNull := func(idx int, v bool, present bool) {
+		switch {
+		case !present:
+			stmt.BindNull(idx)
+		case v:
+			stmt.BindInt64(idx, 1)
+		default:
+			stmt.BindInt64(idx, 0)
+		}
+	}
+	intOrNull := func(idx int, v int) {
+		if v == 0 {
+			stmt.BindNull(idx)
+			return
+		}
+		stmt.BindInt64(idx, int64(v))
+	}
+	textOrNull := func(idx int, v string) {
+		if v == "" {
+			stmt.BindNull(idx)
+			return
+		}
+		stmt.BindText(idx, v)
+	}
+	stmt.BindText(1, mp.URL)
+	stmt.BindText(2, string(mp.Segment))
+	textOrNull(3, mp.Reason)
+	stmt.BindInt64(4, mp.LogHits)
+	stmt.BindInt64(5, mp.LogBotHits)
+	stmt.BindInt64(6, mp.LogHumanHits)
+	textOrNull(7, mp.LogTopBot)
+	intOrNull(8, mp.LogStatus)
+	intOrNull(9, mp.CrawlStatus)
+	boolOrNull(10, mp.CrawlIndexable, mp.InCrawl)
+	textOrNull(11, mp.CrawlCanonical)
+	intOrNull(12, mp.CrawlDepth)
+	intOrNull(13, mp.CrawlInlinks)
+	intOrNull(14, mp.CrawlWordCount)
+	boolOrNull(15, mp.HasNoindex, mp.InCrawl)
+	boolOrNull(16, mp.InCrawl, true)
+	boolOrNull(17, mp.InLogs, true)
+	stmt.BindInt64(18, mp.LogBytes)
+}
+
+// mergeInsertSQL takes the verb (INSERT / INSERT OR REPLACE) and the table.
+const mergeInsertSQL = `%s INTO %s (
+	url, segment, reason,
+	log_hits, log_bot_hits, log_human_hits, log_top_bot, log_status,
+	crawl_status, crawl_indexable, crawl_canonical, crawl_depth,
+	crawl_inlinks, crawl_word_count, has_noindex, in_crawl, in_logs,
+	log_bytes
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
 // WriteMergePagesBulk writes ALL merged pages in a single transaction.
 // This is 10-50× faster than per-batch transactions because SQLite only
 // syncs the WAL once (at COMMIT), not 1000+ times.
-// It replaces only the rows of the (logID, crawlID) pair: merges of other
-// pairs stay cached. On error it keeps reading pages until the channel is
-// closed, so a producer sending on it never blocks forever.
+// It rebuilds only the (logID, crawlID) pair's own table: merges of other
+// pairs stay cached and are not re-indexed. On error it keeps reading pages
+// until the channel is closed, so a producer sending on it never blocks
+// forever.
 // The onProgress callback is called every progressInterval rows.
 func (s *UiStore) WriteMergePagesBulk(logID, crawlID string, pages <-chan logs.MergedPage, onProgress func(written int64)) (commitErr error) {
 	defer func() {
@@ -1325,84 +1538,33 @@ func (s *UiStore) WriteMergePagesBulk(logID, crawlID string, pages <-chan logs.M
 	}
 	defer func() { endFn(&commitErr) }()
 
-	// Bulk-loading into indexed tables is 2-3x slower than building the
-	// indexes once at the end, so drop them for the delete and the load;
-	// they are rebuilt below inside the same transaction. Only this pair's
-	// rows are replaced: before, the whole table was dropped, which deleted
-	// the cached merges of every other log/crawl pair.
-	for _, idx := range []string{"idx_lmp_pk", "idx_lmp_segment", "idx_lmp_bot_hits"} {
-		if commitErr = sqlitex.Execute(s.conn, "DROP INDEX IF EXISTS "+idx, nil); commitErr != nil {
-			return commitErr
-		}
+	// A fresh plain table with no indexes: each INSERT is an O(1) append.
+	// The indexes are built once at the end, over this pair's rows only.
+	table := mergeTable(logID, crawlID)
+	if commitErr = sqlitex.Execute(s.conn, "DROP TABLE IF EXISTS "+table, nil); commitErr != nil {
+		return commitErr
 	}
-	if commitErr = sqlitex.Execute(s.conn,
-		`DELETE FROM log_merge_pages WHERE log_id = ? AND crawl_id = ?`,
-		&sqlitex.ExecOptions{Args: []interface{}{logID, crawlID}}); commitErr != nil {
+	if commitErr = createMergeTable(s.conn, table); commitErr != nil {
+		return commitErr
+	}
+	if commitErr = registerMergeTable(s.conn, logID, crawlID, table); commitErr != nil {
+		return commitErr
+	}
+	// This pair's rows written by an older version are replaced too.
+	if commitErr = deleteLegacyMerge(s.conn, `log_id = ? AND crawl_id = ?`, logID, crawlID); commitErr != nil {
 		return commitErr
 	}
 
-	stmt, _, prepErr := s.conn.PrepareTransient(`
-		INSERT INTO log_merge_pages (
-			log_id, crawl_id, url, segment, reason,
-			log_hits, log_bot_hits, log_human_hits, log_top_bot, log_status,
-			crawl_status, crawl_indexable, crawl_canonical, crawl_depth,
-			crawl_inlinks, crawl_word_count, has_noindex, in_crawl, in_logs,
-			log_bytes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	stmt, _, prepErr := s.conn.PrepareTransient(fmt.Sprintf(mergeInsertSQL, "INSERT", table))
 	if prepErr != nil {
 		commitErr = prepErr
 		return prepErr
 	}
 	defer stmt.Finalize()
 
-	bindBoolOrNull := func(idx int, v bool, present bool) {
-		if !present {
-			stmt.BindNull(idx)
-			return
-		}
-		if v {
-			stmt.BindInt64(idx, 1)
-		} else {
-			stmt.BindInt64(idx, 0)
-		}
-	}
-	bindIntOrNull := func(idx int, v int) {
-		if v == 0 {
-			stmt.BindNull(idx)
-			return
-		}
-		stmt.BindInt64(idx, int64(v))
-	}
-	bindTextOrNull := func(idx int, v string) {
-		if v == "" {
-			stmt.BindNull(idx)
-			return
-		}
-		stmt.BindText(idx, v)
-	}
-
 	var written int64
 	for mp := range pages {
-		stmt.BindText(1, logID)
-		stmt.BindText(2, crawlID)
-		stmt.BindText(3, mp.URL)
-		stmt.BindText(4, string(mp.Segment))
-		bindTextOrNull(5, mp.Reason)
-		stmt.BindInt64(6, mp.LogHits)
-		stmt.BindInt64(7, mp.LogBotHits)
-		stmt.BindInt64(8, mp.LogHumanHits)
-		bindTextOrNull(9, mp.LogTopBot)
-		bindIntOrNull(10, mp.LogStatus)
-		bindIntOrNull(11, mp.CrawlStatus)
-		bindBoolOrNull(12, mp.CrawlIndexable, mp.InCrawl)
-		bindTextOrNull(13, mp.CrawlCanonical)
-		bindIntOrNull(14, mp.CrawlDepth)
-		bindIntOrNull(15, mp.CrawlInlinks)
-		bindIntOrNull(16, mp.CrawlWordCount)
-		bindBoolOrNull(17, mp.HasNoindex, mp.InCrawl)
-		bindBoolOrNull(18, mp.InCrawl, true)
-		bindBoolOrNull(19, mp.InLogs, true)
-		stmt.BindInt64(20, mp.LogBytes)
+		bindMergeRow(stmt, &mp)
 		if _, err := stmt.Step(); err != nil {
 			commitErr = err
 			return err
@@ -1418,32 +1580,23 @@ func (s *UiStore) WriteMergePagesBulk(logID, crawlID string, pages <-chan logs.M
 		onProgress(written)
 	}
 
-	// Rebuild the indexes dropped for the load.
-	for _, ddl := range []string{
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_lmp_pk ON log_merge_pages(log_id, crawl_id, url)`,
-		`CREATE INDEX IF NOT EXISTS idx_lmp_segment ON log_merge_pages(log_id, crawl_id, segment, log_bot_hits DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_lmp_bot_hits ON log_merge_pages(log_id, crawl_id, log_bot_hits DESC)`,
-	} {
-		if commitErr = sqlitex.Execute(s.conn, ddl, nil); commitErr != nil {
-			return commitErr
-		}
-	}
-	return nil
+	commitErr = createMergeIndexes(s.conn, table)
+	return commitErr
 }
-
-// ── Merged-page cache (log_merge_pages) ─────────────────────────────────────
 
 // ClearMergePages drops all cached merged rows for a given (logID, crawlID) pair.
-// Called at the start of a fresh merge so the cache reflects only the new run.
-func (s *UiStore) ClearMergePages(logID, crawlID string) error {
+func (s *UiStore) ClearMergePages(logID, crawlID string) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return sqlitex.Execute(s.conn,
-		`DELETE FROM log_merge_pages WHERE log_id = ? AND crawl_id = ?`,
-		&sqlitex.ExecOptions{Args: []interface{}{logID, crawlID}})
+	defer sqlitex.Save(s.conn)(&err)
+	if err = dropMergeTables(s.conn, `log_id = ? AND crawl_id = ?`, logID, crawlID); err != nil {
+		return err
+	}
+	return deleteLegacyMerge(s.conn, `log_id = ? AND crawl_id = ?`, logID, crawlID)
 }
 
-// SaveMergePagesBatch writes a batch of merged pages in one transaction.
+// SaveMergePagesBatch writes a batch of merged pages in one transaction,
+// adding them to (or replacing by URL in) the pair's table.
 // Caller is expected to call this in chunks (e.g. 5K rows) during a streaming
 // merge so memory stays bounded.
 func (s *UiStore) SaveMergePagesBatch(logID, crawlID string, pages []logs.MergedPage) (commitErr error) {
@@ -1459,67 +1612,38 @@ func (s *UiStore) SaveMergePagesBatch(logID, crawlID string, pages []logs.Merged
 	}
 	defer func() { endFn(&commitErr) }()
 
-	stmt, _, prepErr := s.conn.PrepareTransient(`
-		INSERT OR REPLACE INTO log_merge_pages (
-			log_id, crawl_id, url, segment, reason,
-			log_hits, log_bot_hits, log_human_hits, log_top_bot, log_status,
-			crawl_status, crawl_indexable, crawl_canonical, crawl_depth,
-			crawl_inlinks, crawl_word_count, has_noindex, in_crawl, in_logs,
-			log_bytes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	table := mergeTable(logID, crawlID)
+	has, err := hasMergeTable(s.conn, logID, crawlID)
+	if err != nil {
+		commitErr = err
+		return err
+	}
+	if !has {
+		if commitErr = createMergeTable(s.conn, table); commitErr != nil {
+			return commitErr
+		}
+		if commitErr = createMergeIndexes(s.conn, table); commitErr != nil {
+			return commitErr
+		}
+		if commitErr = registerMergeTable(s.conn, logID, crawlID, table); commitErr != nil {
+			return commitErr
+		}
+		// Readers now use the pair's table: drop its legacy rows so they
+		// are not kept hidden forever.
+		if commitErr = deleteLegacyMerge(s.conn, `log_id = ? AND crawl_id = ?`, logID, crawlID); commitErr != nil {
+			return commitErr
+		}
+	}
+
+	stmt, _, prepErr := s.conn.PrepareTransient(fmt.Sprintf(mergeInsertSQL, "INSERT OR REPLACE", table))
 	if prepErr != nil {
 		commitErr = prepErr
 		return prepErr
 	}
 	defer stmt.Finalize()
 
-	bindBoolOrNull := func(idx int, v bool, present bool) {
-		if !present {
-			stmt.BindNull(idx)
-			return
-		}
-		if v {
-			stmt.BindInt64(idx, 1)
-		} else {
-			stmt.BindInt64(idx, 0)
-		}
-	}
-	bindIntOrNull := func(idx int, v int) {
-		if v == 0 {
-			stmt.BindNull(idx)
-			return
-		}
-		stmt.BindInt64(idx, int64(v))
-	}
-	bindTextOrNull := func(idx int, v string) {
-		if v == "" {
-			stmt.BindNull(idx)
-			return
-		}
-		stmt.BindText(idx, v)
-	}
-
-	for _, mp := range pages {
-		stmt.BindText(1, logID)
-		stmt.BindText(2, crawlID)
-		stmt.BindText(3, mp.URL)
-		stmt.BindText(4, string(mp.Segment))
-		bindTextOrNull(5, mp.Reason)
-		stmt.BindInt64(6, mp.LogHits)
-		stmt.BindInt64(7, mp.LogBotHits)
-		stmt.BindInt64(8, mp.LogHumanHits)
-		bindTextOrNull(9, mp.LogTopBot)
-		bindIntOrNull(10, mp.LogStatus)
-		bindIntOrNull(11, mp.CrawlStatus)
-		bindBoolOrNull(12, mp.CrawlIndexable, mp.InCrawl)
-		bindTextOrNull(13, mp.CrawlCanonical)
-		bindIntOrNull(14, mp.CrawlDepth)
-		bindIntOrNull(15, mp.CrawlInlinks)
-		bindIntOrNull(16, mp.CrawlWordCount)
-		bindBoolOrNull(17, mp.HasNoindex, mp.InCrawl)
-		bindBoolOrNull(18, mp.InCrawl, true)
-		bindBoolOrNull(19, mp.InLogs, true)
-		stmt.BindInt64(20, mp.LogBytes)
+	for i := range pages {
+		bindMergeRow(stmt, &pages[i])
 		if _, err := stmt.Step(); err != nil {
 			commitErr = err
 			return err
@@ -1611,8 +1735,27 @@ func (s *UiStore) QueryMergePages(logID, crawlID string, opts MergeQueryOpts) ([
 	}
 	offset := (page - 1) * pageSize
 
-	whereClauses := []string{"log_id = ?", "crawl_id = ?"}
-	args := []interface{}{logID, crawlID}
+	// The pair's own table, else rows an older version wrote into the
+	// shared legacy table, else nothing cached yet.
+	table := mergeTable(logID, crawlID)
+	var whereClauses []string
+	var args []interface{}
+	has, err := hasMergeTable(s.conn, logID, crawlID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !has {
+		legacy, err := legacyMergeExists(s.conn)
+		if err != nil {
+			return nil, 0, err
+		}
+		if !legacy {
+			return nil, 0, nil
+		}
+		table = legacyMergeTable
+		whereClauses = []string{"log_id = ?", "crawl_id = ?"}
+		args = []interface{}{logID, crawlID}
+	}
 	if opts.Segment != "" {
 		whereClauses = append(whereClauses, "segment = ?")
 		args = append(args, opts.Segment)
@@ -1651,12 +1794,15 @@ func (s *UiStore) QueryMergePages(logID, crawlID string, opts MergeQueryOpts) ([
 	case "both":
 		whereClauses = append(whereClauses, "segment NOT IN ('uncrawled_indexable','orphan_crawled')")
 	}
-	whereSQL := strings.Join(whereClauses, " AND ")
+	whereSQL := ""
+	if len(whereClauses) > 0 {
+		whereSQL = " WHERE " + strings.Join(whereClauses, " AND ")
+	}
 
 	// Count first.
 	var total int64
 	if err := sqlitex.Execute(s.conn,
-		`SELECT COUNT(*) FROM log_merge_pages WHERE `+whereSQL,
+		`SELECT COUNT(*) FROM `+table+whereSQL,
 		&sqlitex.ExecOptions{
 			Args: args,
 			ResultFunc: func(stmt *sqlite.Stmt) error {
@@ -1674,12 +1820,12 @@ func (s *UiStore) QueryMergePages(logID, crawlID string, opts MergeQueryOpts) ([
 		crawl_status, crawl_indexable, crawl_canonical, crawl_depth,
 		crawl_inlinks, crawl_word_count, has_noindex, in_crawl, in_logs,
 		log_bytes
-		FROM log_merge_pages WHERE ` + whereSQL +
+		FROM ` + table + whereSQL +
 		` ORDER BY ` + sortCol + ` ` + order + `, url ASC LIMIT ? OFFSET ?`
 	pageArgs := append(append([]interface{}{}, args...), pageSize, offset)
 
 	var rows []logs.MergedPage
-	err := sqlitex.Execute(s.conn, pageQuery, &sqlitex.ExecOptions{
+	err = sqlitex.Execute(s.conn, pageQuery, &sqlitex.ExecOptions{
 		Args: pageArgs,
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			mp := logs.MergedPage{

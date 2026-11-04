@@ -116,7 +116,7 @@ type crawlSummaryOut struct {
 	Issues            []summaryIssue           `json:"issues" jsonschema:"top 10 issues, most pages first"`
 	Soft404Candidates int                      `json:"soft404Candidates"`
 	ResponseTimeMs    *percentiles             `json:"responseTimeMs,omitempty"`
-	Devices           *types.DeviceParityStats `json:"devices,omitempty" jsonschema:"device comparison crawl: pages compared, identical, and pages per difference (device-links, device-content, ...); filter pages_query with issue set to that id"`
+	Devices           *types.DeviceParityStats `json:"devices,omitempty" jsonschema:"device comparison crawl: pages compared, identical, and pages per difference (device-links, device-content, ...); filter pages_query with issue set to that id. Rendered crawls add rawIssues (differences in the HTML before JavaScript), primaryJs/secondaryJs (what JavaScript changes on each device) and jsChanged; filters device-js and device-raw"`
 	Hreflang          *summaryHreflang         `json:"hreflang,omitempty" jsonschema:"hreflang audit (HTML, HTTP Link header and XML sitemap alternates): pages declaring it by source, codes, invalid codes, and pages per issue id"`
 	AgentReadiness    *summaryAgent            `json:"agentReadiness,omitempty" jsonschema:"agent readiness of the seed host: score 0-100, level, and the ids of failed and warning checks (robots.txt AI rules, llms.txt, markdown, /.well-known agent files, structured data)"`
 }

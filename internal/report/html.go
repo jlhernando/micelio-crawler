@@ -449,6 +449,11 @@ function renderOverview(){
     h+='<div class="sub" style="margin-bottom:8px">'+comma(d.compared)+' pages compared · '+comma(d.identical)+' identical ('+pct(d.identical,d.compared)+') · text similarity '+d.avgSimilarity+'% · '+comma(d.linksOnlySecondary)+' links only on '+esc(name(d.secondary))+', '+comma(d.linksOnlyPrimary)+' only on '+esc(name(d.primary))+'</div>';
     const ks=Object.keys(d.issues||{}).sort((a,b)=>d.issues[b]-d.issues[a]);
     ks.forEach(k=>{h+='<div class="funnel-row"><div class="funnel-label" style="width:260px">'+esc(lbl[k]||k)+'</div><div class="funnel-bar-wrap"><div class="funnel-bar" style="width:'+pctN(d.issues[k],d.compared)+'%;background:var(--orange)">'+comma(d.issues[k])+'</div></div><div class="funnel-pct">'+pct(d.issues[k],d.compared)+'</div></div>'});
+    if(d.rawCompared){
+      const js=(m)=>Object.keys(m||{}).sort((a,b)=>m[b]-m[a]).map(k=>esc((lbl[k]||k).replace(/^Different /,''))+' '+comma(m[k])).join(', ')||'nothing';
+      h+='<div class="sub" style="margin-top:10px">Raw HTML (before JavaScript): '+comma(d.rawIdentical||0)+' of '+comma(d.rawCompared)+' pages identical on both devices'+(Object.keys(d.rawIssues||{}).length?' · differs: '+js(d.rawIssues):'')+'</div>';
+      h+='<div class="sub">JavaScript changes SEO elements on '+comma(d.jsChanged||0)+' pages · '+esc(name(d.primary))+': '+js(d.primaryJs)+' · '+esc(name(d.secondary))+': '+js(d.secondaryJs)+'</div>';
+    }
     h+='</div>';
   }
 

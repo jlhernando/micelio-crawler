@@ -109,6 +109,11 @@ type FetchOptions struct {
 	// be hit and returns a func that is called once the request is on the
 	// wire. The crawler passes its per-host rate limiter.
 	Pace func(ctx context.Context, rawURL string) (sent func())
+	// FollowRedirect, if set, decides whether FetchPage follows a redirect to
+	// target. When it returns false FetchPage stops and returns the 3xx with
+	// FinalURL set to target. The crawler uses it to keep off-site pages (an
+	// app store, a partner site) out of the crawl.
+	FollowRedirect func(target string) bool
 }
 
 // ssrfSafeDialer returns a net.Dialer wrapped with DNS rebinding protection.
@@ -302,6 +307,16 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 						RedirectChain:  redirectChain,
 						ResponseTimeMs: clock.ms(),
 						Error:          fmt.Sprintf("Redirect to private/loopback address blocked: %s", resolved),
+					}
+				}
+				if opts.FollowRedirect != nil && !opts.FollowRedirect(resolved) {
+					return types.FetchResult{
+						URL:            rawURL,
+						FinalURL:       resolved,
+						StatusCode:     resp.StatusCode,
+						Headers:        flattenHeaders(resp.Header),
+						RedirectChain:  redirectChain,
+						ResponseTimeMs: clock.ms(),
 					}
 				}
 

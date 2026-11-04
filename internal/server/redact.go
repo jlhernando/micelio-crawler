@@ -5,75 +5,23 @@ import (
 	"strings"
 
 	"github.com/micelio/micelio/internal/scheduler"
+	"github.com/micelio/micelio/internal/secrets"
 )
 
 // secretMask replaces a secret in API responses (same placeholder as the
 // settings masking). A config sent back with it keeps the stored secret.
-const secretMask = "••••••••"
+const secretMask = secrets.Mask
 
-// sensitiveConfigKey reports whether a config key or header name holds a
-// credential: cookies, Authorization and API-key headers, API keys, key
-// files, passwords, tokens and webhook URLs (their path is the secret).
-func sensitiveConfigKey(k string) bool {
-	l := strings.NewReplacer("-", "", "_", "").Replace(strings.ToLower(k))
-	switch {
-	case l == "cookie" || l == "cookies" || l == "setcookie":
-		return true
-	case strings.HasSuffix(l, "key") || strings.HasSuffix(l, "keyfile") || strings.HasSuffix(l, "keys"):
-		return true
-	case strings.Contains(l, "authoriz"), strings.Contains(l, "auth") && !strings.Contains(l, "author"):
-		return true
-	}
-	for _, s := range []string{"password", "passwd", "secret", "token", "credential", "session", "signature", "webhook", "slackurl"} {
-		if strings.Contains(l, s) {
-			return true
-		}
-	}
-	return false
-}
-
-// redactURLUserinfo masks the password of a URL like a proxy
-// "http://user:pass@host"; other strings are returned unchanged.
-func redactURLUserinfo(s string) string {
-	if !strings.Contains(s, "@") || !strings.Contains(s, "://") {
-		return s
-	}
-	u, err := url.Parse(s)
-	if err != nil || u.User == nil {
-		return s
-	}
-	if _, ok := u.User.Password(); ok {
-		u.User = url.UserPassword(u.User.Username(), "MICELIOMASK")
-	} else {
-		u.User = url.User("MICELIOMASK")
-	}
-	return strings.Replace(u.String(), "MICELIOMASK", secretMask, 1)
-}
-
-// redactValue returns v with its secrets masked. sensitive says the value
-// sits under a credential key, so every non-empty string in it is masked.
-func redactValue(v any, sensitive bool) any {
-	switch t := v.(type) {
-	case string:
-		if sensitive && t != "" {
-			return secretMask
-		}
-		return redactURLUserinfo(t)
-	case map[string]any:
-		out := make(map[string]any, len(t))
-		for k, x := range t {
-			out[k] = redactValue(x, sensitive || sensitiveConfigKey(k))
-		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i, x := range t {
-			out[i] = redactValue(x, sensitive)
-		}
-		return out
-	}
-	return v
-}
+// Credential detection is shared with the crawl database (package secrets),
+// which stores crawl configs without credentials.
+var (
+	sensitiveConfigKey = secrets.SensitiveKey
+	redactURLUserinfo  = secrets.RedactURLUserinfo
+	redactValue        = secrets.Redact
+	// dropConfigSecrets removes credentials from cfg in place (imported
+	// configs, which never need them).
+	dropConfigSecrets = secrets.Drop
+)
 
 // redactConfig returns a copy of a crawl config map with credentials masked,
 // for API responses. The stored config is not changed.
@@ -82,32 +30,6 @@ func redactConfig(cfg map[string]any) map[string]any {
 		return nil
 	}
 	return redactValue(cfg, false).(map[string]any)
-}
-
-// dropConfigSecrets removes credentials from cfg in place (imported
-// configs, which never need them): credential keys are deleted at any depth
-// and URL passwords are masked.
-func dropConfigSecrets(cfg map[string]any) {
-	for k, v := range cfg {
-		if sensitiveConfigKey(k) {
-			delete(cfg, k)
-			continue
-		}
-		switch t := v.(type) {
-		case map[string]any:
-			dropConfigSecrets(t)
-		case []any:
-			for i, x := range t {
-				if m, ok := x.(map[string]any); ok {
-					dropConfigSecrets(m)
-				} else {
-					t[i] = redactValue(x, false)
-				}
-			}
-		default:
-			cfg[k] = redactValue(v, false)
-		}
-	}
 }
 
 // maskError reports a masked secret the server cannot put back: the client

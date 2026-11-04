@@ -74,6 +74,11 @@ type Prefetched struct {
 // Renderer manages a headless Chrome instance.
 // Fresh tab contexts are created per render to avoid listener accumulation.
 // The Chrome process is shared via the allocator for efficiency.
+//
+// Chrome is never given the crawl's cookies or custom headers: they stay in
+// the crawler's fetcher, scoped by credentialsAllowed. Never add them with
+// network.SetExtraHTTPHeaders or an unscoped cookie, which reach every host
+// the page loads from (TestRenderSendsNoCrawlCredentials).
 type Renderer struct {
 	allocCtx    context.Context
 	allocCancel context.CancelFunc

@@ -84,6 +84,7 @@ func NewUiStore(owner string) (*UiStore, error) {
 	s.unlock = unlock
 	s.recoverStaleJobs()
 	s.removeOrphanCrawlFiles()
+	scrubLegacyCrawlConfigs(s.crawlDir)
 	return s, nil
 }
 
@@ -98,9 +99,12 @@ func OpenUiStore() (*UiStore, error) {
 
 	uiDir := filepath.Join(home, ".micelio", "ui")
 	crawlDir := filepath.Join(uiDir, "crawls")
-	if err := os.MkdirAll(crawlDir, 0755); err != nil {
+	if err := os.MkdirAll(crawlDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create crawl dir: %w", err)
 	}
+	// Crawl databases hold crawled responses and uploads: owner-only, also
+	// for a directory made by an older version.
+	os.Chmod(crawlDir, 0o700)
 
 	dbPath := filepath.Join(uiDir, "micelio-ui.db")
 	// Open without OpenWAL so page_size PRAGMA takes effect on new databases.

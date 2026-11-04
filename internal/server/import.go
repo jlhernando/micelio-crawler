@@ -19,6 +19,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/micelio/micelio/internal/analysis"
 	"github.com/micelio/micelio/internal/crawler"
+	"github.com/micelio/micelio/internal/secrets"
 	"github.com/micelio/micelio/internal/storage"
 	"github.com/micelio/micelio/internal/types"
 	"zombiezen.com/go/sqlite"
@@ -136,6 +137,12 @@ func (m *CrawlManager) prepareImport(path string, opts ImportOptions) (*pendingI
 	if opts.LinkIntelligence {
 		cfg.LinkIntelligence = true
 	}
+	// Credentials in an imported file (from an older version, or made by
+	// hand) are never used: no API key reaches the analysis.
+	if cfg, err = configWithoutSecrets(cfg); err != nil {
+		p.cleanup()
+		return nil, fmt.Errorf("%w: bad config: %v", ErrNotCrawlFile, err)
+	}
 	p.cfg = cfg
 	p.job, err = m.store.CreateCrawlJob(importedConfigMap(cfg, opts.Name))
 	if err != nil {
@@ -162,6 +169,11 @@ func (m *CrawlManager) runImport(ctx context.Context, p *pendingImport) error {
 	cs, err := storage.NewCrawlStore(job.DBPath)
 	if err != nil {
 		return fail(fmt.Errorf("open copy: %w", err))
+	}
+	// The copy keeps no credentials the source file may hold.
+	if err := cs.ScrubConfig(); err != nil {
+		cs.Close()
+		return fail(fmt.Errorf("scrub config: %w", err))
 	}
 	pages, err := cs.GetAllPages()
 	if err != nil {
@@ -441,8 +453,31 @@ func inspectCrawlDB(path string, maxPages int) (*types.CrawlConfig, error) {
 	return &cfg, nil
 }
 
+// configWithoutSecrets returns cfg without credentials (see
+// secrets.Drop).
+func configWithoutSecrets(cfg *types.CrawlConfig) (*types.CrawlConfig, error) {
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if data, err = secrets.ScrubJSON(data); err != nil {
+		return nil, err
+	}
+	var out types.CrawlConfig
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func copyCrawlDB(src, dst string) error {
 	os.Remove(dst)
+	// VACUUM INTO accepts an empty file: create it owner-only first.
+	f, err := os.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	f.Close()
 	conn, err := sqlite.OpenConn(src, sqlite.OpenReadOnly)
 	if err != nil {
 		return err

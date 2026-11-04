@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/micelio/micelio/internal/mcpserver"
 	"github.com/micelio/micelio/internal/server"
 )
 
@@ -78,6 +79,13 @@ func reachableDashboard(base string) (string, bool) {
 }
 
 func uploadImport(base, token, path string, linkIntelligence bool) error {
+	// Same rule as `micelio mcp`: the token travels only over https or to
+	// this computer, never in clear text over the network.
+	if token != "" {
+		if err := mcpserver.CheckTokenTransport(base); err != nil {
+			return err
+		}
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -96,7 +104,9 @@ func uploadImport(base, token, path string, linkIntelligence bool) error {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	fmt.Fprintf(os.Stderr, "Sending %s to the dashboard at %s...\n", filepath.Base(path), base)
-	resp, err := http.DefaultClient.Do(req)
+	// No redirects: one could carry the token to another host or to http.
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

@@ -292,8 +292,21 @@ func (s *crawlSession) emitPage(out *types.PageData, sourceHTML, renderedHTML st
 	s.sink.put(s.sink.encode(out, sourceHTML, renderedHTML))
 }
 
+// isSpiderSeed reports whether u is the start URL of a spider crawl, whose
+// redirect may move the whole crawl to another host. In list and sitemap mode
+// the first URL is just one URL of the list.
+func (s *crawlSession) isSpiderSeed(u string) bool {
+	return u == s.seedURL && (s.config.Mode == types.ModeSpider || s.config.Mode == "")
+}
+
 func (s *crawlSession) fetchWithCache(ctx context.Context, e types.QueueEntry) types.FetchResult {
 	reqOpts := s.fetchOpts
+	// Follow redirects only within the crawl's hosts, so an off-site target
+	// is stored as the redirect it is, not as a page of this site. The seed
+	// may move host (example.com -> www.example.com): the crawl follows it.
+	if !s.isSpiderSeed(e.URL) {
+		reqOpts.FollowRedirect = s.queue.InScope
+	}
 	if e.Referrer != nil {
 		reqOpts.Referrer = *e.Referrer
 	}
@@ -530,8 +543,9 @@ func (s *crawlSession) enrichPage(ctx context.Context, e types.QueueEntry, resul
 		}
 	}
 
-	// Cross-domain redirect detection for seed URL
-	if e.URL == s.seedURL && result.FinalURL != "" {
+	// Cross-domain redirect detection for seed URL (spider only: a list's
+	// first URL redirecting off-site must not move the crawl there)
+	if s.isSpiderSeed(e.URL) && result.FinalURL != "" {
 		finalP, _ := url.Parse(result.FinalURL)
 		if finalP != nil && finalP.Hostname() != s.queue.SeedDomain() {
 			s.queue.UpdateSeedDomain(finalP.Hostname())

@@ -24,6 +24,9 @@ type DeviceSnapshot struct {
 	ResponseTimeMs int64    `json:"responseTimeMs,omitempty"`
 	VaryUserAgent  bool     `json:"varyUserAgent,omitempty"`
 	Error          string   `json:"error,omitempty"`
+	// Raw is the same page from the fetched HTML, before JavaScript, when
+	// this snapshot comes from the rendered DOM.
+	Raw *DeviceSnapshot `json:"raw,omitempty"`
 }
 
 // DeviceComparison is a page seen by the crawl's device (Primary) and by
@@ -45,6 +48,15 @@ type DeviceComparison struct {
 	// LinksParamOnly counts the one-sided links whose path the other device
 	// links too, with other query parameters.
 	LinksParamOnly int `json:"linksParamOnly,omitempty"`
+	// With JS rendering: RawDiffs are the differences between the two
+	// devices in the fetched HTML (Diffs compares the rendered DOMs), and
+	// PrimaryJS/SecondaryJS what JavaScript changes on each device (same
+	// ids), with the internal links only the rendered DOM has.
+	RawDiffs         []string `json:"rawDiffs,omitempty"`
+	PrimaryJS        []string `json:"primaryJs,omitempty"`
+	SecondaryJS      []string `json:"secondaryJs,omitempty"`
+	PrimaryJSLinks   int      `json:"primaryJsLinks,omitempty"`
+	SecondaryJSLinks int      `json:"secondaryJsLinks,omitempty"`
 }
 
 // MaxDeviceLinkSamples caps the link lists kept per page.
@@ -65,6 +77,10 @@ const (
 	DeviceDiffHreflang    = "device-hreflang"    // different number of hreflang links
 	DeviceNoViewport      = "device-no-viewport" // a mobile/tablet device got no meta viewport
 	DeviceFetchFailed     = "device-failed"      // the compare device could not fetch the page
+
+	// Pages issue filters for rendered crawls (not entries of Diffs).
+	DeviceFilterJS  = "device-js"  // JavaScript changes SEO elements on either device
+	DeviceFilterRaw = "device-raw" // the fetched HTML differs between the devices
 )
 
 // DeviceDiffLabels are short descriptions for reports and the dashboard.
@@ -98,4 +114,16 @@ type DeviceParityStats struct {
 	LinksOnlySecondary int `json:"linksOnlySecondary"`
 	LinksParamOnly     int `json:"linksParamOnly"` // of those, same path with other query parameters
 	AvgSimilarity      int `json:"avgSimilarity"`  // 0-100
+	// Rendered crawls only: pages per difference in the fetched HTML, pages
+	// whose fetched HTML is the same on both devices, and pages per change
+	// JavaScript makes on each device.
+	RawCompared  int            `json:"rawCompared,omitempty"` // pages with raw HTML on both devices
+	RawIssues    map[string]int `json:"rawIssues,omitempty"`
+	RawIdentical int            `json:"rawIdentical,omitempty"`
+	JSChanged    int            `json:"jsChanged,omitempty"` // JS changes something on either device
+	// Pages where JS changes something on each device.
+	PrimaryJSPages   int `json:"primaryJsPages,omitempty"`
+	SecondaryJSPages int `json:"secondaryJsPages,omitempty"`
+	PrimaryJS    map[string]int `json:"primaryJs,omitempty"`
+	SecondaryJS  map[string]int `json:"secondaryJs,omitempty"`
 }

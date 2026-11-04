@@ -198,6 +198,16 @@ Results get a **Devices** tab:
   hreflang, missing meta viewport on the phone, or a fetch that failed. Click a
   chip to list its pages; click a page to see both versions side by side with
   the links only each one has.
+- With JavaScript Rendering on, a **Raw HTML vs rendered** card shows how
+  many pages have the same HTML on both devices before JavaScript, and on how
+  many pages JavaScript changes SEO elements on each device (title, h1,
+  content, links, canonical, schema…). Chips **JavaScript changes SEO
+  elements** and **Raw HTML differs** list those pages. Opening a page shows a
+  four-column grid: raw HTML and rendered page of each device, with blue cells
+  for what JavaScript changed and an orange line for what differs between the
+  devices. Pages filters: `issue=device-js` and `device-raw`.
+- If a device is redirected to another host (www → m.example.com), the
+  comparison follows the redirect and compares that page.
 - Issues gets cards for links and content that differ, and Universe a
   **Device differences** pill that lights up those pages.
 - The HTML report, `crawl_summary` (MCP `devices`) and pages filters

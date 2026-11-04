@@ -20,7 +20,7 @@ type pagesQueryIn struct {
 	ID            string   `json:"id" jsonschema:"crawl id (from crawls_list)"`
 	Status        string   `json:"status,omitempty" jsonschema:"status class: 2xx, 3xx, 4xx or 5xx"`
 	Indexable     string   `json:"indexable,omitempty" jsonschema:"yes or no"`
-	Issue         string   `json:"issue,omitempty" jsonschema:"one of: 5xx, missing-title, missing-description, missing-h1, multiple-h1, title-too-long, title-too-short, desc-too-long, deep, missing-canonical, soft-404, duplicate-titles, duplicate-descriptions, device-any, or a device difference id from crawl_summary devices.issues (device-links, device-content, device-title, ...)"`
+	Issue         string   `json:"issue,omitempty" jsonschema:"one of: 5xx, missing-title, missing-description, missing-h1, multiple-h1, title-too-long, title-too-short, desc-too-long, deep, missing-canonical, soft-404, duplicate-titles, duplicate-descriptions, device-any, device-js (JavaScript changes SEO elements), device-raw (HTML before JavaScript differs between devices), or a device difference id from crawl_summary devices.issues (device-links, device-content, device-title, ...)"`
 	RobotsBlocked string   `json:"robotsBlocked,omitempty" jsonschema:"yes = only URLs blocked by robots.txt, no = none of them"`
 	Template      string   `json:"template,omitempty" jsonschema:"page template type, e.g. article or product"`
 	Segment       string   `json:"segment,omitempty" jsonschema:"dimension:value, e.g. folder:/blog"`

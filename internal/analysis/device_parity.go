@@ -29,9 +29,44 @@ func BuildDeviceParity(pages []*types.PageData) *types.DeviceParityStats {
 		st.LinksOnlySecondary += c.LinksOnlySecondaryCount
 		st.LinksParamOnly += c.LinksParamOnly
 		simSum += c.TextSimilarity
+		if c.Primary.Raw != nil && c.Secondary.Raw != nil {
+			if st.RawIssues == nil {
+				st.RawIssues, st.PrimaryJS, st.SecondaryJS = map[string]int{}, map[string]int{}, map[string]int{}
+			}
+			st.RawCompared++
+			if len(c.RawDiffs) == 0 {
+				st.RawIdentical++
+			}
+			for _, d := range c.RawDiffs {
+				st.RawIssues[d]++
+			}
+		}
+		if len(c.PrimaryJS) > 0 || len(c.SecondaryJS) > 0 {
+			st.JSChanged++
+		}
+		if len(c.PrimaryJS) > 0 {
+			st.PrimaryJSPages++
+		}
+		if len(c.SecondaryJS) > 0 {
+			st.SecondaryJSPages++
+		}
+		countIDs(&st.PrimaryJS, c.PrimaryJS)
+		countIDs(&st.SecondaryJS, c.SecondaryJS)
 	}
 	if st != nil {
 		st.AvgSimilarity = simSum / st.Compared
 	}
 	return st
+}
+
+func countIDs(m *map[string]int, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	if *m == nil {
+		*m = map[string]int{}
+	}
+	for _, id := range ids {
+		(*m)[id]++
+	}
 }

@@ -1188,7 +1188,7 @@ async function runCrawl(config: ReturnType<typeof mergeConfig>): Promise<void> {
     const hasAnalyticsEnrichment = pages.some(p => p.gscData || p.ga4Data || p.cruxData || p.plausibleData);
     if (hasAnalyticsEnrichment) {
       const rewriter = new ResultWriter(config.outputPath, config.outputFormat);
-      for (const page of pages) rewriter.write(page);
+      for (const page of pages) await rewriter.write(page);
       await rewriter.close();
     }
 

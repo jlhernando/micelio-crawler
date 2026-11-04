@@ -82,6 +82,8 @@ export async function fetchPlausibleData(options: PlausibleOptions): Promise<Map
   // 2. pathToUrls: normalized paths for matching API results back to crawled URLs
   const pathToUrls = new Map<string, string[]>();
   const originalPaths: string[] = [];
+  // Set for O(1) membership; the array keeps the request order stable.
+  const seenPaths = new Set<string>();
 
   for (const url of urls) {
     try {
@@ -90,7 +92,8 @@ export async function fetchPlausibleData(options: PlausibleOptions): Promise<Map
       const normPath = normalizePath(rawPath);
 
       // Collect original-case paths for API filter (deduplicated)
-      if (!originalPaths.includes(rawPath)) {
+      if (!seenPaths.has(rawPath)) {
+        seenPaths.add(rawPath);
         originalPaths.push(rawPath);
       }
 

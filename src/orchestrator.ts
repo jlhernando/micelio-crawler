@@ -45,9 +45,20 @@ export interface CrawlResult {
   embeddingStats: EmbeddingStats | null;
 }
 
+/**
+ * Optional run control from the dashboard. While isPaused() is true no new
+ * page is started; once signal is aborted no new page is started and the
+ * crawl returns after the pages in flight finish.
+ */
+export interface CrawlControl {
+  signal?: AbortSignal;
+  isPaused?: () => boolean;
+}
+
 export async function crawl(
   config: CrawlConfig,
   onProgress?: (progress: CrawlProgress) => void,
+  control: CrawlControl = {},
 ): Promise<CrawlResult> {
   const isListMode = config.mode === 'list';
   const isSitemapMode = config.mode === 'sitemap';
@@ -190,6 +201,10 @@ export async function crawl(
 
   // Initialize writer
   const writer = new ResultWriter(config.outputPath, config.outputFormat);
+  // Awaiting the write holds the worker slot until the stream drains
+  // (backpressure). A failed stream stops the crawl (shouldAbort) and its
+  // error is thrown by writer.close().
+  const writePage = (page: PageData) => writer.write(page).catch(() => {});
 
   const limit = pLimit(config.concurrency);
   const results: PageData[] = [];
@@ -198,7 +213,9 @@ export async function crawl(
   if (isResuming) {
     stats.completed = store!.getPageCount();
   }
-  const allTasks: Promise<void>[] = [];
+  // Only tasks still running: settled ones are dropped so a long crawl does
+  // not keep one promise per page.
+  const allTasks = new Set<Promise<void>>();
 
   // Track external links for optional checking
   const externalLinkMap = new Map<string, string[]>();
@@ -356,6 +373,16 @@ export async function crawl(
 
   function shouldAbort(): boolean {
     if (crawlAborted) return true;
+    if (control.signal?.aborted) {
+      crawlAborted = true;
+      process.stderr.write(`\n  Crawl stopped: cancelled\n`);
+      return true;
+    }
+    if (writer.failed) {
+      crawlAborted = true;
+      process.stderr.write(`\n  Crawl stopped: cannot write output ${config.outputPath}\n`);
+      return true;
+    }
     if (config.maxErrors > 0 && stats.failed >= config.maxErrors) {
       if (!crawlAborted) {
         crawlAborted = true;
@@ -375,6 +402,11 @@ export async function crawl(
 
   // Process queue
   while ((hasMoreWork() || limit.activeCount > 0) && !shouldAbort()) {
+    // Paused: start nothing new; pages in flight still finish
+    if (control.isPaused?.()) {
+      await new Promise((r) => setTimeout(r, 200));
+      continue;
+    }
     while (hasMoreWork() && limit.activeCount + limit.pendingCount < config.concurrency * 2 && !shouldAbort()) {
       const entry = getNextEntry();
       if (!entry) break;
@@ -438,7 +470,7 @@ export async function crawl(
             inlinks: 0,
             pageRank: 0,
           };
-          writer.write(blockedPage);
+          await writePage(blockedPage);
           results.push(blockedPage);
           if (store) {
             try { store.insertPage(blockedPage); } catch (e) { process.stderr.write(`  [warn] Failed to store blocked page ${blockedPage.url}: ${e}\n`); }
@@ -576,7 +608,7 @@ export async function crawl(
             }
           }
 
-          writer.write(pageData);
+          await writePage(pageData);
           results.push(pageData);
           // Phase 12.1: Persist to DB immediately (auto-save)
           // ISSUE-2 fix: Graceful handling of DB write failures
@@ -635,7 +667,8 @@ export async function crawl(
         }
       });
 
-      allTasks.push(task);
+      allTasks.add(task);
+      task.finally(() => allTasks.delete(task)).catch(() => {});
     }
 
     if (limit.activeCount > 0 || limit.pendingCount > 0) {
@@ -643,7 +676,7 @@ export async function crawl(
     }
   }
 
-  await Promise.all(allTasks);
+  await Promise.all([...allTasks]);
   await writer.close();
 
   // Phase 6: Sitemap audit — annotate pages with sitemap presence
@@ -783,7 +816,7 @@ export async function crawl(
     process.stderr.write(`Updating output with post-crawl data...\n`);
     const rewriter = new ResultWriter(config.outputPath, config.outputFormat);
     for (const page of results) {
-      rewriter.write(page);
+      await rewriter.write(page);
     }
     await rewriter.close();
 
@@ -793,19 +826,26 @@ export async function crawl(
     }
   }
 
-  // Phase 12.1: Load all pages and close DB (with try/finally for ISSUE-3)
-  // Note: getAllPages() loads all pages into memory for report generation.
-  // This is a known v1 limitation; for crawls with millions of pages,
-  // future work should stream pages through the reporter or paginate from DB.
+  // Phase 12.1: Close DB (with try/finally for ISSUE-3). The reporter still
+  // needs every page in memory, but never two copies: when the DB holds only
+  // this run's pages, `results` already is that list and is not reloaded.
+  // When it also holds pages from an earlier run (resume), `results` is
+  // released before the full reload.
+  const newCount = results.length;
   let allPages: PageData[];
   if (store) {
     try {
-      allPages = store.getAllPages();
+      if (!isResuming && store.getPageCount() === newCount) {
+        allPages = results;
+      } else {
+        results.length = 0;
+        allPages = store.getAllPages();
+      }
       store.markCrawlComplete();
-      const resumedCount = isResuming ? (allPages.length - results.length) : 0;
+      const resumedCount = isResuming ? (allPages.length - newCount) : 0;
       // MINOR-4 fix: Separate previously crawled from newly crawled in output
       if (resumedCount > 0) {
-        process.stderr.write(`Database: ${allPages.length} total pages (${resumedCount} from previous run + ${results.length} new)\n`);
+        process.stderr.write(`Database: ${allPages.length} total pages (${resumedCount} from previous run + ${newCount} new)\n`);
       } else {
         process.stderr.write(`Database: ${allPages.length} total pages stored in ${config.dbPath}\n`);
       }
@@ -821,7 +861,7 @@ export async function crawl(
   const rssMB = (memUsage.rss / 1024 / 1024).toFixed(0);
   const heapMB = (memUsage.heapUsed / 1024 / 1024).toFixed(0);
   // MINOR-4 fix: Show only newly crawled count in completion message
-  process.stderr.write(`\nCrawl complete: ${results.length} pages crawled in ${duration}s (${stats.failed} failed)\n`);
+  process.stderr.write(`\nCrawl complete: ${newCount} pages crawled in ${duration}s (${stats.failed} failed)\n`);
   process.stderr.write(`Output: ${config.outputPath}\n`);
   process.stderr.write(`Memory: ${rssMB} MB RSS, ${heapMB} MB heap\n\n`);
 

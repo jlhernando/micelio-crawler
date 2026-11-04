@@ -1,6 +1,8 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { UiStore } from './ui-store.js';
 import type { CrawlConfig, PageData, CrawlStats } from './types.js';
 import type { CrawlProgress } from './orchestrator.js';
+import { CrawlStore } from './db-store.js';
 
 interface ActiveCrawl {
   id: string;
@@ -16,6 +18,16 @@ export type ProgressCallback = (crawlId: string, data: {
   type: 'progress' | 'page' | 'error' | 'complete' | 'paused' | 'resumed' | 'cancelled';
   data: Record<string, unknown>;
 }) => void;
+
+/** Output file of a job, next to its crawl DB (fallback for jobs without one). */
+export function outputPathFor(dbPath: string, ext: 'jsonl' | 'csv'): string {
+  return dbPath ? dbPath.replace(/\.db$/, '') + '.' + ext : 'output.' + ext;
+}
+
+/** Saved report stats of a job, next to its crawl DB. */
+export function statsPathFor(dbPath: string): string {
+  return dbPath.replace(/\.db$/, '') + '.stats.json';
+}
 
 export class UiCrawlManager {
   private store: UiStore;
@@ -37,10 +49,11 @@ export class UiCrawlManager {
     }
 
     const abortController = new AbortController();
+    const startedAt = Date.now();
     this.activeCrawl = {
       id: crawlId,
       config,
-      startedAt: Date.now(),
+      startedAt,
       pageCount: 0,
       errorCount: 0,
       abortController,
@@ -52,23 +65,28 @@ export class UiCrawlManager {
     // Run the crawl in the background
     this.runCrawl(crawlId, config).catch(err => {
       console.error(`Crawl ${crawlId} failed:`, err.message);
+      if (this.activeCrawl?.id === crawlId) this.activeCrawl = null;
+      if (abortController.signal.aborted) return; // stays 'cancelled'
       this.store.updateCrawlJob(crawlId, {
         status: 'failed',
         completedAt: new Date().toISOString(),
-        durationMs: Date.now() - (this.activeCrawl?.startedAt || Date.now()),
+        durationMs: Date.now() - startedAt,
       });
-      this.activeCrawl = null;
     });
   }
 
   private async runCrawl(crawlId: string, config: Record<string, unknown>): Promise<void> {
+    const active = this.activeCrawl;
     try {
       // Dynamic import to avoid loading the full crawl engine on startup
       const { crawl } = await import('./orchestrator.js');
       const { generateReport } = await import('./reporter.js');
 
-      // Build a CrawlConfig from the UI config
-      const crawlConfig = this.buildCrawlConfig(config);
+      // Build a CrawlConfig from the UI config. Pages go to the job's own
+      // crawl DB and output file, so results survive a restart and two jobs
+      // never write the same file.
+      const dbPath = this.store.getCrawlJob(crawlId)?.dbPath || '';
+      const crawlConfig = this.buildCrawlConfig(config, dbPath);
 
       // Run the crawl with progress reporting
       const crawlStart = Date.now();
@@ -113,10 +131,14 @@ export class UiCrawlManager {
         }
       };
 
-      const { pages, externalLinkResults } = await crawl(crawlConfig, progressHandler);
+      const { pages, externalLinkResults } = await crawl(crawlConfig, progressHandler, {
+        signal: active?.abortController.signal,
+        isPaused: () => active?.paused === true,
+      });
       const durationMs = Date.now() - crawlStart;
 
-      if (!this.activeCrawl || this.activeCrawl.id !== crawlId) return;
+      // Cancelled: cancelCrawl already stored the final status
+      if (!this.activeCrawl || this.activeCrawl.id !== crawlId || active?.abortController.signal.aborted) return;
 
       // Generate report stats
       const stats = generateReport(pages, durationMs, externalLinkResults);
@@ -139,8 +161,16 @@ export class UiCrawlManager {
         (stats as CrawlStats).linkIntelligenceStats = liStats;
       }
 
-      // Store results in memory
+      // Store results in memory; the stats also go next to the crawl DB so
+      // getResults can rebuild them after a restart
       this.results.set(crawlId, { pages, stats });
+      if (dbPath) {
+        try {
+          writeFileSync(statsPathFor(dbPath), JSON.stringify(stats), { mode: 0o600 });
+        } catch (err) {
+          console.error(`Crawl ${crawlId}: cannot save stats: ${(err as Error).message}`);
+        }
+      }
 
       // Update job status (pageCount = total pages, errorCount = final failed count)
       this.store.updateCrawlJob(crawlId, {
@@ -163,7 +193,7 @@ export class UiCrawlManager {
     }
   }
 
-  private buildCrawlConfig(config: Record<string, unknown>): CrawlConfig {
+  private buildCrawlConfig(config: Record<string, unknown>, dbPath: string): CrawlConfig {
     const num = (v: unknown, d: number): number => typeof v === 'number' ? v : d;
     const bool = (v: unknown, d: boolean): boolean => typeof v === 'boolean' ? v : d;
     const str = (v: unknown, d: string = ''): string => typeof v === 'string' ? v : d;
@@ -180,7 +210,7 @@ export class UiCrawlManager {
       delayExplicit: num(config.delay, 0) > 0,
       userAgent: str(config.userAgent, 'Micelio/1.0'),
       jsRendering: bool(config.jsRendering, false),
-      outputPath: 'output.jsonl',
+      outputPath: outputPathFor(dbPath, config.outputFormat === 'csv' ? 'csv' : 'jsonl'),
       outputFormat: (config.outputFormat as CrawlConfig['outputFormat']) || 'jsonl',
       customHeaders: (config.customHeaders as Record<string, string>) || {},
       cookies: str(config.cookies),
@@ -210,7 +240,7 @@ export class UiCrawlManager {
       ga4Days: num(config.ga4Days, 90),
       ga4KeyFile: str(config.ga4KeyFile),
       segmentRules: (config.segmentRules as CrawlConfig['segmentRules']) || [],
-      dbPath: '',
+      dbPath,
       resume: false,
       proxy: str(config.proxy),
       ngrams: bool(config.ngrams, false),
@@ -240,37 +270,70 @@ export class UiCrawlManager {
     };
   }
 
-  pauseCrawl(crawlId: string): void {
-    if (this.activeCrawl?.id === crawlId) {
-      this.activeCrawl.paused = true;
-      this.store.updateCrawlJob(crawlId, { status: 'paused' });
-      this.onProgress?.(crawlId, { type: 'paused', data: { crawlId } });
-    }
+  /** Pause the active crawl. False when crawlId is not the active crawl. */
+  pauseCrawl(crawlId: string): boolean {
+    if (this.activeCrawl?.id !== crawlId || this.activeCrawl.abortController.signal.aborted) return false;
+    this.activeCrawl.paused = true;
+    this.store.updateCrawlJob(crawlId, { status: 'paused' });
+    this.onProgress?.(crawlId, { type: 'paused', data: { crawlId } });
+    return true;
   }
 
-  resumeCrawl(crawlId: string): void {
-    if (this.activeCrawl?.id === crawlId) {
-      this.activeCrawl.paused = false;
-      this.store.updateCrawlJob(crawlId, { status: 'running' });
-      this.onProgress?.(crawlId, { type: 'resumed', data: { crawlId } });
-    }
+  /** Resume the active crawl. False when crawlId is not the active crawl. */
+  resumeCrawl(crawlId: string): boolean {
+    if (this.activeCrawl?.id !== crawlId || this.activeCrawl.abortController.signal.aborted) return false;
+    this.activeCrawl.paused = false;
+    this.store.updateCrawlJob(crawlId, { status: 'running' });
+    this.onProgress?.(crawlId, { type: 'resumed', data: { crawlId } });
+    return true;
   }
 
-  cancelCrawl(crawlId: string): void {
-    if (this.activeCrawl?.id === crawlId) {
-      this.activeCrawl.abortController.abort();
-      this.store.updateCrawlJob(crawlId, {
-        status: 'cancelled',
-        completedAt: new Date().toISOString(),
-        durationMs: Date.now() - this.activeCrawl.startedAt,
-      });
-      this.onProgress?.(crawlId, { type: 'cancelled', data: { crawlId } });
-      this.activeCrawl = null;
-    }
+  /**
+   * Cancel the active crawl: no new page starts, and the crawl stops once the
+   * pages in flight finish. The crawl stays active until then, so a new one
+   * cannot start alongside it. False when crawlId is not the active crawl.
+   */
+  cancelCrawl(crawlId: string): boolean {
+    if (this.activeCrawl?.id !== crawlId) return false;
+    if (this.activeCrawl.abortController.signal.aborted) return true;
+    this.activeCrawl.abortController.abort();
+    this.activeCrawl.paused = false;
+    this.store.updateCrawlJob(crawlId, {
+      status: 'cancelled',
+      completedAt: new Date().toISOString(),
+      durationMs: Date.now() - this.activeCrawl.startedAt,
+    });
+    this.onProgress?.(crawlId, { type: 'cancelled', data: { crawlId } });
+    return true;
   }
 
+  /**
+   * Results of a crawl: from memory, or for a completed crawl from a previous
+   * server run, from its crawl DB and saved stats.
+   */
   getResults(crawlId: string): { pages: unknown[]; stats: unknown } | null {
-    return this.results.get(crawlId) || null;
+    const cached = this.results.get(crawlId);
+    if (cached) return cached;
+    const job = this.store.getCrawlJob(crawlId);
+    if (!job || job.status !== 'completed' || !job.dbPath || !existsSync(job.dbPath)) return null;
+    const statsPath = statsPathFor(job.dbPath);
+    if (!existsSync(statsPath)) return null;
+    try {
+      const stats = JSON.parse(readFileSync(statsPath, 'utf8'));
+      const crawlStore = new CrawlStore(job.dbPath);
+      let pages: PageData[];
+      try {
+        pages = crawlStore.getAllPages();
+      } finally {
+        crawlStore.close();
+      }
+      const loaded = { pages, stats };
+      this.results.set(crawlId, loaded);
+      return loaded;
+    } catch (err) {
+      console.error(`Crawl ${crawlId}: cannot load stored results: ${(err as Error).message}`);
+      return null;
+    }
   }
 
   getActiveCrawlId(): string | null {

@@ -204,7 +204,8 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
       // POST /api/crawl/:id/pause
       const pauseMatch = path.match(/^\/api\/crawl\/([^/]+)\/pause$/);
       if (method === 'POST' && pauseMatch) {
-        crawlManager.pauseCrawl(pauseMatch[1]);
+        if (!store.getCrawlJob(pauseMatch[1])) return notFound(res, 'Crawl not found');
+        if (!crawlManager.pauseCrawl(pauseMatch[1])) return notRunning(res);
         json(res, 200, { status: 'paused' });
         return true;
       }
@@ -212,7 +213,8 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
       // POST /api/crawl/:id/resume
       const resumeMatch = path.match(/^\/api\/crawl\/([^/]+)\/resume$/);
       if (method === 'POST' && resumeMatch) {
-        crawlManager.resumeCrawl(resumeMatch[1]);
+        if (!store.getCrawlJob(resumeMatch[1])) return notFound(res, 'Crawl not found');
+        if (!crawlManager.resumeCrawl(resumeMatch[1])) return notRunning(res);
         json(res, 200, { status: 'running' });
         return true;
       }
@@ -220,7 +222,8 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
       // POST /api/crawl/:id/cancel
       const cancelMatch = path.match(/^\/api\/crawl\/([^/]+)\/cancel$/);
       if (method === 'POST' && cancelMatch) {
-        crawlManager.cancelCrawl(cancelMatch[1]);
+        if (!store.getCrawlJob(cancelMatch[1])) return notFound(res, 'Crawl not found');
+        if (!crawlManager.cancelCrawl(cancelMatch[1])) return notRunning(res);
         json(res, 200, { status: 'cancelled' });
         return true;
       }
@@ -379,6 +382,11 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
       return true;
     }
   };
+}
+
+function notRunning(res: ServerResponse): true {
+  json(res, 409, { error: { code: 'NOT_RUNNING', message: 'Crawl is not running' } });
+  return true;
 }
 
 function json(res: ServerResponse, status: number, data: unknown): void {

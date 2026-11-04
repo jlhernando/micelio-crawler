@@ -17,6 +17,47 @@ import { Agent, buildConnector, type Dispatcher } from 'undici';
 
 let allowPrivate = false;
 
+type DnsLookupFn = (hostname: string, options: LookupOptions & { all: true },
+  callback: (err: NodeJS.ErrnoException | null, addresses: LookupAddress[]) => void) => void;
+
+/** Resolver used by guardedLookup. Tests swap it with setDnsLookupForTests. */
+let resolveAll: DnsLookupFn = dnsLookup as unknown as DnsLookupFn;
+
+/**
+ * Test seam: replace the DNS resolver behind guardedLookup (null restores
+ * node:dns). Lets tests make a name resolve to loopback or to a public
+ * address without real DNS.
+ */
+export function setDnsLookupForTests(fn: DnsLookupFn | null): void {
+  resolveAll = fn ?? (dnsLookup as unknown as DnsLookupFn);
+}
+
+let trustedProxyUrl = '';
+
+/**
+ * Proxy the local user configured when starting the dashboard
+ * (micelio ui --trusted-proxy, or MICELIO_TRUSTED_PROXY). Dashboard/API
+ * crawls may only use this proxy; any other proxy URL is refused.
+ */
+export function setTrustedProxy(proxy: string): void {
+  trustedProxyUrl = proxy.trim();
+}
+
+export function trustedProxy(): string {
+  return trustedProxyUrl;
+}
+
+/** Whether an API-supplied proxy URL is the trusted one ("" never is). */
+export function isTrustedProxy(proxy: string): boolean {
+  if (!proxy || !trustedProxyUrl) return false;
+  if (proxy === trustedProxyUrl) return true;
+  try {
+    return new URL(proxy).href === new URL(trustedProxyUrl).href;
+  } catch {
+    return false;
+  }
+}
+
 /** Allow requests to private addresses (CLI --allow-private only). */
 export function setAllowPrivateNetworks(allow: boolean): void {
   allowPrivate = allow;
@@ -108,7 +149,7 @@ export function isBlockedIp(ip: string): boolean {
   return false;
 }
 
-function bareHost(hostname: string): string {
+export function bareHost(hostname: string): string {
   return hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
 }
 
@@ -148,9 +189,9 @@ type LookupCallback = (err: NodeJS.ErrnoException | null, address: string | Look
  * dialled.
  */
 export function guardedLookup(hostname: string, options: LookupOptions, callback: LookupCallback): void {
-  dnsLookup(hostname, { ...options, all: true }, (err, addresses) => {
+  resolveAll(hostname, { ...options, all: true }, (err, addresses) => {
     if (err) return callback(err, '');
-    const list = addresses as LookupAddress[];
+    const list = addresses;
     if (!allowPrivate) {
       const bad = list.find((a) => isBlockedIp(a.address));
       if (bad || list.length === 0) {
@@ -173,6 +214,24 @@ export async function assertPublicUrl(rawUrl: string): Promise<void> {
   if (isIP(host)) return;
   await new Promise<void>((resolve, reject) => {
     guardedLookup(host, { all: true }, (err) => (err ? reject(err) : resolve()));
+  });
+}
+
+/**
+ * Resolve a host for a direct connection: the URL-level check first, then
+ * DNS through guardedLookup. Returns the checked address to dial, so the
+ * caller connects to exactly the address that was checked.
+ */
+export async function resolvePublicAddress(hostname: string): Promise<{ address: string; family: number }> {
+  const host = bareHost(hostname);
+  const reason = urlBlockReason(`http://${host.includes(':') ? `[${host}]` : host}/`);
+  if (reason) throw new BlockedAddressError(reason);
+  if (isIP(host)) return { address: host, family: isIP(host) };
+  return new Promise((resolve, reject) => {
+    guardedLookup(host, {}, (err, address, family) => {
+      if (err) reject(err);
+      else resolve({ address: address as string, family: family ?? 4 });
+    });
   });
 }
 

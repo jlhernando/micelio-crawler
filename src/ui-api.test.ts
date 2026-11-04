@@ -3,6 +3,7 @@ import {
   validateSettings, applyEnvFallbacks, maskSecrets, redactConfig, unmaskConfig, validateCrawlRequest,
   MASKED_SECRET, BadRequestError,
 } from './ui-api.js';
+import { setTrustedProxy } from './net-guard.js';
 
 describe('validateSettings', () => {
   it('accepts valid settings with correct types', () => {
@@ -252,5 +253,34 @@ describe('validateCrawlRequest', () => {
 
   it('accepts public literal URLs', async () => {
     await expect(validateCrawlRequest({ seedUrl: 'https://93.184.215.14/' })).resolves.toBeUndefined();
+  });
+});
+
+describe('proxy from the API (trusted proxy only)', () => {
+  afterEach(() => setTrustedProxy(''));
+
+  it('rejects any proxy when no trusted proxy is configured', async () => {
+    for (const proxy of ['http://10.0.0.5:3128', 'http://proxy.example.com:8080', 'socks5://127.0.0.1:9050']) {
+      await expect(validateCrawlRequest({ seedUrl: 'https://93.184.215.14/', proxy }), proxy)
+        .rejects.toThrow(/trusted proxy/);
+    }
+    await expect(validateCrawlRequest({ seedUrl: 'https://93.184.215.14/', proxy: 42 })).rejects.toThrow(BadRequestError);
+  });
+
+  it('accepts only the trusted proxy, and no proxy', async () => {
+    setTrustedProxy('http://user:pw@proxy.example.com:8080');
+    await expect(validateCrawlRequest({ seedUrl: 'https://93.184.215.14/', proxy: 'http://user:pw@proxy.example.com:8080' }))
+      .resolves.toBeUndefined();
+    await expect(validateCrawlRequest({ seedUrl: 'https://93.184.215.14/', proxy: '' })).resolves.toBeUndefined();
+    await expect(validateCrawlRequest({ seedUrl: 'https://93.184.215.14/' })).resolves.toBeUndefined();
+    await expect(validateCrawlRequest({ seedUrl: 'https://93.184.215.14/', proxy: 'http://user:pw@10.0.0.5:8080' }))
+      .rejects.toThrow(/trusted proxy/);
+  });
+
+  it('turns the masked trusted proxy back into the real one', () => {
+    setTrustedProxy('http://user:pw@proxy.example.com:8080');
+    const cfg = unmaskConfig(redactConfig({ proxy: 'http://user:pw@proxy.example.com:8080' }), {});
+    expect(cfg.proxy).toBe('http://user:pw@proxy.example.com:8080');
+    expect(() => unmaskConfig(redactConfig({ proxy: 'http://user:pw@other:1' }), {})).toThrow(BadRequestError);
   });
 });

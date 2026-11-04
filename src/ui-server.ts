@@ -8,7 +8,7 @@ import { UiStore } from './ui-store.js';
 import { UiCrawlManager } from './ui-crawl-manager.js';
 import { createApiHandler } from './ui-api.js';
 import { checkUiAccess, isLoopbackHost } from './ui-auth.js';
-import { setAllowPrivateNetworks } from './net-guard.js';
+import { setAllowPrivateNetworks, setTrustedProxy } from './net-guard.js';
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -28,6 +28,8 @@ export interface UiServerOptions {
   host?: string;
   /** Bearer token required on /api/* and /ws. */
   authToken?: string;
+  /** The only proxy dashboard crawls may use (--trusted-proxy). */
+  trustedProxy?: string;
 }
 
 export async function startUiServer(port: number, autoOpen = true, opts: UiServerOptions = {}): Promise<void> {
@@ -39,6 +41,8 @@ export async function startUiServer(port: number, autoOpen = true, opts: UiServe
   }
   // The dashboard never crawls private networks, whatever the CLI flags say
   setAllowPrivateNetworks(false);
+  // Crawl configs from the API may only name this proxy, set by the local user
+  setTrustedProxy(opts.trustedProxy || '');
 
   // Resolve the dashboard static files directory
   const thisDir = fileURLToPath(new URL('.', import.meta.url));

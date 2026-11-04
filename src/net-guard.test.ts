@@ -1,10 +1,11 @@
 import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest';
-import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { request } from 'undici';
+import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from 'node:http';
+import { connect as netConnect, type AddressInfo } from 'node:net';
+import { ProxyAgent, request } from 'undici';
 import {
   isBlockedIp, urlBlockReason, guardedLookup, guardedDispatcher, assertPublicUrl,
   setAllowPrivateNetworks, stripCredentialsOnCrossOrigin, isCredentialHeader, sameSiteHost,
+  setDnsLookupForTests,
 } from './net-guard.js';
 import { fetchPage, fetchHead, checkExternalUrl, headResourceSize } from './fetcher.js';
 
@@ -230,5 +231,85 @@ describe('fetcher SSRF and credential handling (local servers)', () => {
     await fetchPage(`${originUrl}/same`, { ...opts, credentialHosts: new Set(['example.com']) });
     expect(seen[0].cookie).toBeUndefined();
     expect(seen[0]['x-tenant']).toBeUndefined();
+  });
+});
+
+describe('fetcher through a user proxy (CLI --proxy / trusted proxy)', () => {
+  // A naive HTTP proxy that forwards everything to one local server: only
+  // the fetcher's own target check stands between a target and the server
+  let site: Server;
+  let proxy: Server;
+  let proxyUrl = '';
+  const proxied: string[] = [];
+
+  beforeAll(async () => {
+    site = createServer((req, res) => {
+      if (req.url === '/hop') {
+        res.writeHead(302, { Location: 'http://evil.test/secret' });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end('<p>page</p>');
+    });
+    await new Promise<void>((r) => site.listen(0, '127.0.0.1', r));
+    const sitePort = (site.address() as AddressInfo).port;
+    proxy = createServer((req, res) => {
+      proxied.push(req.url || '');
+      const out = httpRequest({ host: '127.0.0.1', port: sitePort, path: new URL(req.url || '').pathname, method: req.method }, (r) => {
+        res.writeHead(r.statusCode ?? 502, r.headers);
+        r.pipe(res);
+      });
+      req.pipe(out);
+    });
+    // undici's ProxyAgent tunnels plain http too
+    proxy.on('connect', (req, sock, head) => {
+      proxied.push(`CONNECT ${req.url}`);
+      const t = netConnect(sitePort, '127.0.0.1', () => {
+        sock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+        if (head.length) t.write(head);
+        t.pipe(sock);
+        sock.pipe(t);
+      });
+      sock.on('error', () => t.destroy());
+    });
+    await new Promise<void>((r) => proxy.listen(0, '127.0.0.1', r));
+    proxyUrl = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`;
+    setDnsLookupForTests((hostname, _opts, cb) => {
+      const ip = ({ 'evil.test': '127.0.0.1', 'public.test': '203.0.113.7' } as Record<string, string>)[hostname];
+      if (!ip) return cb(Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }), []);
+      cb(null, [{ address: ip, family: 4 }]);
+    });
+  });
+
+  afterAll(() => {
+    setDnsLookupForTests(null);
+    site.close();
+    proxy.close();
+  });
+
+  it('resolves and checks each target before handing it to the proxy', async () => {
+    const dispatcher = new ProxyAgent(proxyUrl);
+    try {
+      proxied.length = 0;
+      const page = await fetchPage('http://evil.test/secret', { userAgent: 't', dispatcher });
+      expect(page.error).toMatch(/Blocked/);
+      const head = await fetchHead('http://evil.test/secret', { userAgent: 't', dispatcher });
+      expect(head.error).toMatch(/Blocked/);
+      expect(proxied).toEqual([]);
+
+      const ok = await fetchPage('http://public.test/', { userAgent: 't', dispatcher });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.html).toContain('page');
+      expect(proxied).toEqual(['CONNECT public.test:80']);
+
+      // A redirect hop to a name that resolves to loopback is refused too
+      proxied.length = 0;
+      const hop = await fetchPage('http://public.test/hop', { userAgent: 't', dispatcher });
+      expect(hop.error).toMatch(/Blocked/);
+      expect(proxied).toEqual(['CONNECT public.test:80']);
+    } finally {
+      await dispatcher.close();
+    }
   });
 });

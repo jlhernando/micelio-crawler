@@ -224,11 +224,15 @@ export async function crawl(
   const transferSizeMap = new Map<string, number>();
   const resourceRefsMap = new Map<string, ResourceEntry[]>();
 
-  // Phase 12.3: Create shared ProxyAgent if proxy is configured
+  // Phase 12.3: Create shared ProxyAgent if proxy is configured. The proxy
+  // resolves targets itself, so fetchPage/fetchHead resolve and check every
+  // target (and redirect hop) before handing it over. The browser chains to
+  // the proxy through its local guarded proxy. Always set (or clear) it: the
+  // dashboard runs many crawls in one process.
   let proxyDispatcher: Dispatcher | undefined;
+  setBrowserProxy(config.proxy || '');
   if (config.proxy) {
     proxyDispatcher = new ProxyAgent(config.proxy);
-    setBrowserProxy(config.proxy);
     // Redact credentials before logging
     try {
       const proxyUrl = new URL(config.proxy);

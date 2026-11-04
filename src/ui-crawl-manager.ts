@@ -5,6 +5,7 @@ import { CRAWLS_DIR, type UiStore } from './ui-store.js';
 import type { CrawlConfig, PageData, CrawlStats } from './types.js';
 import type { CrawlProgress } from './orchestrator.js';
 import { CrawlStore } from './db-store.js';
+import { isTrustedProxy, trustedProxy } from './net-guard.js';
 
 interface ActiveCrawl {
   id: string;
@@ -37,6 +38,17 @@ export function crawlFilesFor(dbPath: string): string[] {
     dbPath, `${dbPath}-wal`, `${dbPath}-shm`,
     outputPathFor(dbPath, 'jsonl'), outputPathFor(dbPath, 'csv'), statsPathFor(dbPath),
   ];
+}
+
+/**
+ * Proxy for a dashboard crawl: only the trusted proxy configured by the
+ * local user (micelio ui --trusted-proxy / MICELIO_TRUSTED_PROXY). The API
+ * already refuses others; this is the second check.
+ */
+function apiProxy(proxy: string): string {
+  if (!proxy) return '';
+  if (!isTrustedProxy(proxy)) throw new Error('proxy is not the trusted proxy; dashboard crawls cannot use it');
+  return trustedProxy();
 }
 
 type CrawlResults = { pages: unknown[]; stats: unknown };
@@ -294,7 +306,7 @@ export class UiCrawlManager {
       segmentRules: (config.segmentRules as CrawlConfig['segmentRules']) || [],
       dbPath,
       resume: false,
-      proxy: str(config.proxy),
+      proxy: apiProxy(str(config.proxy)),
       ngrams: bool(config.ngrams, false),
       embeddings: bool(config.embeddings, false),
       embeddingModel: str(config.embeddingModel),

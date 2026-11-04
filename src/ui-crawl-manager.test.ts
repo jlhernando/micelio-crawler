@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { Readable } from 'node:stream';
+import { setTrustedProxy } from './net-guard.js';
 import type { CrawlConfig, PageData } from './types.js';
 import type { CrawlControl } from './orchestrator.js';
 
@@ -230,5 +232,67 @@ describe('crawl control API', () => {
       expect(r.body.error.code).toBe('NOT_RUNNING');
     }
     await tick();
+  });
+});
+
+describe('proxy in dashboard crawls', () => {
+  afterEach(() => setTrustedProxy(''));
+
+  async function start(handler: ReturnType<typeof createApiHandler>, config: Record<string, unknown>) {
+    let status = 0;
+    let body = '';
+    const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(config))]), {
+      url: '/api/crawl/start', method: 'POST', headers: { host: 'x' },
+    });
+    const res = {
+      writeHead: (s: number) => { status = s; },
+      setHeader: () => {},
+      end: (b: string) => { body = b; },
+    };
+    await handler(req as never, res as never);
+    return { status, body: JSON.parse(body) };
+  }
+
+  function apiWithStore() {
+    const jobs: Record<string, Job> = {};
+    const store = {
+      ...fakeStore(jobs),
+      getSettings: () => ({}),
+      createCrawlJob: (config: Record<string, unknown>) => {
+        const job = { id: `j${Object.keys(jobs).length}`, status: 'pending', dbPath: join(dir, 'j.db'), config };
+        jobs[job.id] = job;
+        return job;
+      },
+    } as unknown as import('./ui-store.js').UiStore;
+    return createApiHandler(store, new UiCrawlManager(store));
+  }
+
+  it('POST /api/crawl/start refuses a proxy that is not the trusted one (400)', async () => {
+    const handler = apiWithStore();
+    const r = await start(handler, { seedUrl: 'https://93.184.215.14/', proxy: 'http://10.0.0.5:3128' });
+    expect(r.status).toBe(400);
+    expect(r.body.error.message).toMatch(/--trusted-proxy/);
+    setTrustedProxy('http://proxy.example.com:8080');
+    const r2 = await start(handler, { seedUrl: 'https://93.184.215.14/', proxy: 'http://10.0.0.5:3128' });
+    expect(r2.status).toBe(400);
+    expect(engine.calls).toHaveLength(0);
+  });
+
+  it('POST /api/crawl/start accepts the trusted proxy and the crawl uses it', async () => {
+    setTrustedProxy('http://u:pw@proxy.example.com:8080');
+    const handler = apiWithStore();
+    const r = await start(handler, { seedUrl: 'https://93.184.215.14/', proxy: 'http://u:pw@proxy.example.com:8080' });
+    expect(r.status).toBe(200);
+    await vi.waitFor(() => expect(engine.calls).toHaveLength(1));
+    expect(engine.calls[0].config.proxy).toBe('http://u:pw@proxy.example.com:8080');
+    engine.calls[0].finish();
+  });
+
+  it('a crawl config with an untrusted proxy never reaches the engine', async () => {
+    const jobs = { a: { id: 'a', status: 'pending', dbPath: join(dir, 'a.db'), config: {} } };
+    const mgr = new UiCrawlManager(fakeStore(jobs));
+    await mgr.startCrawl('a', { seedUrl: 'https://a.test/', proxy: 'http://10.0.0.5:3128' });
+    await vi.waitFor(() => expect(jobs.a.status).toBe('failed'));
+    expect(engine.calls).toHaveLength(0);
   });
 });

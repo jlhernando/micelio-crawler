@@ -761,7 +761,8 @@ program
   .option('--no-open', 'Do not auto-open the browser')
   .option('--host <host>', 'Address to listen on (non-loopback requires --auth-token)', '127.0.0.1')
   .option('--auth-token <token>', 'Bearer token required on /api/* and /ws (or MICELIO_AUTH_TOKEN)')
-  .action(async (opts: { port: string; open: boolean; host: string; authToken?: string }) => {
+  .option('--trusted-proxy <url>', 'The only proxy dashboard crawls may use (or MICELIO_TRUSTED_PROXY); other proxies are refused')
+  .action(async (opts: { port: string; open: boolean; host: string; authToken?: string; trustedProxy?: string }) => {
     const port = parseInt(opts.port, 10);
     if (isNaN(port) || port < 1 || port > 65535) {
       console.error(`Error: Invalid port "${opts.port}". Must be 1-65535.`);
@@ -771,6 +772,7 @@ program
     await startUiServer(port, opts.open !== false, {
       host: opts.host,
       authToken: opts.authToken || process.env.MICELIO_AUTH_TOKEN || '',
+      trustedProxy: opts.trustedProxy || process.env.MICELIO_TRUSTED_PROXY || '',
     });
   });
 

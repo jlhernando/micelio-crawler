@@ -2,7 +2,7 @@ import { request, type Dispatcher } from 'undici';
 import type { FetchResult, HeadResult, RedirectHop } from './types.js';
 import { renderPage } from './browser.js';
 import { formatError } from './utils.js';
-import { BlockedAddressError, guardedDispatcher, stripCredentialsOnCrossOrigin, urlBlockReason } from './net-guard.js';
+import { assertPublicUrl, BlockedAddressError, guardedDispatcher, stripCredentialsOnCrossOrigin, urlBlockReason } from './net-guard.js';
 
 const MAX_RETRIES = 3;
 const MAX_REDIRECTS = 10;
@@ -25,7 +25,11 @@ export interface FetchOptions {
   jsRendering?: boolean;
   customHeaders?: Record<string, string>;
   cookies?: string;
-  /** Custom proxy. Without one, requests use the SSRF-guarded dispatcher. */
+  /**
+   * Custom proxy. Without one, requests use the SSRF-guarded dispatcher.
+   * A proxy resolves and connects to targets itself, so with one every
+   * target (each redirect hop too) is resolved and checked here first.
+   */
   dispatcher?: Dispatcher;
   /**
    * Hosts allowed to receive cookies and custom headers. When set, a request
@@ -81,6 +85,7 @@ export async function fetchPage(
 
   while (true) {
     try {
+      if (options.dispatcher) await assertPublicUrl(currentUrl);
       const { statusCode, headers, body } = await request(currentUrl, {
         headers: requestHeaders,
         maxRedirections: 0,
@@ -300,6 +305,7 @@ export async function fetchHead(
 
   while (true) {
     try {
+      if (options.dispatcher) await assertPublicUrl(currentUrl);
       const { statusCode, headers, body } = await request(currentUrl, {
         method: 'HEAD',
         headers: requestHeaders,

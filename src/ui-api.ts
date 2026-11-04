@@ -6,7 +6,7 @@ import { diffPages, DIFF_FIELDS } from './diff.js';
 import type { PageData } from './types.js';
 import { format as csvFormat } from 'fast-csv';
 import { flattenPageForCsv } from './writer.js';
-import { assertPublicUrl } from './net-guard.js';
+import { assertPublicUrl, isTrustedProxy, trustedProxy } from './net-guard.js';
 import { formatError } from './utils.js';
 
 // Allowlist of valid settings keys with expected types
@@ -68,16 +68,20 @@ export function redactConfig(config: Record<string, unknown>): Record<string, un
       Object.keys(result.customHeaders as Record<string, unknown>).map((k) => [k, MASKED_SECRET]),
     );
   }
-  if (typeof result.proxy === 'string' && result.proxy) {
-    try {
-      const u = new URL(result.proxy);
-      if (u.password) {
-        u.password = MASKED_SECRET;
-        result.proxy = u.toString();
-      }
-    } catch { /* not a URL: leave as is */ }
-  }
+  if (typeof result.proxy === 'string' && result.proxy) result.proxy = redactProxy(result.proxy);
   return result;
+}
+
+/** Proxy URL with its password masked. */
+function redactProxy(proxy: string): string {
+  try {
+    const u = new URL(proxy);
+    if (u.password) {
+      u.password = MASKED_SECRET;
+      return u.toString();
+    }
+  } catch { /* not a URL: leave as is */ }
+  return proxy;
 }
 
 /**
@@ -100,7 +104,10 @@ export function unmaskConfig(config: Record<string, unknown>, settings: Record<s
     );
   }
   if (typeof result.proxy === 'string' && result.proxy.includes(encodeURIComponent(MASKED_SECRET))) {
-    throw new BadRequestError('Proxy password is masked; enter it again');
+    // The masked form of the trusted proxy stands for the trusted proxy
+    const trusted = trustedProxy();
+    if (trusted && result.proxy === redactProxy(trusted)) result.proxy = trusted;
+    else throw new BadRequestError('Proxy password is masked; enter it again');
   }
   return result;
 }
@@ -114,10 +121,22 @@ function redactJob<T extends { config: Record<string, unknown> }>(job: T): T {
 /**
  * Check a crawl config sent to the HTTP API. Snippet files are never loaded
  * from the API (they run as code); entry URLs must be public http(s) URLs.
+ * A proxy is only accepted when it is the one the local user configured with
+ * micelio ui --trusted-proxy (or MICELIO_TRUSTED_PROXY): a proxy resolves
+ * and connects to targets itself, out of reach of the SSRF guard.
  */
 export async function validateCrawlRequest(config: Record<string, unknown>): Promise<void> {
   if (Array.isArray(config.snippetPaths) && config.snippetPaths.length > 0) {
     throw new BadRequestError('snippetPaths is not accepted by the API; use the CLI --snippet flag');
+  }
+  if (config.proxy !== undefined && config.proxy !== null && config.proxy !== '') {
+    if (typeof config.proxy !== 'string') throw new BadRequestError('proxy must be a string');
+    if (!isTrustedProxy(config.proxy)) {
+      throw new BadRequestError(
+        'proxy is not accepted by the API unless it is the trusted proxy. ' +
+        'Start the dashboard with --trusted-proxy <url> (or MICELIO_TRUSTED_PROXY) and send that URL, or leave proxy empty',
+      );
+    }
   }
   const entries: unknown[] = [];
   if (config.seedUrl) entries.push(config.seedUrl);

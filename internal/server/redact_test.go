@@ -70,7 +70,7 @@ func TestRedactConfig(t *testing.T) {
 	if h["Authorization"] != secretMask || h["X-Api-Key"] != secretMask || h["Accept-Language"] != "es-ES" {
 		t.Errorf("headers = %v", h)
 	}
-	if red["proxy"] != "http://bob:"+secretMask+"@proxy.example:8080" {
+	if red["proxy"] != "http://"+secretMask+":"+secretMask+"@proxy.example:8080" {
 		t.Errorf("proxy = %v", red["proxy"])
 	}
 	if red["userAgent"] != "Micelio/1.0" || red["limit"] != float64(5) {

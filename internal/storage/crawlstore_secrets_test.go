@@ -64,7 +64,7 @@ func TestSaveConfigDropsSecrets(t *testing.T) {
 	if err != nil || cfg == nil {
 		t.Fatalf("GetConfig: %v", err)
 	}
-	if cfg.MaxPages != 7 || cfg.CustomHeaders["Accept-Language"] != "es" || cfg.Proxy != "http://bob:"+secrets.Mask+"@proxy.example:8080" {
+	if cfg.MaxPages != 7 || cfg.CustomHeaders["Accept-Language"] != "es" || cfg.Proxy != "http://"+secrets.Mask+":"+secrets.Mask+"@proxy.example:8080" {
 		t.Errorf("settings not kept: maxPages %d headers %v proxy %q", cfg.MaxPages, cfg.CustomHeaders, cfg.Proxy)
 	}
 	store.Close()

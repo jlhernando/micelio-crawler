@@ -272,7 +272,7 @@ func registerScheduleRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlMa
 		go s.Run()
 		manager.TrackScheduler(s)
 		jsonOK(w, map[string]interface{}{
-			"id": state.ID, "url": state.URL, "cron": state.Cron, "name": state.Name,
+			"id": state.ID, "url": redactURL(state.URL), "cron": state.Cron, "name": state.Name,
 			"description": scheduler.DescribeCron(state.Cron), "nextRun": state.NextRun,
 		})
 	})

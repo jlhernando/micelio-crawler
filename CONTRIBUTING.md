@@ -33,7 +33,9 @@ A source build embeds its source directory, so `micelio build` can rebuild and
 reinstall it later (`--skip-dashboard` for the Go binary only).
 
 For dashboard work, run the Go backend and the Vite dev server separately. The
-dev server proxies `/api` and `/ws` to port 3000 (`dashboard/vite.config.ts`):
+dev server proxies `/api` and `/ws` to port 3000 (`dashboard/vite.config.ts`).
+The proxy keeps the browser's `Host` (`changeOrigin: false`): the backend
+refuses pages from other ports, so do not turn it on:
 
 ```bash
 go run ./cmd/micelio ui --port 3000

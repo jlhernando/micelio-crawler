@@ -585,7 +585,7 @@ micelio ui [flags]
 | `--host` | `127.0.0.1` | Bind address. Any address that is not loopback needs a token |
 | `--auth-token` | `MICELIO_AUTH_TOKEN` | Require a token on `/api/*`, `/ws` and `/debug/pprof/` |
 | `--insecure-no-auth` | off | Allow a non-loopback `--host` without a token (only behind a proxy that authenticates) |
-| `--allowed-host <name>` | `MICELIO_ALLOWED_HOSTS` (comma-separated) | Public host name of a reverse proxy or tunnel in front of the dashboard. Repeatable. It passes the `Host` check and counts as the dashboard's own origin |
+| `--allowed-host <name>` | `MICELIO_ALLOWED_HOSTS` (comma-separated) | Public host name of a reverse proxy or tunnel in front of the dashboard, or an exact origin such as `http://localhost:5175`. Repeatable. It passes the `Host` check and counts as the dashboard's own origin on the port it names (the scheme's default port, 80 or 443, when it names none) |
 | `--pprof` | off | Serve `/debug/pprof/` on a non-loopback `--host` too (always on for loopback) |
 
 ```bash
@@ -610,11 +610,26 @@ out.
 The dashboard also refuses requests a web page could send through your browser:
 API calls from another site's origin (`Origin` or `Sec-Fetch-Site: cross-site`)
 get 403, and a tokenless loopback dashboard only answers a `Host` header that
-names this computer (DNS rebinding). Pages on `localhost` or `127.0.0.1` at any
-port (the Vite dev server) stay allowed, and so do clients that send no
-`Origin` (curl, the CLI, `micelio mcp`) and requests with a valid
-`Authorization: Bearer` token (a web page cannot add that header without the
-token).
+names this computer (DNS rebinding). An origin must match the dashboard's
+scheme, host and port: a page on another port of the same host (another local
+app on `localhost:8000`, another service on `example.com:8443`) is refused,
+because browsers send the login cookie to every port of a host. Clients that
+send no `Origin` (curl, the CLI, `micelio mcp`) and requests with a valid
+`Authorization: Bearer` token pass (a web page cannot add that header without
+the token).
+
+The Vite dev server (`npm --prefix dashboard run dev`) works without flags:
+its proxy keeps the browser's `Host` (`changeOrigin: false` in
+`dashboard/vite.config.ts`), so the request counts as the dashboard's own
+origin:
+
+```bash
+go run ./cmd/micelio ui --port 3101
+VITE_API_PROXY_TARGET=http://localhost:3101 npm --prefix dashboard run dev -- --host 127.0.0.1 --port 5175
+```
+
+A dev server or proxy that rewrites `Host` to the dashboard's needs its
+exact origin allowed: `micelio ui --allowed-host http://127.0.0.1:5175`.
 
 ### Behind a reverse proxy or tunnel
 
@@ -626,7 +641,9 @@ and `/ws` from the browser gets 403. Do one of these:
 - Keep the public `Host`: nginx `proxy_set_header Host $host;` (Caddy and
   cloudflared keep it by default).
 - Send `X-Forwarded-Host`: nginx `proxy_set_header X-Forwarded-Host $host;`.
-- Name the public host: `micelio ui --allowed-host micelio.example.com`.
+- Name the public host: `micelio ui --allowed-host micelio.example.com`
+  (add the port when the public URL has one:
+  `--allowed-host micelio.example.com:8443`).
 
 A tokenless dashboard on loopback answers only `Host` headers that name this
 computer, so a local proxy or tunnel that keeps the public `Host` gets 421

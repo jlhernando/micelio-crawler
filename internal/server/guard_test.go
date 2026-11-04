@@ -136,8 +136,17 @@ func TestGuardLoopbackNoToken(t *testing.T) {
 			map[string]string{"Origin": "http://127.0.0.1:3100", "Sec-Fetch-Site": "same-origin"}, 200, true},
 		{"localhost dashboard post", "POST", "/api/crawl/start", "localhost:3100",
 			map[string]string{"Origin": "http://localhost:3100", "Sec-Fetch-Site": "same-origin"}, 200, true},
-		{"vite dev proxy post", "POST", "/api/crawl/start", "localhost:3101",
+		// The Vite proxy keeps the browser's Host (changeOrigin: false).
+		{"vite dev proxy post", "POST", "/api/crawl/start", "127.0.0.1:5175",
 			map[string]string{"Origin": "http://127.0.0.1:5175", "Sec-Fetch-Site": "same-origin"}, 200, true},
+		// Another local app on another port is another origin, although
+		// browsers call it same-site.
+		{"other loopback port post", "POST", "/api/crawl/start", local,
+			map[string]string{"Origin": "http://127.0.0.1:5175", "Sec-Fetch-Site": "same-site"}, 403, false},
+		{"other loopback port update install", "POST", "/api/update/install", local,
+			map[string]string{"Origin": "http://localhost:8000", "Sec-Fetch-Site": "same-site", "Content-Type": "application/x-www-form-urlencoded"}, 403, false},
+		{"other loopback port websocket", "GET", "/ws", local,
+			map[string]string{"Origin": "http://localhost:8000", "Connection": "Upgrade", "Upgrade": "websocket"}, 403, false},
 		{"hostile crawl start", "POST", "/api/crawl/start", local, crossSite, 403, false},
 		{"hostile schedule create", "POST", "/api/schedules", local, crossSite, 403, false},
 		{"hostile update install", "POST", "/api/update/install", local,
@@ -202,7 +211,15 @@ func TestGuardWithToken(t *testing.T) {
 		{"allowed host origin behind proxy", "POST", "/api/crawl/start", "127.0.0.1:3100",
 			map[string]string{"Cookie": cookie, "Origin": "https://micelio.example.com"}, 200, true},
 		{"allowed host websocket origin", "GET", "/ws", "127.0.0.1:3100",
-			map[string]string{"Cookie": cookie, "Origin": "https://micelio.example.com:8443"}, 400, false},
+			map[string]string{"Cookie": cookie, "Origin": "https://micelio.example.com"}, 400, false},
+		// Another service on another port of the allowed host gets the
+		// cookie from the browser (cookies ignore ports): refused.
+		{"other port of allowed host update install", "POST", "/api/update/install", "127.0.0.1:3100",
+			map[string]string{"Cookie": cookie, "Origin": "https://micelio.example.com:8443", "Sec-Fetch-Site": "same-site"}, 403, false},
+		{"other port of allowed host websocket", "GET", "/ws", "127.0.0.1:3100",
+			map[string]string{"Cookie": cookie, "Origin": "https://micelio.example.com:8443"}, 403, false},
+		{"http origin of https allowed host", "POST", "/api/crawl/start", "127.0.0.1:3100",
+			map[string]string{"Cookie": cookie, "Origin": "http://micelio.example.com"}, 403, false},
 		{"other origin still refused", "POST", "/api/crawl/start", "127.0.0.1:3100",
 			map[string]string{"Cookie": cookie, "Origin": "https://evil.com"}, 403, false},
 	})
@@ -334,6 +351,14 @@ func TestGuardAllowedHost(t *testing.T) {
 			map[string]string{"Origin": "https://micelio.example.com", "Sec-Fetch-Site": "same-origin"}, 200, true},
 		{"allowed host hostile origin", "POST", "/api/crawl/start", "micelio.example.com",
 			map[string]string{"Origin": "https://evil.com"}, 403, false},
+		{"allowed host with port origin", "POST", "/api/crawl/start", "127.0.0.1:3100",
+			map[string]string{"Origin": "https://micelio.example.com"}, 200, true},
+		{"allowed host on another port", "POST", "/api/crawl/start", "127.0.0.1:3100",
+			map[string]string{"Origin": "https://micelio.example.com:8443"}, 403, false},
+		{"name-only entry, default port", "POST", "/api/crawl/start", "127.0.0.1:3100",
+			map[string]string{"Origin": "http://tunnel.example.net"}, 200, true},
+		{"name-only entry, other port", "POST", "/api/crawl/start", "127.0.0.1:3100",
+			map[string]string{"Origin": "http://tunnel.example.net:8080"}, 403, false},
 		{"unlisted host still refused", "GET", "/api/crawls", "attacker.example", nil, 421, false},
 		{"suffix of allowed host refused", "GET", "/api/crawls", "evil.micelio.example.com", nil, 421, false},
 	})
@@ -355,11 +380,13 @@ func TestNormalizeAllowedHost(t *testing.T) {
 	tests := map[string]string{
 		"example.com":               "example.com",
 		" Example.COM ":             "example.com",
-		"example.com:443":           "example.com",
-		"https://example.com/":      "example.com",
-		"http://example.com:8080/x": "example.com",
+		"example.com:443":           "example.com:443",
+		"https://example.com/":      "https://example.com",
+		"http://example.com:8080/x": "http://example.com:8080",
+		"HTTP://Localhost:5175":     "http://localhost:5175",
 		"example.com.":              "example.com",
-		"[::1]:3100":                "::1",
+		"[::1]:3100":                "[::1]:3100",
+		"ftp://example.com":         "example.com",
 		"":                          "",
 	}
 	for in, want := range tests {
@@ -367,6 +394,21 @@ func TestNormalizeAllowedHost(t *testing.T) {
 			t.Errorf("NormalizeAllowedHost(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+// TestGuardAllowedDevOrigin covers a dev server that rewrites Host to the
+// dashboard's (a proxy with changeOrigin: true): its exact origin is
+// allowed with --allowed-host, other ports stay refused.
+func TestGuardAllowedDevOrigin(t *testing.T) {
+	opts := ServerOptions{Host: "127.0.0.1", AllowedHosts: []string{"http://localhost:5175"}}
+	runGuardCases(t, opts, false, []guardCase{
+		{"dev origin", "POST", "/api/crawl/start", "localhost:3100",
+			map[string]string{"Origin": "http://localhost:5175", "Sec-Fetch-Site": "same-site"}, 200, true},
+		{"dev origin other port", "POST", "/api/crawl/start", "localhost:3100",
+			map[string]string{"Origin": "http://localhost:5176", "Sec-Fetch-Site": "same-site"}, 403, false},
+		{"dev origin https", "POST", "/api/crawl/start", "localhost:3100",
+			map[string]string{"Origin": "https://localhost:5175"}, 403, false},
+	})
 }
 
 func TestSessionCookieName(t *testing.T) {

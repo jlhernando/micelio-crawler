@@ -59,10 +59,10 @@ func TestScrubJSON(t *testing.T) {
 	if back.MaxPages != 42 || back.UserAgent != "Micelio/1.0" || back.CustomHeaders["Accept-Language"] != "es" {
 		t.Errorf("settings lost: %+v", back)
 	}
-	if back.Proxy != "http://bob:"+Mask+"@proxy.example:8080" {
+	if back.Proxy != "http://"+Mask+":"+Mask+"@proxy.example:8080" {
 		t.Errorf("proxy = %q", back.Proxy)
 	}
-	if !strings.HasPrefix(back.SeedURL, "https://user:") || !strings.HasSuffix(back.SeedURL, "@example.com/") {
+	if back.SeedURL != "https://"+Mask+":"+Mask+"@example.com/" {
 		t.Errorf("seed URL = %q", back.SeedURL)
 	}
 }

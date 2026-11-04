@@ -313,6 +313,9 @@ func (s *Scheduler) runOnce() {
 		if !check.OK {
 			res = RunResult{Status: "skipped", Reason: check.Reason}
 			fmt.Fprintf(os.Stderr, "Skipped: %s\n", check.Reason)
+			if check.Output != "" {
+				fmt.Fprintf(os.Stderr, "Check output: %s\n", check.Output)
+			}
 		}
 	}
 	if res.Status == "" {
@@ -434,6 +437,9 @@ func (s *Scheduler) monitorPrecheck(ctx context.Context, ctl *RunControl) {
 				fmt.Fprintf(os.Stderr, "\nCheck passes again, resuming crawl\n")
 			} else {
 				fmt.Fprintf(os.Stderr, "\nCheck failed (%s), pausing crawl\n", check.Reason)
+				if check.Output != "" {
+					fmt.Fprintf(os.Stderr, "Check output: %s\n", check.Output)
+				}
 			}
 		}
 		ctl.set(!check.OK, check.Reason)

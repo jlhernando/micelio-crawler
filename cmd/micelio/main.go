@@ -347,7 +347,7 @@ func uiCmd() *cobra.Command {
 	cmd.Flags().StringVar(&host, "host", "127.0.0.1", "Bind address (a non-loopback address such as 0.0.0.0 needs --auth-token)")
 	cmd.Flags().StringVar(&authToken, "auth-token", "", "Bearer token for API authentication (or MICELIO_AUTH_TOKEN env, which keeps it out of the process list)")
 	cmd.Flags().BoolVar(&insecureNoAuth, "insecure-no-auth", false, "Allow a non-loopback --host without a token (only behind a proxy that authenticates)")
-	cmd.Flags().StringArrayVar(&allowedHosts, "allowed-host", nil, "Host name a reverse proxy or tunnel serves the dashboard on (repeatable, or MICELIO_ALLOWED_HOSTS comma-separated): passes the Host check and counts as the dashboard's own origin")
+	cmd.Flags().StringArrayVar(&allowedHosts, "allowed-host", nil, "Host name a reverse proxy or tunnel serves the dashboard on, or an exact origin like http://localhost:5175 (repeatable, or MICELIO_ALLOWED_HOSTS comma-separated): passes the Host check and counts as the dashboard's own origin on the port it names (80/443 if none)")
 	cmd.Flags().BoolVar(&pprof, "pprof", false, "Serve /debug/pprof/ on a non-loopback --host too (always on for loopback; needs the token when one is set)")
 	return cmd
 }

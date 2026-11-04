@@ -35,17 +35,85 @@ func sessionValue(token string) string {
 }
 
 // NormalizeAllowedHost reduces an --allowed-host value ("example.com",
-// "example.com:443", "https://example.com/") to a lowercase host name.
-// It returns "" for an empty value.
+// "example.com:8443", "https://example.com/") to lowercase
+// "[scheme://]host[:port]", keeping the scheme and port it names. It
+// returns "" for an empty value.
 func NormalizeAllowedHost(v string) string {
-	v = strings.TrimSpace(v)
+	v = strings.ToLower(strings.TrimSpace(v))
+	scheme := ""
 	if i := strings.Index(v, "://"); i >= 0 {
-		v = v[i+3:]
+		scheme, v = v[:i], v[i+3:]
 	}
 	if i := strings.IndexAny(v, "/?#"); i >= 0 {
 		v = v[:i]
 	}
-	return hostName(v)
+	name, port := hostName(v), ""
+	if _, p, err := net.SplitHostPort(v); err == nil {
+		port = p
+	}
+	if name == "" {
+		return ""
+	}
+	out := name
+	if port != "" {
+		out = net.JoinHostPort(name, port)
+	}
+	if scheme == "http" || scheme == "https" {
+		out = scheme + "://" + out
+	}
+	return out
+}
+
+// allowedEntry is a parsed NormalizeAllowedHost value.
+type allowedEntry struct{ scheme, name, port string }
+
+func parseAllowed(a string) allowedEntry {
+	var e allowedEntry
+	if i := strings.Index(a, "://"); i >= 0 {
+		e.scheme, a = a[:i], a[i+3:]
+	}
+	e.name = hostName(a)
+	if _, p, err := net.SplitHostPort(a); err == nil {
+		e.port = p
+	}
+	return e
+}
+
+func defaultPort(scheme string) string {
+	switch scheme {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	}
+	return ""
+}
+
+// originListed reports whether a browser origin is one of the
+// --allowed-host entries. Browsers isolate origins by port but cookies do
+// not, so the port must match too: the one the entry names, or the
+// scheme's default port for an entry without one. Another service on the
+// same host name (https://example.com:8443) is a different origin.
+func originListed(u *url.URL, allowed []string) bool {
+	name := hostName(u.Host)
+	port := u.Port()
+	if port == "" {
+		port = defaultPort(u.Scheme)
+	}
+	for _, a := range allowed {
+		e := parseAllowed(a)
+		if e.name != name || (e.scheme != "" && e.scheme != u.Scheme) {
+			continue
+		}
+		want := e.port
+		if want == "" {
+			want = defaultPort(u.Scheme)
+		}
+		if port == want {
+			return true
+		}
+	}
+	return false
 }
 
 // hostName strips the port, IPv6 brackets and a trailing dot from a Host
@@ -57,15 +125,16 @@ func hostName(host string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.Trim(host, "[]"), "."))
 }
 
-// hostListed reports whether host (with or without port) is one of the
-// --allowed-host names.
+// hostListed reports whether the name of host (a Host header, with or
+// without port) is one of the --allowed-host names. Ports are ignored
+// here: this is the DNS rebinding check, which is about the name.
 func hostListed(host string, allowed []string) bool {
 	name := hostName(host)
 	if name == "" {
 		return false
 	}
 	for _, a := range allowed {
-		if a == name {
+		if parseAllowed(a).name == name {
 			return true
 		}
 	}
@@ -87,17 +156,20 @@ func IsLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// originAllowed reports whether a browser Origin may call the API: a page
-// served from this machine (any port, which covers the Vite dev server), or
-// the dashboard's own origin (same host as the request, as the
-// X-Forwarded-Host a reverse proxy set, or one of the --allowed-host names).
-// "null" and unparsable origins fail.
+// originAllowed reports whether a browser Origin may call the API: the
+// dashboard's own origin (same host and port as the request, as the
+// X-Forwarded-Host a reverse proxy set, or one of the --allowed-host
+// entries, port included). Other ports of this machine are other sites: a
+// local app on another port must not drive the dashboard. The Vite dev
+// server keeps the browser's Host (changeOrigin: false in
+// dashboard/vite.config.ts), so it passes as the same origin. "null" and
+// unparsable origins fail.
 func originAllowed(r *http.Request, origin string, allowed []string) bool {
 	u, err := url.Parse(origin)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return false
 	}
-	if IsLoopbackHost(u.Host) || hostListed(u.Host, allowed) {
+	if originListed(u, allowed) {
 		return true
 	}
 	if strings.EqualFold(u.Host, r.Host) {
@@ -131,8 +203,10 @@ const allowHostHint = "start micelio ui with --allowed-host %s (or MICELIO_ALLOW
 //   - DNS rebinding: when the dashboard listens on loopback without a token,
 //     the Host header must name this machine or an --allowed-host (an
 //     attacker domain that resolves to 127.0.0.1 is refused).
-//   - Cross-site requests: an Origin that is neither local nor the
-//     dashboard's own is refused, and so is Sec-Fetch-Site: cross-site,
+//   - Cross-origin requests: an Origin that is not the dashboard's own
+//     (scheme, host and port; see originAllowed) is refused, also from
+//     another port of the same host, which browsers call same-site and
+//     send the login cookie from. Sec-Fetch-Site: cross-site is refused,
 //     except for plain navigations (a link to the dashboard).
 //
 // Requests without Origin and Sec-Fetch-Site (CLI, MCP, curl) pass, and so
@@ -154,7 +228,10 @@ func withGuard(checkHost bool, token string, allowed []string, next http.Handler
 		if origin := r.Header.Get("Origin"); origin != "" && !originAllowed(r, origin, allowed) {
 			name := origin
 			if u, err := url.Parse(origin); err == nil && u.Host != "" {
-				name = hostName(u.Host)
+				name = NormalizeAllowedHost(u.Host)
+				if u.Port() != "" {
+					name = u.Scheme + "://" + name // that exact origin
+				}
 			}
 			guardError(w, http.StatusForbidden, "cross-origin request from "+strconv.Quote(origin)+
 				" refused; if this is the dashboard behind a reverse proxy, make the proxy send the "+

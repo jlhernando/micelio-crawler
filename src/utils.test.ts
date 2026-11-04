@@ -142,8 +142,24 @@ describe('isPrivateUrl', () => {
     expect(isPrivateUrl('https://example.com')).toBe(false);
   });
 
-  it('returns false for invalid URLs', () => {
-    expect(isPrivateUrl('not a url')).toBe(false);
+  it('fails closed for invalid URLs', () => {
+    expect(isPrivateUrl('not a url')).toBe(true);
+  });
+
+  it('detects the whole loopback and link-local ranges and mapped forms', () => {
+    expect(isPrivateUrl('http://127.1.2.3/')).toBe(true);
+    expect(isPrivateUrl('http://169.254.1.1/')).toBe(true);
+    expect(isPrivateUrl('http://[::ffff:127.0.0.1]/')).toBe(true);
+    expect(isPrivateUrl('http://[::ffff:a9fe:a9fe]/')).toBe(true);
+    expect(isPrivateUrl('http://[febf::1]/')).toBe(true);
+    expect(isPrivateUrl('http://2130706433/')).toBe(true); // decimal 127.0.0.1
+    expect(isPrivateUrl('http://0x7f.1/')).toBe(true);
+    expect(isPrivateUrl('http://app.localhost/')).toBe(true);
+  });
+
+  it('does not flag public host names that look like IPv6 prefixes', () => {
+    expect(isPrivateUrl('https://fcbarcelona.com/')).toBe(false);
+    expect(isPrivateUrl('https://fd.example/')).toBe(false);
   });
 });
 

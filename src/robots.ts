@@ -2,7 +2,8 @@ import robotsParser from 'robots-parser';
 import { request } from 'undici';
 import * as cheerio from 'cheerio';
 import type { SitemapEntry, SitemapType, NewsSitemapEntry, VideoSitemapEntry, ImageSitemapEntry } from './types.js';
-import { normalizeUrl, isPrivateUrl } from './utils.js';
+import { normalizeUrl } from './utils.js';
+import { guardedDispatcher, urlBlockReason } from './net-guard.js';
 
 interface Robot {
   isAllowed(url: string, ua?: string): boolean | undefined;
@@ -22,11 +23,14 @@ export class RobotsChecker {
     const base = new URL(seedUrl);
     const robotsUrl = `${base.protocol}//${base.host}/robots.txt`;
 
+    // SSRF protection: literal check here, resolved addresses in the dispatcher
+    if (urlBlockReason(robotsUrl)) return;
+
     try {
       const { statusCode, body } = await request(robotsUrl, {
         headers: { 'User-Agent': userAgent },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any);
+        dispatcher: guardedDispatcher(),
+      });
       if (statusCode === 200) {
         const text = await body.text();
         this.robots = (robotsParser as unknown as (url: string, txt: string) => Robot)(robotsUrl, text);
@@ -82,22 +86,21 @@ export class RobotsChecker {
         let sitemapStatusCode = 0;
         let sitemapText = '';
         while (sitemapRedirects < 5) {
+          // SSRF protection for configured, robots-declared, nested and redirected sitemaps
+          if (urlBlockReason(currentSitemapUrl)) {
+            errors.push(`Sitemap ${sitemapUrl} points to a private address (blocked)`);
+            return;
+          }
           const resp = await request(currentSitemapUrl, {
             headers: { 'User-Agent': userAgent },
-            maxRedirections: 0,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          } as any);
+            dispatcher: guardedDispatcher(),
+          });
           sitemapStatusCode = resp.statusCode;
           if (sitemapStatusCode >= 300 && sitemapStatusCode < 400) {
             const location = resp.headers.location as string | undefined;
             await resp.body.dump();
             if (location) {
-              const redirectTarget = new URL(location, currentSitemapUrl).toString();
-              if (isPrivateUrl(redirectTarget)) {
-                errors.push(`Sitemap ${sitemapUrl} redirected to private address (blocked)`);
-                return;
-              }
-              currentSitemapUrl = redirectTarget;
+              currentSitemapUrl = new URL(location, currentSitemapUrl).toString();
               sitemapRedirects++;
               continue;
             }
@@ -364,11 +367,13 @@ export async function testRobotsMultiAgent(
   let statusCode = 0;
 
   try {
+    const blocked = urlBlockReason(robotsUrl);
+    if (blocked) throw new Error(blocked);
     const resp = await request(robotsUrl, {
       headers: { 'User-Agent': 'Micelio/1.0' },
       signal: AbortSignal.timeout(10_000),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+      dispatcher: guardedDispatcher(),
+    });
     statusCode = resp.statusCode;
     if (statusCode === 200) {
       robotsTxt = await resp.body.text();

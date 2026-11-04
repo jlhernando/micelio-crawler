@@ -1,7 +1,8 @@
 import { request, type Dispatcher } from 'undici';
 import type { FetchResult, HeadResult, RedirectHop } from './types.js';
 import { renderPage } from './browser.js';
-import { formatError, isPrivateUrl } from './utils.js';
+import { formatError } from './utils.js';
+import { BlockedAddressError, guardedDispatcher, stripCredentialsOnCrossOrigin, urlBlockReason } from './net-guard.js';
 
 const MAX_RETRIES = 3;
 const MAX_REDIRECTS = 10;
@@ -24,28 +25,59 @@ export interface FetchOptions {
   jsRendering?: boolean;
   customHeaders?: Record<string, string>;
   cookies?: string;
+  /** Custom proxy. Without one, requests use the SSRF-guarded dispatcher. */
   dispatcher?: Dispatcher;
+  /**
+   * Hosts allowed to receive cookies and custom headers. When set, a request
+   * to any other host is sent without them. Credential headers are dropped
+   * after a redirect that leaves the site (other than apex <-> www or a
+   * subdomain), downgrades https -> http, or changes port.
+   */
+  credentialHosts?: ReadonlySet<string>;
+}
+
+/** Errors raised by the SSRF guard are final: retrying cannot help. */
+function isBlockedError(err: unknown): boolean {
+  return err instanceof BlockedAddressError || (err as NodeJS.ErrnoException)?.code === 'EBLOCKED';
+}
+
+/** Request headers for the first hop, with credentials only for allowed hosts. */
+function initialHeaders(url: string, base: Record<string, string>, options: FetchOptions): Record<string, string> {
+  const { customHeaders = {}, cookies = '', credentialHosts } = options;
+  let host = '';
+  try { host = new URL(url).hostname; } catch { /* checked by urlBlockReason */ }
+  if (credentialHosts && !credentialHosts.has(host)) return base;
+  const headers: Record<string, string> = { ...base, ...customHeaders };
+  if (cookies) headers['Cookie'] = cookies;
+  return headers;
 }
 
 export async function fetchPage(
   url: string,
   options: FetchOptions,
 ): Promise<FetchResult> {
-  const { userAgent, jsRendering = false, customHeaders = {}, cookies = '', dispatcher } = options;
+  const { userAgent, jsRendering = false } = options;
+  const dispatcher = options.dispatcher ?? guardedDispatcher();
   const start = Date.now();
   const redirectChain: RedirectHop[] = [];
   let currentUrl = url;
   let retries = 0;
 
-  const requestHeaders: Record<string, string> = {
+  // SSRF protection: the guarded dispatcher re-checks every resolved address
+  const blocked = urlBlockReason(url);
+  if (blocked) {
+    return {
+      url, finalUrl: url, statusCode: 0, redirectChain,
+      headers: {}, html: '', contentType: '',
+      responseTimeMs: 0, transferSize: 0, error: blocked,
+    };
+  }
+
+  let requestHeaders = initialHeaders(url, {
     'User-Agent': userAgent,
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.5',
-    ...customHeaders,
-  };
-  if (cookies) {
-    requestHeaders['Cookie'] = cookies;
-  }
+  }, options);
 
   while (true) {
     try {
@@ -74,7 +106,7 @@ export async function fetchPage(
           redirectChain.push({ url: currentUrl, statusCode });
           const resolvedLocation = new URL(location, currentUrl).toString();
 
-          if (isPrivateUrl(resolvedLocation)) {
+          if (urlBlockReason(resolvedLocation)) {
             return {
               url, finalUrl: currentUrl, statusCode, redirectChain,
               headers: {}, html: '', contentType: '',
@@ -84,6 +116,7 @@ export async function fetchPage(
             };
           }
 
+          requestHeaders = stripCredentialsOnCrossOrigin(requestHeaders, currentUrl, resolvedLocation, url);
           currentUrl = resolvedLocation;
           continue;
         }
@@ -151,7 +184,7 @@ export async function fetchPage(
         transferSize,
       };
     } catch (err) {
-      if (retries < MAX_RETRIES) {
+      if (retries < MAX_RETRIES && !isBlockedError(err)) {
         const delay = BACKOFF_BASE_MS * Math.pow(2, retries);
         retries++;
         await sleep(delay);
@@ -174,23 +207,42 @@ export async function checkExternalUrl(
   url: string,
   userAgent: string,
 ): Promise<{ statusCode: number; error?: string }> {
-  // SEC-1: SSRF protection for external link checking
-  if (isPrivateUrl(url)) {
-    return { statusCode: 0, error: 'Blocked: private/loopback address' };
-  }
   try {
-    const { statusCode, body } = await request(url, {
-      method: 'HEAD',
-      headers: { 'User-Agent': userAgent },
-      maxRedirections: 5,
-      headersTimeout: EXTERNAL_CHECK_TIMEOUT_MS,
-      bodyTimeout: EXTERNAL_CHECK_TIMEOUT_MS,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
-    await body.dump();
+    const { statusCode } = await guardedHead(url, userAgent);
     return { statusCode };
   } catch (err) {
     return { statusCode: 0, error: formatError(err) };
+  }
+}
+
+const MAX_HEAD_REDIRECTS = 5;
+
+/**
+ * HEAD request through the SSRF-guarded dispatcher. Redirects are followed
+ * by hand (max 5) so every hop is checked before it is requested.
+ */
+async function guardedHead(
+  url: string,
+  userAgent: string,
+): Promise<{ statusCode: number; headers: Record<string, string | string[] | undefined> }> {
+  let currentUrl = url;
+  for (let hop = 0; ; hop++) {
+    const blocked = urlBlockReason(currentUrl);
+    if (blocked) throw new BlockedAddressError(blocked);
+    const { statusCode, headers, body } = await request(currentUrl, {
+      method: 'HEAD',
+      headers: { 'User-Agent': userAgent },
+      headersTimeout: EXTERNAL_CHECK_TIMEOUT_MS,
+      bodyTimeout: EXTERNAL_CHECK_TIMEOUT_MS,
+      dispatcher: guardedDispatcher(),
+    });
+    await body.dump();
+    const location = typeof headers.location === 'string' ? headers.location.trim() : '';
+    if (statusCode >= 300 && statusCode < 400 && location && hop < MAX_HEAD_REDIRECTS) {
+      currentUrl = new URL(location, currentUrl).toString();
+      continue;
+    }
+    return { statusCode, headers };
   }
 }
 
@@ -199,17 +251,8 @@ export async function headResourceSize(
   url: string,
   userAgent: string,
 ): Promise<number | null> {
-  if (isPrivateUrl(url)) return null;
   try {
-    const { headers, body } = await request(url, {
-      method: 'HEAD',
-      headers: { 'User-Agent': userAgent },
-      maxRedirections: 5,
-      headersTimeout: EXTERNAL_CHECK_TIMEOUT_MS,
-      bodyTimeout: EXTERNAL_CHECK_TIMEOUT_MS,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
-    await body.dump();
+    const { headers } = await guardedHead(url, userAgent);
     const cl = headers['content-length'];
     if (typeof cl === 'string') {
       const size = parseInt(cl, 10);
@@ -230,31 +273,26 @@ export async function fetchHead(
   options: FetchOptions,
 ): Promise<HeadResult> {
   // SSRF protection: block requests to private/loopback addresses
-  if (isPrivateUrl(url)) {
+  const blocked = urlBlockReason(url);
+  if (blocked) {
     return {
       url, finalUrl: url, statusCode: 0, redirectChain: [],
       responseTimeMs: 0, contentType: '', contentLength: null, server: '',
       xRobotsTag: null, linkCanonical: null, hsts: false,
       csp: false, xFrameOptions: null, referrerPolicy: null,
       cacheControl: null, headers: {},
-      error: 'Blocked: private/loopback address',
+      error: blocked,
     };
   }
 
-  const { userAgent, customHeaders = {}, cookies = '', dispatcher } = options;
+  const { userAgent } = options;
+  const dispatcher = options.dispatcher ?? guardedDispatcher();
   const start = Date.now();
   const redirectChain: RedirectHop[] = [];
   let currentUrl = url;
   let retries = 0;
 
-  const requestHeaders: Record<string, string> = {
-    'User-Agent': userAgent,
-    'Accept': '*/*',
-    ...customHeaders,
-  };
-  if (cookies) {
-    requestHeaders['Cookie'] = cookies;
-  }
+  let requestHeaders = initialHeaders(url, { 'User-Agent': userAgent, 'Accept': '*/*' }, options);
 
   while (true) {
     try {
@@ -286,7 +324,7 @@ export async function fetchHead(
           }
           redirectChain.push({ url: currentUrl, statusCode });
           const resolved = new URL(location, currentUrl).toString();
-          if (isPrivateUrl(resolved)) {
+          if (urlBlockReason(resolved)) {
             return {
               url, finalUrl: currentUrl, statusCode, redirectChain,
               responseTimeMs: Date.now() - start,
@@ -297,6 +335,7 @@ export async function fetchHead(
               error: `Redirect to private address blocked: ${resolved}`,
             };
           }
+          requestHeaders = stripCredentialsOnCrossOrigin(requestHeaders, currentUrl, resolved, url);
           currentUrl = resolved;
           continue;
         }
@@ -357,7 +396,7 @@ export async function fetchHead(
         headers: responseHeaders,
       };
     } catch (err) {
-      if (retries < MAX_RETRIES) {
+      if (retries < MAX_RETRIES && !isBlockedError(err)) {
         const delay = BACKOFF_BASE_MS * Math.pow(2, retries);
         retries++;
         await sleep(delay);

@@ -1,4 +1,5 @@
-import type { Browser, Page } from 'playwright';
+import type { Browser, BrowserContext, Page } from 'playwright';
+import { assertPublicUrl } from './net-guard.js';
 
 let browser: Browser | null = null;
 let currentProxy: string | undefined;
@@ -35,9 +36,54 @@ export async function getBrowser(): Promise<Browser> {
   return browser;
 }
 
-export async function renderPage(url: string, userAgent: string): Promise<{ html: string; statusCode: number }> {
+/** Whether the browser may load this URL (SSRF guard, after DNS). */
+export async function browserUrlAllowed(rawUrl: string): Promise<boolean> {
+  let protocol: string;
+  try {
+    protocol = new URL(rawUrl).protocol;
+  } catch {
+    return false;
+  }
+  // data:, blob: and about: never touch the network
+  if (protocol === 'data:' || protocol === 'blob:' || protocol === 'about:') return true;
+  if (protocol === 'ws:' || protocol === 'wss:') {
+    rawUrl = rawUrl.replace(/^ws/, 'http');
+  }
+  try {
+    await assertPublicUrl(rawUrl);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * New browser context whose every request (navigations, redirects, frames,
+ * subresources, WebSockets) is checked by the SSRF guard first. Service
+ * workers are blocked so no request can bypass the interception.
+ */
+export async function newGuardedContext(userAgent: string): Promise<BrowserContext> {
   const b = await getBrowser();
-  const context = await b.newContext({ userAgent });
+  const context = await b.newContext({ userAgent, serviceWorkers: 'block' });
+  await context.route('**/*', async (route) => {
+    if (await browserUrlAllowed(route.request().url())) {
+      await route.continue();
+    } else {
+      await route.abort('blockedbyclient');
+    }
+  });
+  await context.routeWebSocket(/.*/, async (ws) => {
+    if (await browserUrlAllowed(ws.url())) {
+      ws.connectToServer();
+    } else {
+      await ws.close({ code: 1008, reason: 'Blocked: private address' });
+    }
+  });
+  return context;
+}
+
+export async function renderPage(url: string, userAgent: string): Promise<{ html: string; statusCode: number }> {
+  const context = await newGuardedContext(userAgent);
   const page = await context.newPage();
 
   try {

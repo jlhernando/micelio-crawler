@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { validateSettings, applyEnvFallbacks } from './ui-api.js';
+import {
+  validateSettings, applyEnvFallbacks, maskSecrets, redactConfig, unmaskConfig, validateCrawlRequest,
+  MASKED_SECRET, BadRequestError,
+} from './ui-api.js';
 
 describe('validateSettings', () => {
   it('accepts valid settings with correct types', () => {
@@ -194,5 +197,60 @@ describe('applyEnvFallbacks', () => {
 
     const result = applyEnvFallbacks({});
     expect(result.psiKey).toBeUndefined();
+  });
+});
+
+describe('secret masking', () => {
+  it('masks API keys in settings and keeps them on a masked round trip', () => {
+    const masked = maskSecrets({ psiKey: 'real', aiKey: '', defaultDepth: 3 });
+    expect(masked).toEqual({ psiKey: MASKED_SECRET, aiKey: '', defaultDepth: 3 });
+    const { valid, rejected } = validateSettings({ psiKey: MASKED_SECRET, cruxKey: 'new' });
+    expect(valid).toEqual({ cruxKey: 'new' });
+    expect(rejected).toEqual([]);
+  });
+
+  it('redacts credentials in crawl and preset configs', () => {
+    const red = redactConfig({
+      seedUrl: 'https://a.com', cookies: 'sid=1', customHeaders: { Authorization: 'Bearer t' },
+      proxy: 'http://user:pw@proxy:8080', aiKey: 'k', depth: 2,
+    });
+    expect(red.cookies).toBe(MASKED_SECRET);
+    expect(red.customHeaders).toEqual({ Authorization: MASKED_SECRET });
+    expect(red.aiKey).toBe(MASKED_SECRET);
+    expect(String(red.proxy)).not.toContain(':pw@');
+    expect(red.seedUrl).toBe('https://a.com');
+    expect(red.depth).toBe(2);
+  });
+
+  it('unmasks API keys from settings and drops masked cookies/headers', () => {
+    const cfg = unmaskConfig(
+      { psiKey: MASKED_SECRET, aiKey: MASKED_SECRET, cookies: MASKED_SECRET, customHeaders: { A: MASKED_SECRET, B: 'b' } },
+      { psiKey: 'saved' },
+    );
+    expect(cfg).toEqual({ psiKey: 'saved', customHeaders: { B: 'b' } });
+    expect(() => unmaskConfig(redactConfig({ proxy: 'http://u:p@h:1' }), {})).toThrow(BadRequestError);
+  });
+});
+
+describe('validateCrawlRequest', () => {
+  it('rejects snippet paths from the API', async () => {
+    await expect(validateCrawlRequest({ seedUrl: 'https://93.184.215.14/', snippetPaths: ['/tmp/x.mjs'] }))
+      .rejects.toThrow(/snippetPaths/);
+  });
+
+  it('rejects private and non-http entry URLs', async () => {
+    for (const cfg of [
+      { seedUrl: 'http://127.0.0.1:8080/' },
+      { seedUrl: 'http://localhost/' },
+      { seedUrl: 'http://169.254.169.254/latest/meta-data/' },
+      { sitemapUrls: ['https://93.184.215.14/s.xml', 'http://10.0.0.1/s.xml'] },
+      { seedUrl: 'file:///etc/passwd' },
+    ]) {
+      await expect(validateCrawlRequest(cfg), JSON.stringify(cfg)).rejects.toThrow(BadRequestError);
+    }
+  });
+
+  it('accepts public literal URLs', async () => {
+    await expect(validateCrawlRequest({ seedUrl: 'https://93.184.215.14/' })).resolves.toBeUndefined();
   });
 });

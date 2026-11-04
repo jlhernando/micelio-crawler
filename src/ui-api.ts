@@ -6,6 +6,8 @@ import { diffPages, DIFF_FIELDS } from './diff.js';
 import type { PageData } from './types.js';
 import { format as csvFormat } from 'fast-csv';
 import { flattenPageForCsv } from './writer.js';
+import { assertPublicUrl } from './net-guard.js';
+import { formatError } from './utils.js';
 
 // Allowlist of valid settings keys with expected types
 const VALID_SETTINGS: Record<string, 'string' | 'number' | 'boolean'> = {
@@ -39,6 +41,98 @@ const ENV_FALLBACKS: Record<string, string> = {
 // File path settings that need validation
 const FILE_PATH_KEYS = new Set(['gscKeyFile', 'ga4KeyFile']);
 
+// Settings and crawl-config keys that hold API keys. Masked in every response.
+const SECRET_KEYS = ['psiKey', 'aiKey', 'cruxKey', 'plausibleApiKey'];
+
+/** Placeholder sent instead of a secret (same as the Go dashboard). */
+export const MASKED_SECRET = '••••••••';
+
+/** Copy of settings with every set secret replaced by MASKED_SECRET. */
+export function maskSecrets(settings: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...settings };
+  for (const key of SECRET_KEYS) {
+    if (typeof result[key] === 'string' && result[key] !== '') result[key] = MASKED_SECRET;
+  }
+  return result;
+}
+
+/**
+ * Copy of a crawl/preset config safe to return from the API: API keys,
+ * cookies, custom header values and proxy passwords are masked.
+ */
+export function redactConfig(config: Record<string, unknown>): Record<string, unknown> {
+  const result = maskSecrets(config);
+  if (typeof result.cookies === 'string' && result.cookies !== '') result.cookies = MASKED_SECRET;
+  if (result.customHeaders && typeof result.customHeaders === 'object') {
+    result.customHeaders = Object.fromEntries(
+      Object.keys(result.customHeaders as Record<string, unknown>).map((k) => [k, MASKED_SECRET]),
+    );
+  }
+  if (typeof result.proxy === 'string' && result.proxy) {
+    try {
+      const u = new URL(result.proxy);
+      if (u.password) {
+        u.password = MASKED_SECRET;
+        result.proxy = u.toString();
+      }
+    } catch { /* not a URL: leave as is */ }
+  }
+  return result;
+}
+
+/**
+ * Undo masking in a config sent back by the dashboard: masked API keys take
+ * the saved setting (or env) value; masked cookies and headers are dropped.
+ * A masked proxy password cannot be recovered and is an error.
+ */
+export function unmaskConfig(config: Record<string, unknown>, settings: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...config };
+  for (const key of SECRET_KEYS) {
+    if (result[key] === MASKED_SECRET) {
+      if (typeof settings[key] === 'string' && settings[key]) result[key] = settings[key];
+      else delete result[key];
+    }
+  }
+  if (result.cookies === MASKED_SECRET) delete result.cookies;
+  if (result.customHeaders && typeof result.customHeaders === 'object') {
+    result.customHeaders = Object.fromEntries(
+      Object.entries(result.customHeaders as Record<string, unknown>).filter(([, v]) => v !== MASKED_SECRET),
+    );
+  }
+  if (typeof result.proxy === 'string' && result.proxy.includes(encodeURIComponent(MASKED_SECRET))) {
+    throw new BadRequestError('Proxy password is masked; enter it again');
+  }
+  return result;
+}
+
+export class BadRequestError extends Error {}
+
+function redactJob<T extends { config: Record<string, unknown> }>(job: T): T {
+  return { ...job, config: redactConfig(job.config) };
+}
+
+/**
+ * Check a crawl config sent to the HTTP API. Snippet files are never loaded
+ * from the API (they run as code); entry URLs must be public http(s) URLs.
+ */
+export async function validateCrawlRequest(config: Record<string, unknown>): Promise<void> {
+  if (Array.isArray(config.snippetPaths) && config.snippetPaths.length > 0) {
+    throw new BadRequestError('snippetPaths is not accepted by the API; use the CLI --snippet flag');
+  }
+  const entries: unknown[] = [];
+  if (config.seedUrl) entries.push(config.seedUrl);
+  if (Array.isArray(config.sitemapUrls)) entries.push(...config.sitemapUrls);
+  if (Array.isArray(config.urls)) entries.push(...config.urls);
+  for (const u of entries) {
+    if (typeof u !== 'string') throw new BadRequestError('URLs must be strings');
+    try {
+      await assertPublicUrl(u);
+    } catch (err) {
+      throw new BadRequestError(`${u}: ${formatError(err)}`);
+    }
+  }
+}
+
 export function validateSettings(obj: Record<string, unknown>): { valid: Record<string, unknown>; rejected: string[] } {
   const valid: Record<string, unknown> = {};
   const rejected: string[] = [];
@@ -46,6 +140,8 @@ export function validateSettings(obj: Record<string, unknown>): { valid: Record<
     const expected = VALID_SETTINGS[key];
     if (!expected) { rejected.push(key); continue; }
     if (typeof value !== expected) { rejected.push(key); continue; }
+    // A masked secret sent back from GET /api/settings keeps the saved value
+    if (SECRET_KEYS.includes(key) && value === MASKED_SECRET) continue;
     // Validate file paths: must be absolute and not contain traversal
     if (FILE_PATH_KEYS.has(key) && typeof value === 'string' && value !== '') {
       const normalized = value.replace(/\\/g, '/');
@@ -83,8 +179,14 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
       // POST /api/crawl/start
       if (method === 'POST' && path === '/api/crawl/start') {
         const body = await readBody(req);
-        const config = JSON.parse(body);
-        const job = store.createCrawlJob(config);
+        const raw = JSON.parse(body);
+        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+          throw new BadRequestError('Crawl config must be a JSON object');
+        }
+        const config = unmaskConfig(raw as Record<string, unknown>, applyEnvFallbacks(store.getSettings()));
+        await validateCrawlRequest(config);
+        // The stored job keeps no credentials; the crawl gets the real config
+        const job = store.createCrawlJob(redactConfig(config));
         crawlManager.startCrawl(job.id, config);
         json(res, 200, { id: job.id, status: 'running' });
         return true;
@@ -95,7 +197,7 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
       if (method === 'GET' && statusMatch) {
         const job = store.getCrawlJob(statusMatch[1]);
         if (!job) return notFound(res, 'Crawl not found');
-        json(res, 200, job);
+        json(res, 200, redactJob(job));
         return true;
       }
 
@@ -177,7 +279,7 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
 
       // GET /api/crawls
       if (method === 'GET' && path === '/api/crawls') {
-        const crawls = store.listCrawlJobs();
+        const crawls = store.listCrawlJobs().map(redactJob);
         json(res, 200, { crawls, total: crawls.length });
         return true;
       }
@@ -217,7 +319,7 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
 
       // GET /api/presets
       if (method === 'GET' && path === '/api/presets') {
-        const presets = store.listPresets();
+        const presets = store.listPresets().map(redactJob);
         json(res, 200, presets);
         return true;
       }
@@ -226,8 +328,8 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
       if (method === 'POST' && path === '/api/presets') {
         const body = await readBody(req);
         const { name, config } = JSON.parse(body);
-        const preset = store.savePreset(name, config);
-        json(res, 201, preset);
+        const preset = store.savePreset(name, unmaskConfig(config ?? {}, applyEnvFallbacks(store.getSettings())));
+        json(res, 201, redactJob(preset));
         return true;
       }
 
@@ -241,7 +343,7 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
 
       // GET /api/settings
       if (method === 'GET' && path === '/api/settings') {
-        const settings = applyEnvFallbacks(store.getSettings());
+        const settings = maskSecrets(applyEnvFallbacks(store.getSettings()));
         json(res, 200, settings);
         return true;
       }
@@ -256,7 +358,7 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
         }
         const { valid, rejected } = validateSettings(raw as Record<string, unknown>);
         store.updateSettings(valid);
-        const result: Record<string, unknown> = store.getSettings();
+        const result: Record<string, unknown> = maskSecrets(store.getSettings());
         if (rejected.length > 0) result._rejectedKeys = rejected;
         json(res, 200, result);
         return true;
@@ -268,6 +370,8 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
     } catch (err) {
       if (err instanceof SyntaxError) {
         json(res, 400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON in request body' } });
+      } else if (err instanceof BadRequestError) {
+        json(res, 400, { error: { code: 'BAD_REQUEST', message: err.message } });
       } else {
         const message = err instanceof Error ? err.message : 'Internal server error';
         json(res, 500, { error: { code: 'INTERNAL_ERROR', message } });

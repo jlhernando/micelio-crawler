@@ -189,7 +189,8 @@ export class UiCrawlManager {
       checkExternal: bool(config.checkExternal, false),
       customExtractions: (config.customExtractions as CrawlConfig['customExtractions']) || [],
       customSearches: (config.customSearches as CrawlConfig['customSearches']) || [],
-      snippetPaths: Array.isArray(config.snippetPaths) ? config.snippetPaths : [],
+      // Snippets are code: never loaded from a dashboard config (CLI --snippet only)
+      snippetPaths: [],
       psi: bool(config.psi, false),
       psiKey: str(config.psiKey),
       aiPrompt: str(config.aiPrompt),

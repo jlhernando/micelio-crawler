@@ -6,6 +6,7 @@ import { CrawlQueue } from './queue.js';
 import { RobotsChecker } from './robots.js';
 import { fetchPage, checkExternalUrl, headResourceSize, type FetchOptions } from './fetcher.js';
 import { formatError } from './utils.js';
+import { urlBlockReason } from './net-guard.js';
 import { extractPageData, extractResourceRefs, extractBodyText, type ExtractionOptions } from './extractor.js';
 import { ResultWriter } from './writer.js';
 import { closeBrowser, setBrowserProxy } from './browser.js';
@@ -55,6 +56,12 @@ export async function crawl(
     ? (config.urls[0] ? new URL(config.urls[0]) : new URL('https://localhost'))
     : new URL(config.seedUrl);
   let seedDomain = seedUrl.hostname;
+
+  // Every request goes through the SSRF guard (net-guard.ts); say so up front
+  for (const entry of isSpiderMode ? [config.seedUrl] : isSitemapMode ? config.sitemapUrls : []) {
+    const blocked = urlBlockReason(entry);
+    if (blocked) process.stderr.write(`Warning: ${entry}: ${blocked}. Use --allow-private to crawl private hosts from the CLI.\n`);
+  }
 
   // Initialize robots.txt checker (skip for list and sitemap modes)
   const robots = new RobotsChecker();
@@ -215,12 +222,21 @@ export async function crawl(
     }
   }
 
+  // Cookies and custom headers only go to the hosts the user named (seed,
+  // list URLs, sitemap URLs, --allowed-domains), never to hosts discovered
+  // in sitemaps or reached by a redirect.
+  const credentialHosts = new Set<string>(config.allowedDomains);
+  for (const u of [config.seedUrl, ...config.urls, ...config.sitemapUrls]) {
+    try { if (u) credentialHosts.add(new URL(u).hostname); } catch { /* invalid URL */ }
+  }
+
   const fetchOpts: FetchOptions = {
     userAgent: config.userAgent,
     jsRendering: config.jsRendering,
     customHeaders: config.customHeaders,
     cookies: config.cookies,
     dispatcher: proxyDispatcher,
+    credentialHosts,
   };
 
   // Phase 3: Extraction options
@@ -448,6 +464,11 @@ export async function crawl(
               const finalHostname = new URL(fetchResult.finalUrl).hostname;
               if (finalHostname !== seedDomain) {
                 process.stderr.write(`\n  Redirect detected: ${seedDomain} → ${finalHostname}. Updating seed domain.\n`);
+                // Credentials follow only a www/apex move of the same site
+                if (credentialHosts.has(seedDomain) &&
+                    (finalHostname === `www.${seedDomain}` || seedDomain === `www.${finalHostname}`)) {
+                  credentialHosts.add(finalHostname);
+                }
                 seedDomain = finalHostname;
                 queue.updateSeedDomain(finalHostname);
                 // Re-extract with the corrected seedDomain so links are classified correctly

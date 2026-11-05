@@ -40,7 +40,7 @@ func TestSitemapDiscoveryRunsAlongsideCrawl(t *testing.T) {
 	res, err := Crawl(context.Background(), types.CrawlConfig{
 		SeedURL: srv.URL + "/", Mode: types.ModeSpider, MaxDepth: 5, MaxPages: 100,
 		Concurrency: 2, UserAgent: "Micelio/1.0", SkipSSRF: true, RespectRobots: true,
-		DiscoverSitemaps: true, NoSoft404Probe: true,
+		DiscoverSitemaps: true, NoSoft404Probe: true, NoAgentCheck: true,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

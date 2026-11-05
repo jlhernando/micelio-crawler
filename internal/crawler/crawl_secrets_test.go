@@ -49,6 +49,7 @@ func TestCrawlDBConfigHasNoSecrets(t *testing.T) {
 		Concurrency:   1,
 		UserAgent:     "TestBot/1.0",
 		SkipSSRF:      true,
+		NoAgentCheck:  true,
 		Cookies:       "sid=cookie-secret",
 		CustomHeaders: map[string]string{"Authorization": "Bearer header-secret"},
 		PSIKey:        "psi-secret",

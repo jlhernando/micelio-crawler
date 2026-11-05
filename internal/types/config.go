@@ -48,9 +48,13 @@ type CrawlConfig struct {
 	// CompareDevice, when set, fetches every page a second time as this
 	// device (rendered too with JS rendering) and stores the differences
 	// in PageData.DeviceCompare. Links it alone sees are crawled as well.
-	CompareDevice     *DeviceProfile         `json:"compareDevice,omitempty"`
-	SitemapChangefreq string                 `json:"sitemapChangefreq"`
-	OutputPath        string                 `json:"outputPath"`
+	CompareDevice     *DeviceProfile `json:"compareDevice,omitempty"`
+	SitemapChangefreq string         `json:"sitemapChangefreq"`
+	OutputPath        string         `json:"outputPath"`
+	// PDFReport is where the CLI writes the PDF report (empty = none).
+	PDFReport string `json:"pdfReport,omitempty"`
+	// BacklogCSV is where the CLI writes the SEO backlog for JIRA (empty = none).
+	BacklogCSV        string                 `json:"backlogCsv,omitempty"`
 	OutputFormat      OutputFormat           `json:"outputFormat"`
 	Language          string                 `json:"language"`
 	GSCProperty       string                 `json:"gscProperty"`
@@ -122,6 +126,7 @@ type CrawlConfig struct {
 	FullPageWeight      bool    `json:"fullPageWeight"`
 	SaveHTML            bool    `json:"saveHtml"`
 	NoSoft404Probe      bool    `json:"noSoft404Probe,omitempty"` // skip the "page that cannot exist" request
+	NoAgentCheck        bool    `json:"noAgentCheck,omitempty"`   // skip the agent-readiness probe (llms.txt, /.well-known, AI bots)
 	SaveRendered        bool    `json:"saveRendered"`
 	RenderBlockRes      bool    `json:"renderBlockResources"`
 	RenderTimeoutSec    int     `json:"renderTimeoutSec"`

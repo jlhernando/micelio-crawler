@@ -77,7 +77,7 @@ func TestCrawlCommandsShareDashboardFlags(t *testing.T) {
 		"crux", "crux-key", "crux-form-factor",
 		"plausible", "plausible-site-id", "plausible-api-key", "plausible-days", "plausible-host",
 		"extract", "search", "check-external", "page-weight", "full-anchors", "full-page-weight",
-		"html", "html-open", "sitemap-out", "save-html", "save-rendered",
+		"html", "html-open", "pdf", "backlog", "sitemap-out", "save-html", "save-rendered",
 		"db", "no-db", "db-only", "no-analysis", "no-soft404-probe", "resume",
 		"adaptive-rate", "delay-factor", "stealth", "discover-sitemaps",
 		"tor-control-port", "tor-password", "tor-rotate", "config",

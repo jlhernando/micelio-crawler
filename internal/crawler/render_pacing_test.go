@@ -59,7 +59,7 @@ func TestJSRenderingHitsEachPageOnceAndKeepsDelay(t *testing.T) {
 	_, err = Crawl(context.Background(), types.CrawlConfig{
 		SeedURL: srv.URL + "/", Mode: types.ModeSpider, MaxDepth: 1, MaxPages: 3,
 		Concurrency: 3, DelayMs: 300, DelayExplicit: true, UserAgent: "Micelio/1.0",
-		SkipSSRF: true, NoSoft404Probe: true, JSRendering: true,
+		SkipSSRF: true, NoSoft404Probe: true, NoAgentCheck: true, JSRendering: true,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

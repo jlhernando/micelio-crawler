@@ -23,9 +23,39 @@
   let crawlConfig = $state<Record<string, unknown> | null>(null);
   let lastFetchedId = $state<string | null>(null);
   let recrawling = $state(false);
+  let recrawlError = $state<string | null>(null);
+  let exportingPdf = $state(false);
+  let pdfError = $state<string | null>(null);
+
+  // The PDF takes a few seconds (headless Chrome), so fetch it instead of a
+  // plain link: the button shows progress and errors stay on screen.
+  async function exportPdf() {
+    if (!crawlId || exportingPdf) return;
+    exportingPdf = true;
+    pdfError = null;
+    try {
+      const res = await fetch(`/api/crawl/${crawlId}/export/pdf`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error || `PDF export failed (${res.status})`);
+      }
+      const name = res.headers.get('Content-Disposition')?.match(/filename="?([^"]+)"?/)?.[1] || `micelio-${crawlId}.pdf`;
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      pdfError = e instanceof Error ? e.message : String(e);
+    } finally {
+      exportingPdf = false;
+    }
+  }
   $effect(() => {
     if (crawlId && crawlId !== lastFetchedId) {
       lastFetchedId = crawlId;
+      recrawlError = null;
       api.getCrawlStatus(crawlId)
         .then(job => {
           const seedUrl = String(job.seedUrl ?? '');
@@ -42,12 +72,14 @@
   async function recrawl() {
     if (!crawlConfig || recrawling) return;
     recrawling = true;
+    recrawlError = null;
     try {
       // The API masks secrets (cookies, auth headers, keys); fromCrawl lets
       // the server put the stored ones back.
       const { id } = await api.startCrawl({ ...crawlConfig, fromCrawl: crawlId });
       window.location.hash = `/monitor/${id}`;
-    } catch {
+    } catch (e) {
+      recrawlError = e instanceof Error ? e.message : String(e);
       recrawling = false;
     }
   }
@@ -77,8 +109,41 @@
         </svg>
         Export CSV
       </a>
+      {#if pdfError}
+        <span class="text-xs text-danger max-w-xs truncate" title={pdfError} role="alert">{pdfError}</span>
+      {/if}
+      <button
+        type="button"
+        class="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-surface-3 text-fg text-sm font-medium hover:bg-surface-2 transition-all cursor-pointer disabled:opacity-50"
+        onclick={exportPdf}
+        disabled={exportingPdf}
+        aria-busy={exportingPdf}
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="9" y1="15" x2="15" y2="15"></line>
+        </svg>
+        {exportingPdf ? 'Generating PDF…' : 'Export PDF'}
+      </button>
+      <a
+        href="/api/crawl/{crawlId}/export/backlog.csv"
+        download
+        title="SEO backlog as tickets, ready for JIRA's CSV import"
+        class="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-surface-3 text-fg text-sm font-medium hover:bg-surface-2 transition-all no-underline"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+          <line x1="9" y1="4" x2="9" y2="20"></line>
+          <line x1="15" y1="4" x2="15" y2="20"></line>
+        </svg>
+        Export backlog
+      </a>
     {/if}
     {#if crawlId && crawlConfig}
+      {#if recrawlError}
+        <span class="text-xs text-danger max-w-xs truncate" title={recrawlError} role="alert">{recrawlError}</span>
+      {/if}
       <button
         type="button"
         class="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-surface-3 text-fg text-sm font-medium hover:bg-surface-2 transition-all cursor-pointer disabled:opacity-50"

@@ -366,6 +366,14 @@ func (q *CrawlQueue) SeedDomain() string {
 	return q.seedDomain
 }
 
+// InScope reports whether u is on a host the crawl covers. Crawls that do not
+// limit hosts cover every URL.
+func (q *CrawlQueue) InScope(u string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return !q.enforceInternal || q.isInternal(u)
+}
+
 // AddAllowedDomains registers additional hostnames as internal (e.g. when a
 // sitemap lists URLs across several domains). Duplicates are ignored.
 func (q *CrawlQueue) AddAllowedDomains(domains ...string) {

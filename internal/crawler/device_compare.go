@@ -25,9 +25,10 @@ func (s *crawlSession) compareDevice(ctx context.Context, e types.QueueEntry, pr
 	if s.config.Device != nil {
 		cmp.PrimaryDevice = s.config.Device.ID
 	}
-	pSnap, pLinks, pText := s.deviceView(e, primary, page, primaryRendered)
-	pSnap.JSErrors = len(page.JSErrors)
-	cmp.Primary = pSnap
+	pv := s.deviceView(e, primary, page, primaryRendered)
+	pv.snap.JSErrors = len(page.JSErrors)
+	cmp.Primary = pv.snap
+	cmp.PrimaryJS, cmp.PrimaryJSLinks = jsChanges(pv)
 
 	ua := dev.UserAgent
 	if s.config.RespectRobots && s.robotsChecker != nil && sameHost(e.URL, s.seedURL) && !s.robotsChecker.IsAllowed(e.URL, ua) {
@@ -38,6 +39,8 @@ func (s *crawlSession) compareDevice(ctx context.Context, e types.QueueEntry, pr
 	}
 	opts := s.fetchOpts
 	opts.UserAgent = ua
+	// No FollowRedirect: this fetch is never stored as a page, and a site
+	// may send one device to another host (www -> m.example.com).
 	res := FetchPage(ctx, e.URL, opts)
 	if ctx.Err() != nil && res.StatusCode == 0 {
 		return // stopping: leave the page without a comparison
@@ -72,25 +75,70 @@ func (s *crawlSession) compareDevice(ctx context.Context, e types.QueueEntry, pr
 			jsErrors = len(rr.JSErrors)
 		}
 	}
-	sSnap, sLinks, sText := s.deviceView(e, res, &raw, rendered)
-	sSnap.JSErrors = jsErrors
-	cmp.Secondary = sSnap
+	sv := s.deviceView(e, res, &raw, rendered)
+	sv.snap.JSErrors = jsErrors
+	cmp.Secondary = sv.snap
+	cmp.SecondaryJS, cmp.SecondaryJSLinks = jsChanges(sv)
 
-	cmp.LinksOnlyPrimary, cmp.LinksOnlyPrimaryCount = linksOnlyIn(pLinks, sLinks)
-	cmp.LinksOnlySecondary, cmp.LinksOnlySecondaryCount = linksOnlyIn(sLinks, pLinks)
-	cmp.LinksParamOnly = paramOnlyLinks(pLinks, sLinks) + paramOnlyLinks(sLinks, pLinks)
-	cmp.TextSimilarity = 100
-	if pText != "" || sText != "" {
-		cmp.TextSimilarity = analysis.SimhashSimilarity(analysis.Simhash(pText), analysis.Simhash(sText))
+	compareViews(cmp, pv, sv)
+	cmp.Diffs = deviceDiffs(cmp, s.config.Device, dev, len(pv.links), len(sv.links))
+	if pv.raw != nil && sv.raw != nil {
+		rc := &types.DeviceComparison{Primary: pv.raw.snap, Secondary: sv.raw.snap}
+		compareViews(rc, *pv.raw, *sv.raw)
+		cmp.RawDiffs = deviceDiffs(rc, s.config.Device, dev, len(pv.raw.links), len(sv.raw.links))
 	}
-	cmp.Diffs = deviceDiffs(cmp, s.config.Device, dev, len(pLinks), len(sLinks))
 	page.DeviceCompare = cmp
 }
 
-// deviceView is the snapshot, internal links and body text one device saw:
-// from the rendered DOM when there is one, else from the fetched HTML
-// (already extracted into page).
-func (s *crawlSession) deviceView(e types.QueueEntry, res types.FetchResult, page *types.PageData, rendered string) (types.DeviceSnapshot, []string, string) {
+// compareViews fills c's one-sided links and text similarity from a and b.
+func compareViews(c *types.DeviceComparison, a, b deviceSide) {
+	c.LinksOnlyPrimary, c.LinksOnlyPrimaryCount = linksOnlyIn(a.links, b.links)
+	c.LinksOnlySecondary, c.LinksOnlySecondaryCount = linksOnlyIn(b.links, a.links)
+	c.LinksParamOnly = paramOnlyLinks(a.links, b.links) + paramOnlyLinks(b.links, a.links)
+	c.TextSimilarity = 100
+	if a.text != "" || b.text != "" {
+		c.TextSimilarity = analysis.SimhashSimilarity(analysis.Simhash(a.text), analysis.Simhash(b.text))
+	}
+}
+
+// jsChanges lists what JavaScript changes on one device (DeviceDiff ids of
+// its fetched HTML vs its rendered DOM) and how many internal links only
+// the rendered DOM has. Nothing without a rendered DOM.
+func jsChanges(v deviceSide) ([]string, int) {
+	if v.raw == nil {
+		return nil, 0
+	}
+	c := &types.DeviceComparison{Primary: v.raw.snap, Secondary: v.snap}
+	compareViews(c, *v.raw, v)
+	return deviceDiffs(c, nil, nil, len(v.raw.links), len(v.links)), c.LinksOnlySecondaryCount
+}
+
+// deviceSide is what one device saw: its snapshot, internal links and body
+// text, and with a rendered DOM the same from the fetched HTML (raw).
+type deviceSide struct {
+	snap  types.DeviceSnapshot
+	links []string
+	text  string
+	raw   *deviceSide
+}
+
+// deviceView is what one device saw: from the rendered DOM when there is
+// one (with the fetched HTML as raw), else from the fetched HTML (already
+// extracted into page).
+func (s *crawlSession) deviceView(e types.QueueEntry, res types.FetchResult, page *types.PageData, rendered string) deviceSide {
+	if rendered == "" {
+		snap, links, text := s.snapshot(e, res, page, "")
+		return deviceSide{snap: snap, links: links, text: text}
+	}
+	snap, links, text := s.snapshot(e, res, page, rendered)
+	raw := s.deviceView(e, res, page, "")
+	snap.Raw = &raw.snap
+	return deviceSide{snap: snap, links: links, text: text, raw: &raw}
+}
+
+// snapshot reads one device's page from rendered, or from the fetched HTML
+// in page when rendered is "".
+func (s *crawlSession) snapshot(e types.QueueEntry, res types.FetchResult, page *types.PageData, rendered string) (types.DeviceSnapshot, []string, string) {
 	src, html := page, res.HTML
 	if rendered != "" {
 		pd := extract.ExtractPageData(rendered, extract.ExtractionOptions{

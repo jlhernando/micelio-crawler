@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/micelio/micelio/internal/netguard"
+	"github.com/micelio/micelio/internal/types"
 )
 
 // Every address that reaches this computer or its networks is blocked,
@@ -85,7 +86,7 @@ func TestStealthClientBlocksPrivateAddresses(t *testing.T) {
 // A sitemap fetched without a client (the fallback) is protected too.
 func TestSitemapFallbackClientBlocksPrivateAddresses(t *testing.T) {
 	target, hits := localTarget(t)
-	err := fetchSitemap(context.Background(), target+"/sitemap.xml", nil, "test", nil, 0, func([]string) {})
+	err := fetchSitemap(context.Background(), target+"/sitemap.xml", nil, "test", nil, 0, func([]string, [][]types.HreflangEntry) {})
 	if err == nil {
 		t.Error("sitemap fallback client reached a loopback address")
 	}

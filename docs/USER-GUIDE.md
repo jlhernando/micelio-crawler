@@ -198,6 +198,16 @@ Results get a **Devices** tab:
   hreflang, missing meta viewport on the phone, or a fetch that failed. Click a
   chip to list its pages; click a page to see both versions side by side with
   the links only each one has.
+- With JavaScript Rendering on, a **Raw HTML vs rendered** card shows how
+  many pages have the same HTML on both devices before JavaScript, and on how
+  many pages JavaScript changes SEO elements on each device (title, h1,
+  content, links, canonical, schema…). Chips **JavaScript changes SEO
+  elements** and **Raw HTML differs** list those pages. Opening a page shows a
+  four-column grid: raw HTML and rendered page of each device, with blue cells
+  for what JavaScript changed and an orange line for what differs between the
+  devices. Pages filters: `issue=device-js` and `device-raw`.
+- If a device is redirected to another host (www → m.example.com), the
+  comparison follows the redirect and compares that page.
 - Issues gets cards for links and content that differ, and Universe a
   **Device differences** pill that lights up those pages.
 - The HTML report, `crawl_summary` (MCP `devices`) and pages filters
@@ -355,6 +365,49 @@ than their template. Each candidate has a confidence (high, medium, low) and its
 reasons. They are candidates to review: Search Console's page indexing report
 confirms. Turn the one extra request off with "Check how the site answers missing
 pages" on New Crawl or `--no-soft404-probe`.
+
+**Hreflang** is read from three places: `<link rel="alternate" hreflang>` in the
+HTML, the HTTP `Link:` header, and `<xhtml:link>` entries in XML sitemaps (some
+sites declare it only there). Sitemap alternates are read when the crawl uses
+Discover sitemaps or sitemap mode, and stay in the crawl database, so imported
+crawls keep them. The **Hreflang** tab in Results lists pages by source, every
+language/region code and checks each one against ISO 639-1 and ISO 3166-1
+(`en-UK` → `en-GB`, `jp` → `ja`). It flags missing return links, no
+self-reference, no x-default, one code pointing to two URLs, alternates that
+answer an error, redirect, are noindex, canonicalised elsewhere, blocked by
+robots.txt or were not crawled, `<html lang>` that does not match the page's own
+code, and HTML and sitemap declarations that disagree. A page that redirects or
+fails is not checked for return links: its declarations do not count.
+
+### Agent readiness
+
+The **Agent readiness** tab shows how easily AI crawlers and agents (ChatGPT,
+Claude, Perplexity, Gemini) can find, read and use the site. Next to the crawl,
+Micelio sends about 20 requests per host (25 at most, robots.txt and the crawl
+delay respected) and checks:
+
+- **Discovery**: robots.txt, Sitemap lines, `/llms.txt` and `/llms-full.txt`
+  (real text with an H1 and links, not an HTML page answered with 200), Link
+  headers or `<link>` tags for agents, feeds, security.txt.
+- **Content**: markdown for `Accept: text/markdown`, a `.md` version of the
+  page, JSON-LD coverage of the crawled pages, and (with JavaScript rendering)
+  pages whose title, h1, text, links or JSON-LD only appear after JavaScript.
+- **Bot access**: allow/block for 18 AI bots (GPTBot, OAI-SearchBot,
+  ChatGPT-User, ClaudeBot, Claude-SearchBot, Claude-User, PerplexityBot,
+  Google-Extended, Applebot-Extended, CCBot, Bytespider, meta-externalagent…),
+  whether AI search and user agents may read the site, `Content-Signal`
+  directives, a live request as GPTBot and ClaudeBot to spot firewall blocks,
+  and the Web Bot Auth key directory.
+- **Agent protocols**: MCP server card, A2A agent card, API catalog (RFC 9727),
+  OpenAPI, OAuth metadata (RFC 8414, RFC 9728), agent skills index, WebMCP
+  hints, and the retired `ai-plugin.json`.
+
+Each check is pass, warning, fail or N/A, with evidence and a short fix. The
+score counts a pass fully and a warning half; N/A is left out, so optional
+protocols only count when the site publishes them. Levels: Agent-ready (80+),
+Good (60+), Basic (40+), Not ready. Turn it off with "Check agent readiness" on
+New Crawl or `--no-agent-check`. `micelio agent-check <url>` runs the same
+check without a crawl.
 
 ### Link Intelligence
 
@@ -697,7 +750,8 @@ A compact list of what Micelio checks and computes, by area.
 - Title, meta description, H1, canonical and meta robots.
 - Open Graph and Twitter Card tags.
 - Schema.org / JSON-LD detection, including `@graph` expansion.
-- Hreflang validation with return-link checks.
+- Hreflang validation from HTML, HTTP Link headers and XML sitemaps: codes,
+  return links, self-reference, x-default and alternate URL status.
 - Redirect chains; canonical chains, loops and cross-domain canonicals.
 - Security headers (CSP, HSTS, X-Frame-Options).
 - Soft-404 candidates (see [Page and issue exploration](#page-and-issue-exploration)).
@@ -746,6 +800,8 @@ A compact list of what Micelio checks and computes, by area.
   not spider.
 - Spider crawls can discover sitemaps from robots.txt and use them to find
   orphan pages.
+- `<xhtml:link rel="alternate" hreflang>` alternates are read and audited with
+  the page hreflang.
 - XML sitemap generation from crawl results.
 
 ### Robots.txt testing

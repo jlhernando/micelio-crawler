@@ -1875,6 +1875,10 @@ func pageMatchesIssue(p *types.PageData, issue string, dupSet map[string]bool) b
 		return dupSet[p.URL]
 	case "device-any":
 		return p.DeviceCompare != nil && len(p.DeviceCompare.Diffs) > 0
+	case types.DeviceFilterJS:
+		return p.DeviceCompare != nil && (len(p.DeviceCompare.PrimaryJS) > 0 || len(p.DeviceCompare.SecondaryJS) > 0)
+	case types.DeviceFilterRaw:
+		return p.DeviceCompare != nil && len(p.DeviceCompare.RawDiffs) > 0
 	default:
 		if strings.HasPrefix(issue, "device-") && p.DeviceCompare != nil {
 			return slices.Contains(p.DeviceCompare.Diffs, issue)

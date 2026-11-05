@@ -255,6 +255,7 @@ export class UniverseEngine {
   private visObs: IntersectionObserver;
   private radius = 1000;
   private placed = false;
+  private homeZoom = 1;
   private panelPx = 456; // side panel: 440px + 16px inset
   private cardPx = 396; // page detail card on the left (380px + 16px inset)
   private viewLeft = 0; // canvas px on the left hidden by an overlay; the orbit target sits centred in what is left
@@ -268,7 +269,13 @@ export class UniverseEngine {
   private edgeBudget = 0;
   readonly gpu: string;
 
-  constructor(private host: HTMLElement, private meta: UniverseMeta, private urls: EngineUrls, private ev: EngineEvents) {
+  /**
+   * opts.panelPx: width the side panel covers on the right (0 for a bare map,
+   * as in PDF captures); opts.zoom: below 1 starts the camera closer.
+   */
+  constructor(private host: HTMLElement, private meta: UniverseMeta, private urls: EngineUrls, private ev: EngineEvents, opts: { panelPx?: number; zoom?: number } = {}) {
+    if (opts.panelPx !== undefined) this.panelPx = opts.panelPx;
+    if (opts.zoom) this.homeZoom = opts.zoom;
     this.crossLinks = meta.layout !== 'links';
     this.renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -764,7 +771,7 @@ export class UniverseEngine {
     const tan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
     const frac = Math.max(0.4, (w - this.panelPx) / w);
     const r = this.meta.extent ?? this.radius;
-    const d = Math.max(r / tan, r / (tan * this.camera.aspect * frac)) * 0.95 + r * 0.4;
+    const d = (Math.max(r / tan, r / (tan * this.camera.aspect * frac)) * 0.95 + r * 0.4) * this.homeZoom;
     const dir = new THREE.Vector3(-0.28, 0.32, 1).normalize();
     const target = new THREE.Vector3(...(this.meta.center ?? [0, 0, 0]));
     return { target, pos: target.clone().add(dir.multiplyScalar(d)) };

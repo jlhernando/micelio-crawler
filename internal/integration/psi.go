@@ -51,14 +51,11 @@ func (c *PSIClient) Fetch(ctx context.Context, pageURL string) (*types.PageSpeed
 		"strategy": {"mobile"},
 		"category": {"performance"},
 	}
-	if c.apiKey != "" {
-		params.Set("key", c.apiKey)
-	}
-
 	req, err := http.NewRequestWithContext(ctx, "GET", psiEndpoint+"?"+params.Encode(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("psi: create request: %w", err)
 	}
+	setAPIKey(req, c.apiKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

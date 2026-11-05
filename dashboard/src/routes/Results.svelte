@@ -53,7 +53,7 @@
   let loadingProgress = $state(0);
 
   // Active tab
-  let activeTab = $state<'overview' | 'pages' | 'segments' | 'issues' | 'performance' | 'content' | 'links' | 'devices' | 'signals' | 'ai-visibility'>('overview');
+  let activeTab = $state<'overview' | 'pages' | 'segments' | 'issues' | 'performance' | 'content' | 'links' | 'devices' | 'hreflang' | 'signals' | 'ai-visibility' | 'agents'>('overview');
   let graphSubTab = $state<'universe' | 'treemap'>('universe'); // Universe first: the map of the site
 
   // Filters passed from SummaryHeader clicks
@@ -284,8 +284,10 @@
         { key: 'content', label: 'Content' },
         { key: 'links', label: 'Links' },
         ...(stats.deviceParity ? [{ key: 'devices', label: 'Devices' }] : []),
+        ...(stats.hreflang ? [{ key: 'hreflang', label: 'Hreflang' }] : []),
         { key: 'signals', label: 'Signals' },
         ...(stats.aiVisibilityStats ? [{ key: 'ai-visibility', label: 'AI Visibility' }] : []),
+        ...(stats.agentReadiness ? [{ key: 'agents', label: 'Agent readiness' }] : []),
       ] as tab}
         <button
           type="button"
@@ -641,11 +643,21 @@
         <DevicesView crawlId={id} {stats} />
       {/await}
 
+    {:else if activeTab === 'hreflang'}
+      {#await import('../lib/components/results/HreflangView.svelte') then { default: HreflangView }}
+        <HreflangView {stats} />
+      {/await}
+
     {:else if activeTab === 'signals'}
       <SignalsView {stats} {pageCount} />
 
     {:else if activeTab === 'ai-visibility'}
       <AIVisibility {stats} />
+
+    {:else if activeTab === 'agents'}
+      {#await import('../lib/components/results/AgentReadinessView.svelte') then { default: AgentReadinessView }}
+        <AgentReadinessView {stats} />
+      {/await}
 
     {:else if activeTab === 'segments'}
       <SegmentsView {stats} onOpenPages={openSegment} />

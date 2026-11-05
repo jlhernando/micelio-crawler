@@ -189,6 +189,59 @@ app.innerHTML = '<h1>' + (innerWidth < 768 ? 'Mobile' : 'Desktop') + ' home</h1>
 	if !slices.Equal(c.Primary.H1, []string{"Mobile home"}) || !slices.Equal(c.Secondary.H1, []string{"Desktop home"}) {
 		t.Errorf("h1 primary %v secondary %v", c.Primary.H1, c.Secondary.H1)
 	}
+	// Raw vs rendered: the fetched HTML is the same on both devices (an
+	// empty shell); JavaScript adds the h1 and the links on each.
+	if c.Primary.Raw == nil || c.Secondary.Raw == nil || len(c.Primary.Raw.H1) != 0 {
+		t.Fatalf("raw snapshots = %+v / %+v", c.Primary.Raw, c.Secondary.Raw)
+	}
+	if len(c.RawDiffs) != 0 {
+		t.Errorf("raw diffs = %v, want none (same HTML for both)", c.RawDiffs)
+	}
+	if !slices.Contains(c.PrimaryJS, types.DeviceDiffH1) || !slices.Contains(c.SecondaryJS, types.DeviceDiffLinks) || c.PrimaryJSLinks != 1 || c.SecondaryJSLinks != 4 {
+		t.Errorf("js changes primary %v (%d links) secondary %v (%d links)", c.PrimaryJS, c.PrimaryJSLinks, c.SecondaryJS, c.SecondaryJSLinks)
+	}
+}
+
+// A site that sends mobile visitors to an m-dot host: the compare device
+// follows the redirect and compares the m-dot page, not a bare 302.
+func TestCompareDevicesFollowsMobileHost(t *testing.T) {
+	var mHost string
+	m := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><head><meta name="viewport" content="width=device-width"><title>Shop mobile</title></head><body><h1>Shop</h1></body></html>`)
+	}))
+	defer m.Close()
+	mHost = strings.Replace(m.URL, "127.0.0.1", "localhost", 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("User-Agent"), "Mobile") {
+			http.Redirect(w, r, mHost+r.URL.Path, http.StatusFound)
+			return
+		}
+		fmt.Fprint(w, `<html><head><title>Shop</title></head><body><h1>Shop</h1><a href="/p">p</a></body></html>`)
+	}))
+	defer srv.Close()
+	// The page checked is /p, not the seed: the seed may always move host.
+	res, err := Crawl(context.Background(), types.CrawlConfig{
+		SeedURL: srv.URL + "/", Mode: types.ModeSpider, MaxDepth: 1, MaxPages: 5, Concurrency: 1, SkipSSRF: true,
+		NoSoft404Probe: true, NoAgentCheck: true,
+		Device: &types.DeviceProfile{ID: "desktop"}, CompareDevice: &types.DeviceProfile{ID: "mobile"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range res.Pages {
+		c := p.DeviceCompare
+		if c == nil || p.URL != srv.URL+"/p" {
+			continue
+		}
+		if c.Secondary.StatusCode != 200 || c.Secondary.Title != "Shop mobile" || c.Secondary.FinalURL != mHost+"/p" {
+			t.Errorf("secondary = %+v, want the m-dot page", c.Secondary)
+		}
+		if !slices.Contains(c.Diffs, types.DeviceDiffRedirect) || !slices.Contains(c.Diffs, types.DeviceDiffTitle) {
+			t.Errorf("diffs = %v, want redirect and title", c.Diffs)
+		}
+		return
+	}
+	t.Fatal("no compared page")
 }
 
 func TestLinksOnlyInIgnoresParamOrder(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -100,13 +100,12 @@ func (c *CruxClient) fetch(ctx context.Context, pageURL string) (*types.CruxData
 	}
 
 	bodyBytes, _ := json.Marshal(reqBody)
-	endpoint := cruxEndpoint + "?key=" + url.QueryEscape(c.apiKey)
-
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(bodyBytes))
+	req, err := http.NewRequestWithContext(ctx, "POST", cruxEndpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	setAPIKey(req, c.apiKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -221,11 +220,26 @@ func extractP75Float(metrics map[string]struct {
 	if !ok || m.Percentiles.P75 == nil {
 		return nil
 	}
-	var v float64
-	if err := json.Unmarshal(m.Percentiles.P75, &v); err != nil {
+	v, ok := p75Value(m.Percentiles.P75)
+	if !ok {
 		return nil
 	}
 	return &v
+}
+
+// p75Value reads a CrUX percentile: a number, or a string for CLS ("0.05").
+func p75Value(raw json.RawMessage) (float64, bool) {
+	var v float64
+	if err := json.Unmarshal(raw, &v); err == nil {
+		return v, true
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			return f, true
+		}
+	}
+	return 0, false
 }
 
 // GetCrUXAssessment evaluates a metric value against Google's CWV thresholds.

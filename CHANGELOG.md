@@ -4,6 +4,10 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-11-05
+
+A client-ready PDF report with an SEO and GEO backlog, Core Web Vitals and CDN checks; hreflang and AI agent readiness audits; and a round of security and reliability fixes.
+
 ### Added
 
 - **PDF report.** Results → *Export PDF* (CLI `--pdf <path>`) writes a client-ready A4 report in the dashboard's style: cover, summary, health scorecard, structure and speed, strongest pages. With the dashboard running it adds the site's **Universe** map, and a map inside each ticket it proves (errors, redirects, click depth, PageRank).

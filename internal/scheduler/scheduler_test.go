@@ -740,3 +740,22 @@ func TestNewSchedulerWithDifferentCronExprs(t *testing.T) {
 		}
 	}
 }
+
+// State files hold crawl credentials and the webhook URL: owner only.
+func TestStateFilesOwnerOnly(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s, err := New(Config{URL: "https://example.com/", CronExpr: "@daily", OutputDir: t.TempDir(),
+		CrawlMap: map[string]interface{}{"cookies": "secret"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{s.stateDir, filepath.Join(s.stateDir, s.state.ID+".json")} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm()&0o077 != 0 {
+			t.Errorf("%s mode = %v, want owner only", p, fi.Mode().Perm())
+		}
+	}
+}

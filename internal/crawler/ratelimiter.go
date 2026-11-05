@@ -198,17 +198,28 @@ func (h *hostRateLimiter) pace(ctx context.Context, rawURL string) func() {
 // returns, for transports that do not report writes). With pace nil it is
 // client.Do.
 func pacedDo(client *http.Client, req *http.Request, pace func(context.Context, string) func()) (*http.Response, error) {
+	resp, _, err := pacedDoWait(client, req, pace)
+	return resp, err
+}
+
+// pacedDoWait is pacedDo that also returns how long the request waited for
+// its turn, so response times can leave that wait out.
+func pacedDoWait(client *http.Client, req *http.Request, pace func(context.Context, string) func()) (*http.Response, time.Duration, error) {
 	if pace == nil {
-		return client.Do(req)
+		resp, err := client.Do(req)
+		return resp, 0, err
 	}
 	ctx := req.Context()
+	waitStart := time.Now()
 	sent := pace(ctx, req.URL.String())
+	wait := time.Since(waitStart)
 	defer sent()
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, wait, err
 	}
 	trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { sent() }}
-	return client.Do(req.WithContext(httptrace.WithClientTrace(ctx, trace)))
+	resp, err := client.Do(req.WithContext(httptrace.WithClientTrace(ctx, trace)))
+	return resp, wait, err
 }
 
 // SetHostFloor raises the minimum interval for a host (robots.txt Crawl-delay).

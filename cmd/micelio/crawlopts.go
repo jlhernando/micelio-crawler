@@ -412,6 +412,9 @@ func (o *crawlOptions) resolveConfig(cmd *cobra.Command) (config types.CrawlConf
 	if err != nil {
 		return types.CrawlConfig{}, 0, err
 	}
+	// The local CLI user picks the Plausible host, so a self-hosted one on
+	// the local network is allowed. The dashboard never sets this.
+	fromFlags.PlausibleHostTrusted = true
 	if o.configPath == "" {
 		return fromFlags, 0, nil
 	}
@@ -422,6 +425,7 @@ func (o *crawlOptions) resolveConfig(cmd *cobra.Command) (config types.CrawlConf
 	config = overlayFlags(cmd, base, fromFlags)
 	// NoDB is not part of the file format (json:"-").
 	config.NoDB = config.NoDB || o.noDb
+	config.PlausibleHostTrusted = true
 	return config, fileLimit, nil
 }
 

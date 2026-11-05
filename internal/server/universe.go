@@ -97,11 +97,14 @@ type universeLayout struct {
 	sitewide []bool
 	// Link tree (layout "links"): parent page index and click level per page,
 	// -1 for pages not reached from the root.
-	// view holds the pages (and graph) this layout was built from; hidden
-	// counts the pages it leaves out (see universeView).
-	view   *CrawlResults
-	hidden universeHidden
-	all    bool
+	// viewIdx maps a view position to the owner's page index (nil: every
+	// page) and viewGraph links the view's pages; viewOf rebuilds the view
+	// from them. A pointer to the pages here would keep evicted results
+	// alive through this cache. hidden counts the pages left out.
+	viewIdx   []int32
+	viewGraph *analysis.AdjacencyGraph
+	hidden    universeHidden
+	all       bool
 
 	parent          []int32
 	inMainTree      []bool // reached from the start page (not from an extra root)
@@ -205,9 +208,9 @@ func universeDeviceDiffCount(pages []*types.PageData) int {
 // universeView returns the pages (and the link graph between them) that
 // Universe draws: every page when all is set, else only architecture pages.
 // The view shares page pointers with results; handlers given a layout must
-// use l.view, whose indices match the layout's.
-func universeView(results *CrawlResults, all bool) (*CrawlResults, universeHidden) {
-	var hidden universeHidden
+// use its view (viewOf), whose indices match the layout's. idx maps view
+// positions to page indices, nil when the view is results itself.
+func universeView(results *CrawlResults, all bool) (view *CrawlResults, idx []int32, hidden universeHidden) {
 	keep := make([]int32, len(results.Pages))
 	kept := 0
 	for i, p := range results.Pages {
@@ -231,12 +234,14 @@ func universeView(results *CrawlResults, all bool) (*CrawlResults, universeHidde
 		}
 	}
 	if kept == len(results.Pages) {
-		return results, hidden
+		return results, nil, hidden
 	}
-	view := &CrawlResults{Pages: make([]*types.PageData, 0, kept), PagesReady: true}
+	view = &CrawlResults{Pages: make([]*types.PageData, 0, kept), PagesReady: true}
+	idx = make([]int32, 0, kept)
 	for i, p := range results.Pages {
 		if keep[i] >= 0 {
 			view.Pages = append(view.Pages, p)
+			idx = append(idx, int32(i))
 		}
 	}
 	if g := universeGraph(results); g != nil {
@@ -259,12 +264,25 @@ func universeView(results *CrawlResults, all bool) (*CrawlResults, universeHidde
 		}
 		view.Graph = sub
 	}
-	return view, hidden
+	return view, idx, hidden
+}
+
+// viewOf returns the pages and graph the layout draws, taken from results
+// (its owner) on each request.
+func (l *universeLayout) viewOf(results *CrawlResults) *CrawlResults {
+	if l.viewIdx == nil {
+		return results
+	}
+	view := &CrawlResults{Pages: make([]*types.PageData, len(l.viewIdx)), Graph: l.viewGraph, PagesReady: true}
+	for i, pi := range l.viewIdx {
+		view.Pages[i] = results.Pages[pi]
+	}
+	return view
 }
 
 // getUniverseLayout returns a cached layout or builds one. Callers must hold
 // results.mu.RLock.
-func getUniverseLayout(crawlID string, results *CrawlResults, dim, layout string, all bool) *universeLayout {
+func getUniverseLayout(crawlID string, results *CrawlResults, dim, layout string, all bool) (*universeLayout, *CrawlResults) {
 	// Resolve "auto" first so it shares the cache entry of the grouping it
 	// picks (the dashboard asks for that grouping by name right after).
 	dim = resolveUniverseDim(results.Pages, dim)
@@ -274,14 +292,17 @@ func getUniverseLayout(crawlID string, results *CrawlResults, dim, layout string
 	for _, l := range universeCache.items {
 		if l.key == key && l.owner.Value() == results {
 			universeCache.Unlock()
-			return l
+			return l, l.viewOf(results)
 		}
 	}
 	universeCache.Unlock()
 
-	view, hidden := universeView(results, all)
+	view, idx, hidden := universeView(results, all)
 	l := buildUniverseLayout(view, dim, layout)
-	l.view, l.hidden, l.all = view, hidden, all
+	l.viewIdx, l.hidden, l.all = idx, hidden, all
+	if idx != nil {
+		l.viewGraph = view.Graph
+	}
 	l.key = key
 	l.owner = weak.Make(results)
 	universeCache.Lock()
@@ -296,7 +317,7 @@ func getUniverseLayout(crawlID string, results *CrawlResults, dim, layout string
 		universeCache.items = universeCache.items[:universeCacheSize]
 	}
 	universeCache.Unlock()
-	return l
+	return l, view
 }
 
 // universeSegmenter returns the grouping function for dim. "section" finds
@@ -765,16 +786,16 @@ func withUniverse(manager *CrawlManager, w http.ResponseWriter, r *http.Request,
 		dim = "auto"
 	}
 	// Handlers get the layout's view so page indices match it.
-	l := getUniverseLayout(crawlID, results, dim, r.URL.Query().Get("layout"), r.URL.Query().Get("all") == "1")
-	if len(l.view.Pages) == 0 && !l.all {
+	l, view := getUniverseLayout(crawlID, results, dim, r.URL.Query().Get("layout"), r.URL.Query().Get("all") == "1")
+	if len(view.Pages) == 0 && !l.all {
 		// No 2xx page at all (e.g. everything redirects): show what there is.
-		l = getUniverseLayout(crawlID, results, dim, r.URL.Query().Get("layout"), true)
+		l, view = getUniverseLayout(crawlID, results, dim, r.URL.Query().Get("layout"), true)
 	}
-	if len(l.view.Pages) == 0 {
+	if len(view.Pages) == 0 {
 		jsonError(w, "no pages", http.StatusNotFound)
 		return
 	}
-	fn(l.view, l)
+	fn(view, l)
 }
 
 func registerUniverseRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlManager) {
@@ -801,8 +822,8 @@ func registerUniverseRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlMa
 				"edgesContextual": l.edgesContextual,
 				"sitewideTargets": l.sitewideTargets,
 				"hidden":          l.hidden,
-				"statusCounts":    universeStatusCounts(l.view.Pages),
-				"deviceDiffs":     universeDeviceDiffCount(l.view.Pages),
+				"statusCounts":    universeStatusCounts(results.Pages),
+				"deviceDiffs":     universeDeviceDiffCount(results.Pages),
 				"all":             l.all,
 			})
 		})

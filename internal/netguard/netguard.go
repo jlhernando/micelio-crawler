@@ -14,9 +14,29 @@ import (
 // private overlay networks such as Tailscale.
 var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
 
+// IPv6 ranges that carry an IPv4 address inside (NAT64, 6to4, Teredo), and
+// deprecated site-local addresses, which still route inside some networks.
+var (
+	nat64      = mustCIDR("64:ff9b::/96")   // RFC 6052: IPv4 in the last 4 bytes
+	nat64Local = mustCIDR("64:ff9b:1::/48") // RFC 8215: local-use NAT64
+	sixToFour  = mustCIDR("2002::/16")      // RFC 3056: IPv4 in bytes 2-5
+	teredo     = mustCIDR("2001::/32")      // RFC 4380: client IPv4 XORed in the last 4 bytes
+	siteLocal  = mustCIDR("fec0::/10")      // RFC 3879, deprecated
+)
+
+func mustCIDR(s string) *net.IPNet {
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
 // BlockedIP reports whether ip is an address crawls must never reach: this
 // computer, private and link-local networks (cloud metadata included),
 // shared CGNAT space, and unspecified, multicast or broadcast addresses.
+// IPv6 forms that embed an IPv4 address (NAT64, 6to4, Teredo) are judged by
+// that IPv4 address; local-use NAT64 and site-local IPv6 are always blocked.
 func BlockedIP(ip net.IP) bool {
 	if ip == nil {
 		return true
@@ -29,6 +49,20 @@ func BlockedIP(ip net.IP) bool {
 	if ip4 := ip.To4(); ip4 != nil {
 		// 0.0.0.0/8 ("this network") and the broadcast address.
 		return ip4[0] == 0 || ip4.Equal(net.IPv4bcast) || cgnat.Contains(ip4)
+	}
+	switch {
+	case nat64Local.Contains(ip), siteLocal.Contains(ip):
+		return true
+	case nat64.Contains(ip):
+		return BlockedIP(net.IP(ip[12:16]))
+	case sixToFour.Contains(ip):
+		return BlockedIP(net.IP(ip[2:6]))
+	case teredo.Contains(ip):
+		v4 := make(net.IP, 4)
+		for i := range v4 {
+			v4[i] = ip[12+i] ^ 0xff
+		}
+		return BlockedIP(v4)
 	}
 	return false
 }

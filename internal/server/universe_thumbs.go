@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,6 +99,9 @@ func (s *thumbService) releaseRenderer() {
 // capture returns the cached thumbnail path, capturing it first if needed.
 // Concurrent requests for the same page share one capture.
 func (s *thumbService) capture(r *http.Request, crawlID, pageURL string) (string, bool) {
+	if !isWebURL(pageURL) {
+		return "", false
+	}
 	path := thumbPath(crawlID, pageURL)
 	if _, err := os.Stat(path); err == nil {
 		return path, true
@@ -155,6 +159,15 @@ func (s *thumbService) capture(r *http.Request, crawlID, pageURL string) (string
 	return path, os.Rename(tmp, path) == nil
 }
 
+// isWebURL reports whether raw is an absolute http(s) URL with a host.
+func isWebURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return u.Scheme == "http" || u.Scheme == "https"
+}
+
 func isChromeMissing(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "executable file not found") || strings.Contains(msg, "exec:")
@@ -172,6 +185,12 @@ func registerUniverseThumbRoute(mux *http.ServeMux, _ *UiStore, manager *CrawlMa
 				pageURL = results.Pages[l.order[i]].URL
 			}
 		})
+		if pageURL != "" && !isWebURL(pageURL) {
+			// An imported crawl can hold any URL: Chrome must never open a
+			// file:// (or chrome://, data:...) page and send back its picture.
+			jsonError(w, "thumbnails are only made for http(s) pages", http.StatusBadRequest)
+			return
+		}
 		if pageURL == "" {
 			if w.Header().Get("Content-Type") == "" {
 				jsonError(w, "invalid index", http.StatusBadRequest)

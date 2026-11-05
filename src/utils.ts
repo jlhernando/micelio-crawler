@@ -1,8 +1,25 @@
+import { isPrivateHostname } from './net-guard.js';
+
 /**
  * Extract a human-readable error message from an unknown caught value.
  */
 export function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * JSON safe to place inside an HTML <script> element: `<`, `>` and `&` become
+ * <, > and &, so no end tag (any case), comment opener or
+ * entity can appear, and U+2028/U+2029 are escaped for older JavaScript
+ * parsers. The value parses back to exactly the same data.
+ */
+export function jsonForScript(value: unknown): string {
+  return (JSON.stringify(value) ?? 'null')
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
 
 /**
@@ -68,30 +85,16 @@ export function normalizeUrlForComparison(url: string): string {
 }
 
 /**
- * Check whether a URL points to a private/internal network address.
- * Used for SSRF protection. Covers IPv4 RFC 1918, IPv6 loopback/link-local/ULA,
- * and cloud metadata endpoints.
- * Note: DNS rebinding attacks (e.g. localtest.me) are out of scope for string-based checks.
+ * Check whether a URL's host is localhost or a literal private address
+ * (loopback, RFC 1918, link-local/metadata, CGNAT, IPv6 ULA/link-local,
+ * IPv4-mapped IPv6, multicast). Fails closed: invalid URLs count as private.
+ * Host names are checked again after DNS resolution by the guarded
+ * dispatcher in net-guard.ts, which also pins the dialled address.
  */
 export function isPrivateUrl(url: string): boolean {
   try {
-    const parsed = new URL(url);
-    const host = parsed.hostname;
-    // IPv4 loopback and common aliases
-    if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0') return true;
-    // IPv6 loopback — URL parser keeps brackets: hostname is "[::1]"
-    if (host === '::1' || host === '[::1]') return true;
-    // IPv4 private ranges (RFC 1918)
-    if (host.startsWith('10.')) return true;
-    if (host.startsWith('192.168.')) return true;
-    if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
-    // Cloud metadata endpoints
-    if (host === '169.254.169.254') return true;
-    // IPv6 link-local (fe80::/10) and unique-local (fc00::/7, includes fd00::)
-    const hostLower = host.replace(/^\[|\]$/g, '').toLowerCase();
-    if (hostLower.startsWith('fe80:') || hostLower.startsWith('fc') || hostLower.startsWith('fd')) return true;
-    return false;
+    return isPrivateHostname(new URL(url).hostname);
   } catch {
-    return false;
+    return true;
   }
 }

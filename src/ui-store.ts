@@ -1,11 +1,12 @@
 import Database from 'better-sqlite3';
-import { mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 const UI_DIR = join(homedir(), '.micelio', 'ui');
-const CRAWLS_DIR = join(UI_DIR, 'crawls');
+/** Where dashboard crawls keep their DB, output and stats files. */
+export const CRAWLS_DIR = join(UI_DIR, 'crawls');
 const DB_PATH = join(UI_DIR, 'micelio-ui.db');
 
 export interface CrawlJob {
@@ -31,13 +32,30 @@ export interface SavedPreset {
   updatedAt: string;
 }
 
+/**
+ * Make the store owner-only. mkdirSync's mode does not change a directory that
+ * already exists (~/.micelio/ui is shared with the Go dashboard and is often
+ * 0755), and SQLite creates its files 0644. Errors are ignored on platforms
+ * without POSIX permissions.
+ */
+export function restrictStorePermissions(dirs: string[], dbPath: string): void {
+  for (const d of dirs) {
+    try { chmodSync(d, 0o700); } catch { /* unsupported or missing */ }
+  }
+  for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    try { if (existsSync(f)) chmodSync(f, 0o600); } catch { /* unsupported */ }
+  }
+}
+
 export class UiStore {
   private db: Database.Database;
 
   constructor() {
-    mkdirSync(CRAWLS_DIR, { recursive: true });
+    // Owner-only: the store holds crawl configs and settings with API keys
+    mkdirSync(CRAWLS_DIR, { recursive: true, mode: 0o700 });
     this.db = new Database(DB_PATH);
     this.db.pragma('journal_mode = WAL');
+    restrictStorePermissions([UI_DIR, CRAWLS_DIR], DB_PATH);
     this.migrate();
     this.seedPresets();
   }

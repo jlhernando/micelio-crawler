@@ -299,14 +299,18 @@ func headCmd() *cobra.Command {
 
 func uiCmd() *cobra.Command {
 	var (
-		port      int
-		host      string
-		authToken string
+		port           int
+		host           string
+		authToken      string
+		insecureNoAuth bool
+		pprof          bool
+		allowedHosts   []string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "ui",
-		Short: "Launch the web dashboard",
+		Use:          "ui",
+		Short:        "Launch the web dashboard",
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Set a default soft memory limit for the long-running UI server
 			// if no --memlimit was provided. This makes the GC more aggressive
@@ -320,19 +324,31 @@ func uiCmd() *cobra.Command {
 			if authToken == "" {
 				authToken = os.Getenv("MICELIO_AUTH_TOKEN")
 			}
+			if authToken != "" && len(authToken) < 16 {
+				fmt.Fprintf(os.Stderr, "  warning: auth token is short (%d chars); use 32+ random characters\n", len(authToken))
+			}
+			if env := os.Getenv("MICELIO_ALLOWED_HOSTS"); env != "" {
+				allowedHosts = append(allowedHosts, strings.Split(env, ",")...)
+			}
 			fmt.Fprintf(os.Stderr, "\n  Micelio %s — starting web UI on %s:%d\n\n", version, host, port)
 			return server.StartUIServerWithOptions(server.ServerOptions{
-				Port:      port,
-				Host:      host,
-				AuthToken: authToken,
-				Version:   version,
+				Port:           port,
+				Host:           host,
+				AuthToken:      authToken,
+				Version:        version,
+				InsecureNoAuth: insecureNoAuth,
+				Pprof:          pprof,
+				AllowedHosts:   allowedHosts,
 			}, dashboardFS())
 		},
 	}
 
 	cmd.Flags().IntVarP(&port, "port", "p", 3100, "Port number")
-	cmd.Flags().StringVar(&host, "host", "127.0.0.1", "Bind address (use 0.0.0.0 for all interfaces)")
-	cmd.Flags().StringVar(&authToken, "auth-token", "", "Bearer token for API authentication (or MICELIO_AUTH_TOKEN env)")
+	cmd.Flags().StringVar(&host, "host", "127.0.0.1", "Bind address (a non-loopback address such as 0.0.0.0 needs --auth-token)")
+	cmd.Flags().StringVar(&authToken, "auth-token", "", "Bearer token for API authentication (or MICELIO_AUTH_TOKEN env, which keeps it out of the process list)")
+	cmd.Flags().BoolVar(&insecureNoAuth, "insecure-no-auth", false, "Allow a non-loopback --host without a token (only behind a proxy that authenticates)")
+	cmd.Flags().StringArrayVar(&allowedHosts, "allowed-host", nil, "Host name a reverse proxy or tunnel serves the dashboard on, or an exact origin like http://localhost:5175 (repeatable, or MICELIO_ALLOWED_HOSTS comma-separated): passes the Host check and counts as the dashboard's own origin on the port it names (80/443 if none)")
+	cmd.Flags().BoolVar(&pprof, "pprof", false, "Serve /debug/pprof/ on a non-loopback --host too (always on for loopback; needs the token when one is set)")
 	return cmd
 }
 

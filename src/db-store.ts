@@ -9,6 +9,23 @@
 import Database from 'better-sqlite3';
 import type { PageData, CrawlConfig, QueueEntry } from './types.js';
 
+/**
+ * Crawl config as stored in crawl_meta: API keys, cookies and custom headers
+ * dropped, proxy password masked. Crawl DBs get copied and imported, and
+ * nothing reads these values back (resume takes them from flags/the job).
+ */
+export function configWithoutCredentials(config: CrawlConfig): Partial<CrawlConfig> {
+  const { psiKey: _p, aiKey: _a, cruxKey: _c, plausibleApiKey: _k, cookies: _co, customHeaders: _h, ...rest } = config;
+  let proxy = rest.proxy;
+  if (proxy) {
+    try {
+      const u = new URL(proxy);
+      if (u.password) { u.password = 'redacted'; proxy = u.toString(); }
+    } catch { proxy = ''; }
+  }
+  return { ...rest, proxy };
+}
+
 export class CrawlStore {
   private db: Database.Database;
 
@@ -116,9 +133,43 @@ export class CrawlStore {
     return row ? JSON.parse(row.data) as PageData : null;
   }
 
+  /**
+   * Every page in insertion order. Rows are read one at a time, so only the
+   * parsed pages are held, not every row's JSON text as well.
+   */
   getAllPages(): PageData[] {
-    const rows = this.stmtGetAllPages.all() as { data: string }[];
-    return rows.map((r) => JSON.parse(r.data) as PageData);
+    const pages: PageData[] = [];
+    for (const r of this.stmtGetAllPages.iterate() as IterableIterator<{ data: string }>) {
+      pages.push(JSON.parse(r.data) as PageData);
+    }
+    return pages;
+  }
+
+  /** Highest page rowid so far (0 when empty). Pages stored later have a higher one. */
+  lastPageRowid(): number {
+    const row = this.db.prepare('SELECT MAX(rowid) AS id FROM pages').get() as { id: number | null };
+    return row.id ?? 0;
+  }
+
+  /** Number of pages stored after `rowid` (INSERT OR REPLACE gives a new rowid). */
+  countPagesAfter(rowid: number): number {
+    const row = this.db.prepare('SELECT COUNT(*) AS count FROM pages WHERE rowid > ?').get(rowid) as { count: number };
+    return row.count;
+  }
+
+  /**
+   * Pages in insertion order, one batch at a time: rows after `afterRowid`,
+   * at most `limit`. Lets a caller load a big crawl without one long
+   * synchronous read. Pass the returned `lastRowid` to get the next batch.
+   */
+  getPagesBatch(afterRowid: number, limit: number): { pages: PageData[]; lastRowid: number } {
+    const rows = this.db
+      .prepare('SELECT rowid, data FROM pages WHERE rowid > ? ORDER BY rowid LIMIT ?')
+      .all(afterRowid, limit) as { rowid: number; data: string }[];
+    return {
+      pages: rows.map((r) => JSON.parse(r.data) as PageData),
+      lastRowid: rows.length ? rows[rows.length - 1].rowid : afterRowid,
+    };
   }
 
   getPageCount(): number {
@@ -186,7 +237,7 @@ export class CrawlStore {
   // ── Crawl Metadata ────────────────────────────────────────
 
   saveCrawlMeta(config: CrawlConfig, startTime: number): void {
-    this.stmtSetMeta.run('config', JSON.stringify(config));
+    this.stmtSetMeta.run('config', JSON.stringify(configWithoutCredentials(config)));
     this.stmtSetMeta.run('start_time', String(startTime));
     this.stmtSetMeta.run('status', 'running');
   }

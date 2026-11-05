@@ -59,13 +59,15 @@ With object storage, upload from the server (`aws s3 cp example.db s3://bucket/`
 micelio import example.db --link-intelligence
 ```
 
-- If the dashboard is running (default `http://127.0.0.1:3100`), the file is sent to it and appears in History right away. Use `--server` for another address and `--auth-token` if the dashboard has one.
+- If the dashboard is running (default `http://127.0.0.1:3100`), the file is sent to it and appears in History right away. Use `--server` for another address and `--auth-token` if the dashboard has one. The token is only sent over `https://` or to this computer (`127.0.0.1`/`localhost`); plain `http://` to another computer is refused.
 - If no dashboard is running, the crawl goes straight into `~/.micelio` and shows up the next time you run `micelio ui`. `--local` forces this.
 - `--link-intelligence` adds link analysis (centrality, link suggestions) even if the crawl did not ask for it.
 
 You can also use **History → Import crawl…** in the dashboard and pick the file.
 
 `micelio import` also accepts JSONL output (`.jsonl`, `.jsonl.gz`, `.jsonl.zst`). The database is better: it keeps the crawl settings.
+
+The crawl database keeps the settings without credentials: cookies, headers such as `Authorization`, API keys, passwords, tokens and webhook URLs are left out, and a proxy password is masked. The file is safe to copy around in that respect (it still holds the crawled pages), and is created owner-only (`0600`). `--resume` takes credentials from the flags you pass again, never from the file. Importing a database made by an older version drops its credentials from the copy.
 
 ### What the import cannot rebuild
 

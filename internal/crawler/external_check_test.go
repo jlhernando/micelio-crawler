@@ -250,3 +250,19 @@ func TestCheckExternalLinks_Persistent429LeftUnchecked(t *testing.T) {
 		t.Errorf("rate-limited hosts = %v", sum.RateLimitedHosts)
 	}
 }
+
+// A proxy that cannot be reached is our problem, not the link's.
+func TestProxyFailed(t *testing.T) {
+	ln := httptest.NewServer(http.NotFoundHandler())
+	dead, _ := url.Parse(ln.URL)
+	ln.Close() // nothing listens there now
+	c := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(dead)}}
+	_, err := c.Get("http://example.com/")
+	if !proxyFailed(err) {
+		t.Fatalf("proxyFailed(%v) = false", err)
+	}
+	_, err = (&http.Client{Timeout: 5 * time.Second}).Get(dead.String())
+	if proxyFailed(err) {
+		t.Fatalf("direct connection error %v counted as proxy failure", err)
+	}
+}

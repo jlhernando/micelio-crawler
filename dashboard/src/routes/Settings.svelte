@@ -555,7 +555,7 @@
               <input
                 type="text"
                 value={str('gscKeyFile')}
-                placeholder="/path/to/service-account.json"
+                placeholder="Full path inside ~/.micelio/keys/"
                 oninput={(e) => set('gscKeyFile', (e.target as HTMLInputElement).value)}
                 class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent"
               />
@@ -589,7 +589,7 @@
               <input
                 type="text"
                 value={str('ga4KeyFile')}
-                placeholder="/path/to/service-account.json"
+                placeholder="Full path inside ~/.micelio/keys/"
                 oninput={(e) => set('ga4KeyFile', (e.target as HTMLInputElement).value)}
                 class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-3 border border-border text-sm focus:outline-none focus:ring-1 focus:ring-accent"
               />

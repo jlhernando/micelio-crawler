@@ -38,8 +38,10 @@ releases and verifies the SHA256 checksum before it applies an update (see
 [Update or roll back Micelio](#7-update-or-roll-back-micelio)).
 
 With Docker, mount a volume on `/home/micelio/.micelio` so crawls survive a
-container restart. Build with `--build-arg WITH_CHROMIUM=true` to include
-Chromium for JS rendering.
+container restart. The container listens on all interfaces, so it needs
+`-e MICELIO_AUTH_TOKEN=...` (see the `Dockerfile` header) and refuses to start
+without it. Build with `--build-arg WITH_CHROMIUM=true` to include Chromium
+for JS rendering.
 
 ### macOS app
 
@@ -58,11 +60,27 @@ micelio ui
 ```
 
 The default listener is `127.0.0.1:3100`, so it is only reachable from the local
-machine. If you bind it to another interface, protect the API with a bearer token:
+machine. Another interface needs a token, or the dashboard refuses to start:
 
 ```bash
-micelio ui --host 0.0.0.0 --port 3100 --auth-token "$MICELIO_AUTH_TOKEN"
+export MICELIO_AUTH_TOKEN="$(openssl rand -hex 32)"
+micelio ui --host 0.0.0.0 --port 3100
+# In the browser, open once: http://<host>:3100/?token=<the token>
 ```
+
+The `?token=` visit sets a login cookie (derived from the token, never the token
+itself), so the dashboard works as usual afterwards. Requests from other
+websites are refused, so a page you visit cannot start crawls or updates
+through your local dashboard.
+
+Behind a reverse proxy or tunnel (nginx, Caddy, cloudflared), the dashboard
+must know its public name, or the browser's changes and live updates get 403
+(or 421 on a tokenless loopback dashboard). Either make the proxy pass it on
+(nginx: `proxy_set_header Host $host;` or
+`proxy_set_header X-Forwarded-Host $host;`), or start the dashboard with
+`--allowed-host micelio.example.com` (or `MICELIO_ALLOWED_HOSTS`). The proxy
+must forward WebSocket upgrades on `/ws`. See the `ui` section of the CLI
+reference.
 
 The dashboard is built into the binary. No separate web server is needed.
 
@@ -584,6 +602,46 @@ MICELIO_SLACK_WEBHOOK=https://hooks.slack.com/services/...
 MICELIO_ALERT_WEBHOOK=https://example.com/hook
 MICELIO_DASHBOARD_URL=http://127.0.0.1:3100
 ```
+
+**Files the dashboard reads, and its limits.** Crawls started from the
+dashboard, schedules and MCP only read local files from two folders:
+
+- GSC and GA4 service-account key files: `~/.micelio/keys`. Give a file name
+  (`sa.json`) or a full path directly in that folder. Symlinks are refused.
+- JS snippets: `~/.micelio/snippets`, the same way.
+
+A dashboard crawl always writes to its own database in `~/.micelio/ui/crawls`.
+`outputPath` and `dbPath` sent by the dashboard or the API are ignored (the CLI
+still uses `-o` and `--db`). A schedule's output folder must be a relative path
+inside the folder `micelio ui` runs in.
+
+Each request is also capped. Change a cap with an environment variable (also
+read from `~/.micelio/micelio.env`); the CLI does not use them:
+
+| Variable | Default | Caps |
+|---|---|---|
+| `MICELIO_MAX_CRAWL_PAGES` | 10,000,000 | Page limit of one crawl |
+| `MICELIO_MAX_LOG_UPLOAD_GB` | 64 | One log upload, all files together |
+| `MICELIO_MAX_LOG_ANALYSES` | 2 | Log analyses running at once (more wait) |
+| `MICELIO_MAX_LOG_PENDING` | 8 | Running plus waiting log analyses |
+| `MICELIO_MAX_IMPORT_GB` | 32 | One imported crawl file |
+| `MICELIO_MAX_IMPORT_DECOMPRESSED_GB` | 64 | A `.gz`/`.zst` JSONL import once decompressed |
+
+Concurrency (100), depth (1,000), render timeout (600 s) and link suggestions
+(100,000) have fixed caps.
+
+**Upgrading from an older version.** Move key files into `~/.micelio/keys` and
+snippets into `~/.micelio/snippets`, then select them again in Settings or New
+Crawl. Until then:
+
+- New Crawl and Recrawl refuse a config whose GSC/GA4 or JS rendering is on
+  with a file outside those folders, and the error names the file.
+- Resume and scheduled runs go ahead without the file. The crawl's Monitor and
+  History timeline show a warning saying which file was not used.
+- Schedules saved before the upgrade keep running. A key file, snippet or output
+  folder that no longer passes is dropped (output goes to `scheduled-crawls`),
+  numbers above the caps are lowered, and the Schedules page shows a note.
+  Recreate the schedule to clear it.
 
 Settings also define default crawl limits, robots behavior, user agent, content
 analysis, link intelligence, output, and alerts (**Default Crawl Settings** and

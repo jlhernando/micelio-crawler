@@ -6,6 +6,7 @@ import { CrawlQueue } from './queue.js';
 import { RobotsChecker } from './robots.js';
 import { fetchPage, checkExternalUrl, headResourceSize, type FetchOptions } from './fetcher.js';
 import { formatError } from './utils.js';
+import { credentialHostSet, urlBlockReason } from './net-guard.js';
 import { extractPageData, extractResourceRefs, extractBodyText, type ExtractionOptions } from './extractor.js';
 import { ResultWriter } from './writer.js';
 import { closeBrowser, setBrowserProxy } from './browser.js';
@@ -44,9 +45,20 @@ export interface CrawlResult {
   embeddingStats: EmbeddingStats | null;
 }
 
+/**
+ * Optional run control from the dashboard. While isPaused() is true no new
+ * page is started; once signal is aborted no new page is started and the
+ * crawl returns after the pages in flight finish.
+ */
+export interface CrawlControl {
+  signal?: AbortSignal;
+  isPaused?: () => boolean;
+}
+
 export async function crawl(
   config: CrawlConfig,
   onProgress?: (progress: CrawlProgress) => void,
+  control: CrawlControl = {},
 ): Promise<CrawlResult> {
   const isListMode = config.mode === 'list';
   const isSitemapMode = config.mode === 'sitemap';
@@ -55,6 +67,12 @@ export async function crawl(
     ? (config.urls[0] ? new URL(config.urls[0]) : new URL('https://localhost'))
     : new URL(config.seedUrl);
   let seedDomain = seedUrl.hostname;
+
+  // Every request goes through the SSRF guard (net-guard.ts); say so up front
+  for (const entry of isSpiderMode ? [config.seedUrl] : isSitemapMode ? config.sitemapUrls : []) {
+    const blocked = urlBlockReason(entry);
+    if (blocked) process.stderr.write(`Warning: ${entry}: ${blocked}. Use --allow-private to crawl private hosts from the CLI.\n`);
+  }
 
   // Initialize robots.txt checker (skip for list and sitemap modes)
   const robots = new RobotsChecker();
@@ -183,15 +201,27 @@ export async function crawl(
 
   // Initialize writer
   const writer = new ResultWriter(config.outputPath, config.outputFormat);
+  // Awaiting the write holds the worker slot until the stream drains
+  // (backpressure). A failed stream stops the crawl (shouldAbort) and its
+  // error is thrown by writer.close().
+  const writePage = (page: PageData) => writer.write(page).catch(() => {});
 
   const limit = pLimit(config.concurrency);
+  // In-memory pages, only without a DB. With a DB each page goes to the DB
+  // and is dropped, so memory does not grow with the crawl; the pages are
+  // read back once after the crawl for post-crawl work and the reporter.
   const results: PageData[] = [];
+  const keepPage = (page: PageData) => { if (!store) results.push(page); };
+  // Pages stored after this rowid belong to this run (resume adds to a DB).
+  const startRowid = store ? store.lastPageRowid() : 0;
   const stats = { completed: 0, failed: 0 };
   // When resuming, start stats from existing DB page count
   if (isResuming) {
     stats.completed = store!.getPageCount();
   }
-  const allTasks: Promise<void>[] = [];
+  // Only tasks still running: settled ones are dropped so a long crawl does
+  // not keep one promise per page.
+  const allTasks = new Set<Promise<void>>();
 
   // Track external links for optional checking
   const externalLinkMap = new Map<string, string[]>();
@@ -200,11 +230,15 @@ export async function crawl(
   const transferSizeMap = new Map<string, number>();
   const resourceRefsMap = new Map<string, ResourceEntry[]>();
 
-  // Phase 12.3: Create shared ProxyAgent if proxy is configured
+  // Phase 12.3: Create shared ProxyAgent if proxy is configured. The proxy
+  // resolves targets itself, so fetchPage/fetchHead resolve and check every
+  // target (and redirect hop) before handing it over. The browser chains to
+  // the proxy through its local guarded proxy. Always set (or clear) it: the
+  // dashboard runs many crawls in one process.
   let proxyDispatcher: Dispatcher | undefined;
+  setBrowserProxy(config.proxy || '');
   if (config.proxy) {
     proxyDispatcher = new ProxyAgent(config.proxy);
-    setBrowserProxy(config.proxy);
     // Redact credentials before logging
     try {
       const proxyUrl = new URL(config.proxy);
@@ -215,12 +249,23 @@ export async function crawl(
     }
   }
 
+  // Cookies and custom headers only go to the hosts the user named (seed,
+  // list URLs, sitemap URLs, --allowed-domains) and their www/apex twin,
+  // never to other subdomains, hosts discovered in sitemaps or hosts reached
+  // by a redirect. The set is fixed here: a seed redirect never extends it.
+  const namedHosts: string[] = [...config.allowedDomains];
+  for (const u of [config.seedUrl, ...config.urls, ...config.sitemapUrls]) {
+    try { if (u) namedHosts.push(new URL(u).hostname); } catch { /* invalid URL */ }
+  }
+  const credentialHosts: ReadonlySet<string> = credentialHostSet(namedHosts);
+
   const fetchOpts: FetchOptions = {
     userAgent: config.userAgent,
     jsRendering: config.jsRendering,
     customHeaders: config.customHeaders,
     cookies: config.cookies,
     dispatcher: proxyDispatcher,
+    credentialHosts,
   };
 
   // Phase 3: Extraction options
@@ -334,12 +379,26 @@ export async function crawl(
     return queue.totalSeen;
   }
 
+  // Cancelled from the dashboard: skip paid and slow work (PSI, AI,
+  // external checks, embeddings) and return as soon as the queue stops
+  const cancelled = (): boolean => control.signal?.aborted === true;
+
   // Conditional termination tracking
   let crawlAborted = false;
   const crawlStartMs = Date.now();
 
   function shouldAbort(): boolean {
     if (crawlAborted) return true;
+    if (control.signal?.aborted) {
+      crawlAborted = true;
+      process.stderr.write(`\n  Crawl stopped: cancelled\n`);
+      return true;
+    }
+    if (writer.failed) {
+      crawlAborted = true;
+      process.stderr.write(`\n  Crawl stopped: cannot write output ${config.outputPath}\n`);
+      return true;
+    }
     if (config.maxErrors > 0 && stats.failed >= config.maxErrors) {
       if (!crawlAborted) {
         crawlAborted = true;
@@ -359,6 +418,11 @@ export async function crawl(
 
   // Process queue
   while ((hasMoreWork() || limit.activeCount > 0) && !shouldAbort()) {
+    // Paused: start nothing new; pages in flight still finish
+    if (control.isPaused?.()) {
+      await new Promise((r) => setTimeout(r, 200));
+      continue;
+    }
     while (hasMoreWork() && limit.activeCount + limit.pendingCount < config.concurrency * 2 && !shouldAbort()) {
       const entry = getNextEntry();
       if (!entry) break;
@@ -422,8 +486,8 @@ export async function crawl(
             inlinks: 0,
             pageRank: 0,
           };
-          writer.write(blockedPage);
-          results.push(blockedPage);
+          await writePage(blockedPage);
+          keepPage(blockedPage);
           if (store) {
             try { store.insertPage(blockedPage); } catch (e) { process.stderr.write(`  [warn] Failed to store blocked page ${blockedPage.url}: ${e}\n`); }
           }
@@ -448,6 +512,8 @@ export async function crawl(
               const finalHostname = new URL(fetchResult.finalUrl).hostname;
               if (finalHostname !== seedDomain) {
                 process.stderr.write(`\n  Redirect detected: ${seedDomain} → ${finalHostname}. Updating seed domain.\n`);
+                // credentialHosts is not extended: a www/apex move is already
+                // covered, and a move to another site must not get credentials.
                 seedDomain = finalHostname;
                 queue.updateSeedDomain(finalHostname);
                 // Re-extract with the corrected seedDomain so links are classified correctly
@@ -510,12 +576,12 @@ export async function crawl(
 
           // Phase 4: PageSpeed Insights (within concurrent crawl tasks)
           // B2 fix: fetchPageSpeed handles errors internally, no outer catch needed
-          if (usePsi && !pageData.error && pageData.statusCode === 200) {
+          if (usePsi && !pageData.error && pageData.statusCode === 200 && !cancelled()) {
             pageData.pagespeed = await fetchPageSpeed(pageData.finalUrl, config.psiKey);
           }
 
           // Phase 4: AI Analysis
-          if (aiConfig && !pageData.error && pageData.statusCode === 200) {
+          if (aiConfig && !pageData.error && pageData.statusCode === 200 && !cancelled()) {
             try {
               const AI_HTML_SAMPLE_LIMIT = 20_000;
               const htmlSample = fetchResult.html.substring(0, AI_HTML_SAMPLE_LIMIT);
@@ -555,8 +621,8 @@ export async function crawl(
             }
           }
 
-          writer.write(pageData);
-          results.push(pageData);
+          await writePage(pageData);
+          keepPage(pageData);
           // Phase 12.1: Persist to DB immediately (auto-save)
           // ISSUE-2 fix: Graceful handling of DB write failures
           if (store) {
@@ -614,7 +680,8 @@ export async function crawl(
         }
       });
 
-      allTasks.push(task);
+      allTasks.add(task);
+      task.finally(() => allTasks.delete(task)).catch(() => {});
     }
 
     if (limit.activeCount > 0 || limit.pendingCount > 0) {
@@ -622,15 +689,29 @@ export async function crawl(
     }
   }
 
-  await Promise.all(allTasks);
+  await Promise.all([...allTasks]);
   await writer.close();
+
+  // The reporter and link intelligence need every page in memory. With a DB
+  // the pages are read back here, once: `allPages` is every page in the DB
+  // (earlier runs too on resume), `newPages` the ones this run stored.
+  let allPages: PageData[];
+  let newPages: PageData[];
+  if (store) {
+    allPages = store.getAllPages();
+    const stored = store.countPagesAfter(startRowid);
+    newPages = stored >= allPages.length ? allPages : allPages.slice(allPages.length - stored);
+  } else {
+    allPages = results;
+    newPages = results;
+  }
 
   // Phase 6: Sitemap audit — annotate pages with sitemap presence
   if (isSpiderMode || isSitemapMode) {
     const sitemapEntryMap = robots.getSitemapEntryMap();
     if (sitemapEntryMap.size > 0) {
-      process.stderr.write(`\nSitemap audit: cross-referencing ${sitemapEntryMap.size} sitemap URLs with ${results.length} crawled pages...\n`);
-      for (const page of results) {
+      process.stderr.write(`\nSitemap audit: cross-referencing ${sitemapEntryMap.size} sitemap URLs with ${newPages.length} crawled pages...\n`);
+      for (const page of newPages) {
         const entry = sitemapEntryMap.get(page.url) || sitemapEntryMap.get(page.finalUrl);
         if (entry) {
           page.sitemapData = { inSitemap: true, sitemapLastmod: entry.lastmod };
@@ -642,7 +723,7 @@ export async function crawl(
   }
 
   // Phase 6: Page weight — resolve resource sizes via HEAD requests
-  if (config.pageWeight && resourceRefsMap.size > 0) {
+  if (config.pageWeight && resourceRefsMap.size > 0 && !cancelled()) {
     process.stderr.write(`\nPage weight analysis...\n`);
     const resourceSizeCache = new Map<string, number | null>();
 
@@ -662,7 +743,8 @@ export async function crawl(
 
       for (const resUrl of uniqueResourceUrls) {
         const t = resLimit(async () => {
-          const size = await headResourceSize(resUrl, config.userAgent);
+          if (cancelled()) return;
+          const size = await headResourceSize(resUrl, config.userAgent, control.signal);
           resourceSizeCache.set(resUrl, size);
           resChecked++;
           if (resChecked % 20 === 0) {
@@ -676,7 +758,7 @@ export async function crawl(
     }
 
     // Build PageWeightData for each page
-    for (const page of results) {
+    for (const page of newPages) {
       const resources = resourceRefsMap.get(page.url);
       if (!resources) continue;
 
@@ -714,7 +796,7 @@ export async function crawl(
 
   // 1.5: Check external links
   const externalLinkResults: ExternalLinkResult[] = [];
-  if (config.checkExternal && externalLinkMap.size > 0) {
+  if (config.checkExternal && externalLinkMap.size > 0 && !cancelled()) {
     process.stderr.write(`\n\nChecking ${externalLinkMap.size} external links...\n`);
     const extLimit = pLimit(config.concurrency);
     const extTasks: Promise<void>[] = [];
@@ -722,7 +804,9 @@ export async function crawl(
 
     for (const [extUrl, foundOn] of externalLinkMap) {
       const t = extLimit(async () => {
-        const result = await checkExternalUrl(extUrl, config.userAgent);
+        if (cancelled()) return;
+        const result = await checkExternalUrl(extUrl, config.userAgent, control.signal);
+        if (cancelled()) return; // aborted request, not a broken link
         extChecked++;
         if (result.statusCode >= 400 || result.statusCode === 0) {
           externalLinkResults.push({
@@ -757,42 +841,36 @@ export async function crawl(
   resourceRefsMap.clear();
 
   // Phase 6: Re-write output file if post-crawl enrichment was applied
-  const hasPostCrawlEnrichment = results.some((p) => p.sitemapData !== null || p.pageWeight !== null);
+  const hasPostCrawlEnrichment = !cancelled() && newPages.some((p) => p.sitemapData !== null || p.pageWeight !== null);
   if (hasPostCrawlEnrichment) {
     process.stderr.write(`Updating output with post-crawl data...\n`);
     const rewriter = new ResultWriter(config.outputPath, config.outputFormat);
-    for (const page of results) {
-      rewriter.write(page);
+    for (const page of newPages) {
+      await rewriter.write(page);
     }
     await rewriter.close();
 
     // Phase 12.1: Update enriched pages in DB
     if (store) {
-      store.updatePages(results);
+      store.updatePages(newPages);
     }
   }
 
-  // Phase 12.1: Load all pages and close DB (with try/finally for ISSUE-3)
-  // Note: getAllPages() loads all pages into memory for report generation.
-  // This is a known v1 limitation; for crawls with millions of pages,
-  // future work should stream pages through the reporter or paginate from DB.
-  let allPages: PageData[];
+  // Phase 12.1: Close DB (with try/finally for ISSUE-3)
+  const newCount = newPages.length;
   if (store) {
     try {
-      allPages = store.getAllPages();
-      store.markCrawlComplete();
-      const resumedCount = isResuming ? (allPages.length - results.length) : 0;
+      if (!cancelled()) store.markCrawlComplete();
+      const resumedCount = isResuming ? (allPages.length - newCount) : 0;
       // MINOR-4 fix: Separate previously crawled from newly crawled in output
       if (resumedCount > 0) {
-        process.stderr.write(`Database: ${allPages.length} total pages (${resumedCount} from previous run + ${results.length} new)\n`);
+        process.stderr.write(`Database: ${allPages.length} total pages (${resumedCount} from previous run + ${newCount} new)\n`);
       } else {
         process.stderr.write(`Database: ${allPages.length} total pages stored in ${config.dbPath}\n`);
       }
     } finally {
       store.close();
     }
-  } else {
-    allPages = results;
   }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -800,7 +878,7 @@ export async function crawl(
   const rssMB = (memUsage.rss / 1024 / 1024).toFixed(0);
   const heapMB = (memUsage.heapUsed / 1024 / 1024).toFixed(0);
   // MINOR-4 fix: Show only newly crawled count in completion message
-  process.stderr.write(`\nCrawl complete: ${results.length} pages crawled in ${duration}s (${stats.failed} failed)\n`);
+  process.stderr.write(`\nCrawl complete: ${newCount} pages crawled in ${duration}s (${stats.failed} failed)\n`);
   process.stderr.write(`Output: ${config.outputPath}\n`);
   process.stderr.write(`Memory: ${rssMB} MB RSS, ${heapMB} MB heap\n\n`);
 
@@ -812,7 +890,9 @@ export async function crawl(
 
   // Phase 13.2: Compute semantic similarity via embeddings
   let embeddingStats: EmbeddingStats | null = null;
-  if (bodyTextMap && config.embeddings && !(config.aiProvider === 'openai' || config.aiProvider === 'ollama')) {
+  if (bodyTextMap && cancelled()) {
+    bodyTextMap.clear();
+  } else if (bodyTextMap && config.embeddings && !(config.aiProvider === 'openai' || config.aiProvider === 'ollama')) {
     process.stderr.write('\n--embeddings requires --ai-provider openai or ollama\n');
   } else if (bodyTextMap && bodyTextMap.size >= 2 && config.aiProvider && (config.aiProvider === 'openai' || config.aiProvider === 'ollama')) {
     process.stderr.write('\nComputing semantic similarity embeddings...\n');
@@ -830,6 +910,7 @@ export async function crawl(
         (done, total) => {
           process.stderr.write(`  Embedding progress: ${done}/${total} pages\r`);
         },
+        control.signal,
       );
       process.stderr.write(`\nEmbeddings complete: ${embeddingStats.pagesEmbedded} pages, ${embeddingStats.similarPairs.length} similar pairs found\n`);
     } catch (err) {

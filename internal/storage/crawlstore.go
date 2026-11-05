@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 
+	"github.com/micelio/micelio/internal/secrets"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -47,6 +50,7 @@ type CrawlStore struct {
 
 // NewCrawlStore opens or creates a crawl database at the given path.
 func NewCrawlStore(dbPath string) (*CrawlStore, error) {
+	ownerOnly(dbPath)
 	// Open without OpenWAL so page_size PRAGMA takes effect on new databases.
 	conn, err := sqlite.OpenConn(dbPath, sqlite.OpenCreate|sqlite.OpenReadWrite)
 	if err != nil {
@@ -76,6 +80,26 @@ func NewCrawlStore(dbPath string) (*CrawlStore, error) {
 	}
 
 	return &CrawlStore{conn: conn}, nil
+}
+
+// ownerOnly makes a crawl database owner-only (0600) before SQLite opens it:
+// pages hold response data from crawls that may have used credentials.
+// A missing file is created empty with that mode, and SQLite gives the -wal
+// and -shm files the mode of the database. Existing files are tightened
+// (best effort: a read-only copy of someone else's file stays as it is).
+func ownerOnly(dbPath string) {
+	if dbPath == "" || dbPath == ":memory:" || strings.HasPrefix(dbPath, "file:") {
+		return
+	}
+	if f, err := os.OpenFile(dbPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600); err == nil {
+		f.Close()
+		return
+	}
+	for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o077 != 0 {
+			os.Chmod(p, 0o600)
+		}
+	}
 }
 
 // crawlSchemaVersion is stored in PRAGMA user_version once initCrawlSchema
@@ -205,18 +229,51 @@ func (s *CrawlStore) GetMeta(key string) (string, error) {
 	return s.getMeta(key)
 }
 
-// SaveConfig serializes and stores the crawl config.
+// SaveConfig stores the crawl config without its credentials (cookies,
+// auth headers, API keys, passwords, tokens, webhook URLs; URL passwords
+// masked): crawl databases get shared and imported. Nothing reads them back
+// from here: a resumed crawl gets its credentials from its own config (CLI
+// flags, or the dashboard's job config).
 func (s *CrawlStore) SaveConfig(config types.CrawlConfig) error {
 	data, err := json.Marshal(config)
 	if err != nil {
 		return err
 	}
+	if data, err = secrets.ScrubJSON(data); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.saveMeta("config", string(data)); err != nil {
+	if err := s.replaceConfig(string(data)); err != nil {
 		return err
 	}
 	return s.saveMeta("startedAt", time.Now().UTC().Format(time.RFC3339))
+}
+
+// replaceConfig writes the config row with secure_delete on, so the bytes
+// of a replaced config (one written before configs were scrubbed) are
+// zeroed in the file rather than left in free space. Caller holds s.mu.
+func (s *CrawlStore) replaceConfig(data string) error {
+	sqlitex.Execute(s.conn, "PRAGMA secure_delete = ON;", nil)
+	defer sqlitex.Execute(s.conn, "PRAGMA secure_delete = OFF;", nil)
+	return s.saveMeta("config", data)
+}
+
+// ScrubConfig removes credentials from the stored config, keeping every
+// other field as stored (an imported crawl database may come from an older
+// version that kept them). A database without a config is left alone.
+func (s *CrawlStore) ScrubConfig() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	raw, err := s.getMeta("config")
+	if err != nil || raw == "" {
+		return err
+	}
+	data, err := secrets.ScrubJSON([]byte(raw))
+	if err != nil {
+		return err
+	}
+	return s.replaceConfig(string(data))
 }
 
 // GetConfig retrieves the stored crawl config. Returns nil if not found.

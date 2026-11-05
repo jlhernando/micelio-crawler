@@ -24,7 +24,6 @@ var gscEndpoint = "https://searchconsole.googleapis.com/webmasters/v3"
 const (
 	gscBatchSize   = 25000
 	gscMaxBodySize = 4 << 20 // 4 MB
-	gscTokenURL    = "https://oauth2.googleapis.com/token"
 	gscScope       = "https://www.googleapis.com/auth/webmasters.readonly"
 )
 
@@ -42,6 +41,24 @@ type GscClient struct {
 	cachedToken string
 	days        int
 	tokenMu     sync.Mutex
+}
+
+// googleTokenURL is where service-account JWTs are exchanged for tokens.
+// A var so tests can point it at a fake server.
+var googleTokenURL = "https://oauth2.googleapis.com/token"
+
+// serviceAccountTokenURL picks the token endpoint for a service-account key
+// file. The key file's token_uri is untrusted input (a crafted file could
+// aim the signed JWT POST at an internal service), so only Google's own
+// OAuth token endpoints are accepted; an empty value means the default.
+func serviceAccountTokenURL(tokenURI string) (string, error) {
+	switch tokenURI {
+	case "", googleTokenURL:
+		return googleTokenURL, nil
+	case "https://oauth2.googleapis.com/token", "https://accounts.google.com/o/oauth2/token":
+		return tokenURI, nil
+	}
+	return "", fmt.Errorf("key file token_uri %q is not Google's OAuth token endpoint", tokenURI)
 }
 
 // GscKeyFile represents the service account JSON key file structure.
@@ -71,9 +88,9 @@ func NewGscClient(keyJSON []byte, property string, days int) (*GscClient, error)
 		return nil, fmt.Errorf("gsc: key is not RSA")
 	}
 
-	tokenURL := kf.TokenURI
-	if tokenURL == "" {
-		tokenURL = gscTokenURL
+	tokenURL, err := serviceAccountTokenURL(kf.TokenURI)
+	if err != nil {
+		return nil, fmt.Errorf("gsc: %w", err)
 	}
 
 	if days <= 0 {

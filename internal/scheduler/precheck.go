@@ -59,6 +59,9 @@ type PrecheckResult struct {
 	Reason   string `json:"reason,omitempty"`
 	EgressIP string `json:"egressIp,omitempty"` // public IP, when checked
 	At       string `json:"at"`
+	// Output is the start of a failed check command's output. It may hold
+	// secrets, so it is only printed on the CLI, never saved or served.
+	Output string `json:"-"`
 }
 
 // Hooks for tests.
@@ -101,7 +104,9 @@ func (p *Precheck) Run(ctx context.Context) PrecheckResult {
 			if len(msg) > 200 {
 				msg = msg[:200]
 			}
-			return fail("check command failed: %v %s", err, msg)
+			res = fail("check command failed: %v", err)
+			res.Output = msg
+			return res
 		}
 	}
 	return res

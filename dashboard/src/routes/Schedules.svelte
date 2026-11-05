@@ -170,6 +170,7 @@
                 <div class="text-fg text-sm truncate">{s.name || s.url}</div>
                 {#if s.name}<div class="font-mono text-[11px] text-fg-2 truncate">{s.url}</div>{/if}
                 <div class="text-[11px] text-fg-2 mt-0.5">{modeOf(s)}{s.source === 'cli' ? ' · CLI' : ''}{s.active ? '' : ' · inactive'}</div>
+                {#if s.warning}<div class="text-[11px] text-warning mt-0.5 whitespace-normal" role="status">{s.warning}. Recreate the schedule to clear this note.</div>{/if}
               </td>
               <td class="px-3 py-3 text-xs text-fg">{s.description || s.cron}</td>
               <td class="px-3 py-3 text-xs">

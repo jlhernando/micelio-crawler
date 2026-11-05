@@ -7,6 +7,8 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { UiStore } from './ui-store.js';
 import { UiCrawlManager } from './ui-crawl-manager.js';
 import { createApiHandler } from './ui-api.js';
+import { checkUiAccess, isLoopbackHost } from './ui-auth.js';
+import { setAllowPrivateNetworks, setTrustedProxy } from './net-guard.js';
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -21,7 +23,27 @@ const MIME_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
 };
 
-export async function startUiServer(port: number, autoOpen = true): Promise<void> {
+export interface UiServerOptions {
+  /** Listen address. Default 127.0.0.1; anything else needs authToken. */
+  host?: string;
+  /** Bearer token required on /api/* and /ws. */
+  authToken?: string;
+  /** The only proxy dashboard crawls may use (--trusted-proxy). */
+  trustedProxy?: string;
+}
+
+export async function startUiServer(port: number, autoOpen = true, opts: UiServerOptions = {}): Promise<void> {
+  const host = opts.host || '127.0.0.1';
+  const authToken = opts.authToken || '';
+  if (!isLoopbackHost(host) && !authToken) {
+    console.error(`Error: --host ${host} exposes the dashboard to the network. Set --auth-token (or MICELIO_AUTH_TOKEN) too.`);
+    process.exit(1);
+  }
+  // The dashboard never crawls private networks, whatever the CLI flags say
+  setAllowPrivateNetworks(false);
+  // Crawl configs from the API may only name this proxy, set by the local user
+  setTrustedProxy(opts.trustedProxy || '');
+
   // Resolve the dashboard static files directory
   const thisDir = fileURLToPath(new URL('.', import.meta.url));
   const distDir = join(thisDir, '..', 'dist', 'dashboard');
@@ -51,6 +73,12 @@ export async function startUiServer(port: number, autoOpen = true): Promise<void
 
     // API routes
     if (path.startsWith('/api/')) {
+      const denied = checkUiAccess(req, { authToken }, 'api');
+      if (denied) {
+        res.writeHead(denied.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { code: denied.status === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN', message: denied.message } }));
+        return;
+      }
       await apiHandler(req, res);
       return;
     }
@@ -67,6 +95,11 @@ export async function startUiServer(port: number, autoOpen = true): Promise<void
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url || '/', `http://${req.headers.host}`);
     if (url.pathname === '/ws') {
+      if (checkUiAccess(req, { authToken }, 'ws')) {
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit('connection', ws, req);
       });
@@ -102,9 +135,10 @@ export async function startUiServer(port: number, autoOpen = true): Promise<void
     process.exit(1);
   });
 
-  server.listen(port, () => {
-    const url = `http://localhost:${port}`;
+  server.listen(port, host, () => {
+    const url = `http://${isLoopbackHost(host) ? 'localhost' : host}:${port}`;
     process.stderr.write(`\n  Micelio UI running at ${url}\n\n`);
+    if (authToken) process.stderr.write('  Auth: Bearer token required on /api/* and /ws\n\n');
 
     if (autoOpen) {
       const cmd = process.platform === 'darwin' ? 'open'

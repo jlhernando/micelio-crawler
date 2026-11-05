@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
+	"weak"
 
 	"github.com/micelio/micelio/internal/analysis"
 	"github.com/micelio/micelio/internal/types"
@@ -412,5 +414,32 @@ func TestUniverseHidesNonArchitecturePages(t *testing.T) {
 	json.NewDecoder(rec.Body).Decode(&s)
 	if len(s.Rows) != 0 {
 		t.Errorf("search found hidden page: %+v", s.Rows)
+	}
+}
+
+// The layout cache held its view (the results themselves when every page is
+// drawn, else their page pointers), so evicted results never became garbage
+// although the cache's owner pointer is weak.
+func TestUniverseCacheDoesNotKeepResultsAlive(t *testing.T) {
+	for _, all := range []bool{true, false} { // all pages / filtered view
+		pages := universePages(20) // page 5 is a 404, left out unless all
+		results := &CrawlResults{Pages: pages, PagesReady: true}
+		owner := weak.Make(results)
+		page := weak.Make(pages[0])
+		id := fmt.Sprintf("gc-%t", all)
+		l, view := getUniverseLayout(id, results, "dir1", "", all)
+		if want := 20; all && len(view.Pages) != want || !all && len(view.Pages) != want-1 {
+			t.Fatalf("all=%t: view has %d pages", all, len(view.Pages))
+		}
+		if again, _ := getUniverseLayout(id, results, "dir1", "", all); again != l {
+			t.Fatalf("all=%t: layout not cached", all)
+		}
+		results, pages, view = nil, nil, nil
+		runtime.GC()
+		runtime.GC()
+		if owner.Value() != nil || page.Value() != nil {
+			t.Errorf("all=%t: cached layout keeps the crawl results alive", all)
+		}
+		runtime.KeepAlive(l)
 	}
 }

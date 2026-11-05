@@ -19,6 +19,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/micelio/micelio/internal/analysis"
 	"github.com/micelio/micelio/internal/crawler"
+	"github.com/micelio/micelio/internal/secrets"
 	"github.com/micelio/micelio/internal/storage"
 	"github.com/micelio/micelio/internal/types"
 	"zombiezen.com/go/sqlite"
@@ -38,7 +39,19 @@ type ImportOptions struct {
 	Name string
 	// LinkIntelligence forces link analysis even if the crawl ran without it.
 	LinkIntelligence bool
+	// limit bounds uploads from the dashboard; zero values mean no limit
+	// (the CLI importing a local file).
+	limit importLimit
 }
+
+// importLimit bounds what an import may expand into.
+type importLimit struct {
+	maxDecompressed int64 // bytes read from a (decompressed) JSONL stream
+	maxPages        int
+}
+
+// errImportTooLarge means an import went past its limits.
+var errImportTooLarge = errors.New("crawl file is too large to import")
 
 // ErrNotCrawlFile means the file is neither a Micelio crawl database nor
 // Micelio JSONL output.
@@ -111,12 +124,12 @@ func (m *CrawlManager) prepareImport(path string, opts ImportOptions) (*pendingI
 				os.Remove(p.srcDB + suffix)
 			}
 		}
-		if err := jsonlToCrawlDB(path, kind, p.srcDB); err != nil {
+		if err := jsonlToCrawlDB(path, kind, p.srcDB, opts.limit); err != nil {
 			p.cleanup()
 			return nil, err
 		}
 	}
-	cfg, err := inspectCrawlDB(p.srcDB)
+	cfg, err := inspectCrawlDB(p.srcDB, opts.limit.maxPages)
 	if err != nil {
 		p.cleanup()
 		return nil, err
@@ -124,12 +137,23 @@ func (m *CrawlManager) prepareImport(path string, opts ImportOptions) (*pendingI
 	if opts.LinkIntelligence {
 		cfg.LinkIntelligence = true
 	}
+	// Credentials in an imported file (from an older version, or made by
+	// hand) are never used: no API key reaches the analysis.
+	if cfg, err = configWithoutSecrets(cfg); err != nil {
+		p.cleanup()
+		return nil, fmt.Errorf("%w: bad config: %v", ErrNotCrawlFile, err)
+	}
 	p.cfg = cfg
 	p.job, err = m.store.CreateCrawlJob(importedConfigMap(cfg, opts.Name))
 	if err != nil {
 		p.cleanup()
 		return nil, fmt.Errorf("create crawl: %w", err)
 	}
+	// Held until runImport ends, so a delete cannot remove the job while
+	// its DB is copied and analysed. The job is new: nothing deletes it yet.
+	release := m.retainJob(p.job.ID)
+	cleanup := p.cleanup
+	p.cleanup = func() { cleanup(); release() }
 	return p, nil
 }
 
@@ -150,6 +174,11 @@ func (m *CrawlManager) runImport(ctx context.Context, p *pendingImport) error {
 	cs, err := storage.NewCrawlStore(job.DBPath)
 	if err != nil {
 		return fail(fmt.Errorf("open copy: %w", err))
+	}
+	// The copy keeps no credentials the source file may hold.
+	if err := cs.ScrubConfig(); err != nil {
+		cs.Close()
+		return fail(fmt.Errorf("scrub config: %w", err))
 	}
 	pages, err := cs.GetAllPages()
 	if err != nil {
@@ -244,7 +273,7 @@ func sniffCrawlFile(path string) (string, error) {
 // jsonlToCrawlDB writes the pages of a JSONL crawl output into a new crawl
 // database. JSONL has no crawl config, so the start URL is the shallowest
 // page.
-func jsonlToCrawlDB(path, kind, dst string) error {
+func jsonlToCrawlDB(path, kind, dst string, lim importLimit) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -267,6 +296,9 @@ func jsonlToCrawlDB(path, kind, dst string) error {
 		defer zr.Close()
 		r = zr
 	}
+	if lim.maxDecompressed > 0 {
+		r = &capReader{r: r, left: lim.maxDecompressed}
+	}
 
 	cs, err := storage.NewCrawlStore(dst)
 	if err != nil {
@@ -278,7 +310,10 @@ func jsonlToCrawlDB(path, kind, dst string) error {
 	seed, seedDepth, pages := "", -1, 0
 	var first, last time.Time
 	for {
-		line, readErr := br.ReadBytes('\n')
+		line, readErr := readLimitedLine(br, maxImportLineBytes)
+		if errors.Is(readErr, errImportTooLarge) {
+			return fmt.Errorf("line %d: %w", pages+1, readErr)
+		}
 		if line = bytes.TrimSpace(line); len(line) > 0 {
 			var pg types.PageData
 			if err := json.Unmarshal(line, &pg); err != nil || pg.URL == "" {
@@ -286,6 +321,12 @@ func jsonlToCrawlDB(path, kind, dst string) error {
 					return ErrNotCrawlFile
 				}
 				return fmt.Errorf("line %d: not a page", pages+1)
+			}
+			if !isWebURL(pg.URL) {
+				return fmt.Errorf("%w: line %d: page URL must be http(s)", ErrNotCrawlFile, pages+1)
+			}
+			if lim.maxPages > 0 && pages >= lim.maxPages {
+				return fmt.Errorf("%w: more than %d pages", errImportTooLarge, lim.maxPages)
 			}
 			if seedDepth < 0 || pg.Depth < seedDepth {
 				seed, seedDepth = pg.URL, pg.Depth
@@ -327,9 +368,50 @@ func jsonlToCrawlDB(path, kind, dst string) error {
 	return nil
 }
 
+// readLimitedLine reads one line (with its newline) of at most max bytes.
+func readLimitedLine(br *bufio.Reader, max int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := br.ReadSlice('\n')
+		if len(line)+len(chunk) > max {
+			return nil, errImportTooLarge
+		}
+		line = append(line, chunk...)
+		if err != bufio.ErrBufferFull {
+			return line, err
+		}
+	}
+}
+
+// capReader fails with errImportTooLarge once more than left bytes are read,
+// so a small compressed file cannot expand without bound.
+type capReader struct {
+	r    io.Reader
+	left int64
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		// One more byte tells a stream that ends exactly at the cap from
+		// one that goes on.
+		var b [1]byte
+		if n, _ := c.r.Read(b[:]); n > 0 {
+			return 0, errImportTooLarge
+		}
+		return 0, io.EOF
+	}
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	n, err := c.r.Read(p)
+	c.left -= int64(n)
+	return n, err
+}
+
 // inspectCrawlDB checks that path is a Micelio crawl database with pages and
-// returns its crawl config. It opens the file read-only.
-func inspectCrawlDB(path string) (*types.CrawlConfig, error) {
+// returns its crawl config. It opens the file read-only. maxPages > 0 caps
+// the page count.
+func inspectCrawlDB(path string, maxPages int) (*types.CrawlConfig, error) {
 	conn, err := sqlite.OpenConn(path, sqlite.OpenReadOnly)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNotCrawlFile, err)
@@ -352,6 +434,20 @@ func inspectCrawlDB(path string) (*types.CrawlConfig, error) {
 	if pages == 0 {
 		return nil, fmt.Errorf("%w: it has no pages", ErrNotCrawlFile)
 	}
+	if maxPages > 0 && pages > maxPages {
+		return nil, fmt.Errorf("%w: %d pages, the limit is %d", errImportTooLarge, pages, maxPages)
+	}
+	// Only web pages: an imported file:// URL must never reach Chrome
+	// (Universe thumbnails) or any other fetch.
+	var nonWeb int
+	if err := sqlitex.Execute(conn, `SELECT COUNT(*) FROM pages WHERE lower(substr(url, 1, 7)) <> 'http://' AND lower(substr(url, 1, 8)) <> 'https://'`, &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error { nonWeb = stmt.ColumnInt(0); return nil },
+	}); err != nil {
+		return nil, ErrNotCrawlFile
+	}
+	if nonWeb > 0 {
+		return nil, fmt.Errorf("%w: %d page URLs are not http(s)", ErrNotCrawlFile, nonWeb)
+	}
 	var cfg types.CrawlConfig
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		return nil, fmt.Errorf("%w: bad config: %v", ErrNotCrawlFile, err)
@@ -362,8 +458,31 @@ func inspectCrawlDB(path string) (*types.CrawlConfig, error) {
 	return &cfg, nil
 }
 
+// configWithoutSecrets returns cfg without credentials (see
+// secrets.Drop).
+func configWithoutSecrets(cfg *types.CrawlConfig) (*types.CrawlConfig, error) {
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if data, err = secrets.ScrubJSON(data); err != nil {
+		return nil, err
+	}
+	var out types.CrawlConfig
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func copyCrawlDB(src, dst string) error {
 	os.Remove(dst)
+	// VACUUM INTO accepts an empty file: create it owner-only first.
+	f, err := os.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	f.Close()
 	conn, err := sqlite.OpenConn(src, sqlite.OpenReadOnly)
 	if err != nil {
 		return err
@@ -373,18 +492,16 @@ func copyCrawlDB(src, dst string) error {
 }
 
 // importedConfigMap turns the stored crawl config into the dashboard's job
-// config. Credentials are dropped: the imported crawl does not need them.
+// config. Credentials are dropped at any depth (customHeaders such as
+// Authorization, cookies, keys, proxy passwords): the imported crawl does not
+// need them.
 func importedConfigMap(cfg *types.CrawlConfig, name string) map[string]interface{} {
 	data, _ := json.Marshal(cfg)
 	m := map[string]interface{}{}
 	json.Unmarshal(data, &m)
-	for k := range m {
-		lk := strings.ToLower(k)
-		if strings.Contains(lk, "key") || strings.Contains(lk, "token") || strings.Contains(lk, "secret") ||
-			strings.Contains(lk, "password") || strings.Contains(lk, "credential") || lk == "cookies" {
-			delete(m, k)
-		}
-	}
+	dropConfigSecrets(m)
+	delete(m, "customHeaders")
+	delete(m, "proxy")
 	delete(m, "dbPath")
 	delete(m, "outputPath")
 	if cfg.SeedURL == "" {
@@ -400,12 +517,18 @@ func importedConfigMap(cfg *types.CrawlConfig, name string) map[string]interface
 }
 
 // registerImportRoutes adds POST /api/crawls/import. The body is the raw file
-// (crawl database or JSONL, optionally .gz/.zst), streamed to disk, so size
-// does not matter. ?name= sets the shown file name and ?linkIntelligence=1
+// (crawl database or JSONL, optionally .gz/.zst), streamed to disk. Its size,
+// decompressed size and page count are capped (see limits.go). ?name= sets the shown file name and ?linkIntelligence=1
 // adds link analysis. The crawl appears in History right away and is
 // analysed in the background.
 func registerImportRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlManager) {
 	mux.HandleFunc("POST /api/crawls/import", func(w http.ResponseWriter, r *http.Request) {
+		lim := limits()
+		if r.ContentLength > lim.ImportBytes {
+			jsonError(w, fmt.Sprintf("crawl file is larger than the %d GB import limit (MICELIO_MAX_IMPORT_GB)", lim.ImportBytes/gib), http.StatusRequestEntityTooLarge)
+			return
+		}
+		body := http.MaxBytesReader(w, r.Body, lim.ImportBytes)
 		tmp, err := os.CreateTemp(store.crawlDir, "upload-*.part")
 		if err != nil {
 			jsonError(w, err.Error(), http.StatusInternalServerError)
@@ -416,10 +539,15 @@ func registerImportRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlMana
 				os.Remove(tmp.Name() + suffix)
 			}
 		}
-		_, copyErr := io.Copy(tmp, r.Body)
+		_, copyErr := io.Copy(tmp, body)
 		closeErr := tmp.Close()
 		if copyErr != nil || closeErr != nil {
 			remove()
+			var tooBig *http.MaxBytesError
+			if errors.As(copyErr, &tooBig) {
+				jsonError(w, fmt.Sprintf("crawl file is larger than the %d GB import limit (MICELIO_MAX_IMPORT_GB)", lim.ImportBytes/gib), http.StatusRequestEntityTooLarge)
+				return
+			}
 			jsonError(w, "upload failed", http.StatusBadRequest)
 			return
 		}
@@ -430,17 +558,20 @@ func registerImportRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlMana
 		if name == "" {
 			name = "uploaded crawl"
 		}
-		opts := ImportOptions{Name: name, LinkIntelligence: r.URL.Query().Get("linkIntelligence") == "1"}
+		opts := ImportOptions{Name: name, LinkIntelligence: r.URL.Query().Get("linkIntelligence") == "1",
+			limit: importLimit{maxDecompressed: lim.ImportDecompressedBytes, maxPages: lim.MaxCrawlPages}}
 		job, err := manager.StartImport(tmp.Name(), opts, remove)
 		if err != nil {
 			remove()
 			code := http.StatusInternalServerError
 			if errors.Is(err, ErrNotCrawlFile) {
 				code = http.StatusBadRequest
+			} else if errors.Is(err, errImportTooLarge) {
+				code = http.StatusRequestEntityTooLarge
 			}
 			jsonError(w, err.Error(), code)
 			return
 		}
-		jsonOK(w, job)
+		jsonOK(w, redactedJob(job))
 	})
 }

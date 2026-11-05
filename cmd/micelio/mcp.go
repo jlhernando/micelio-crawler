@@ -47,6 +47,11 @@ requests, robots.txt respected.`,
 			if authToken == "" {
 				authToken = os.Getenv("MICELIO_AUTH_TOKEN")
 			}
+			if authToken != "" {
+				if err := mcpserver.CheckTokenTransport(serverURL); err != nil {
+					return err
+				}
+			}
 			backend := mcpserver.NewHTTPBackend(serverURL, authToken)
 			// The dashboard is checked (and started) on the first tool call,
 			// so the agent's handshake never waits for it.

@@ -7,41 +7,73 @@ export class ResultWriter {
   private stream: WriteStream;
   private csvStream: ReturnType<typeof format> | null = null;
   private outputFormat: 'jsonl' | 'csv';
+  /** First error from the file or CSV stream (open, write, pipe). */
+  private error: Error | null = null;
+  private errorWaiters = new Set<(err: Error) => void>();
 
   constructor(outputPath: string, outputFormat: 'jsonl' | 'csv') {
     this.outputFormat = outputFormat;
     this.stream = createWriteStream(outputPath, { flags: 'w' });
+    // Listen from the start: an 'error' with no listener (bad path, disk
+    // full) would otherwise crash the process before close() is reached.
+    this.stream.on('error', (err) => this.fail(err));
 
     if (outputFormat === 'csv') {
       this.csvStream = format({ headers: true });
+      this.csvStream.on('error', (err) => this.fail(err));
       this.csvStream.pipe(this.stream);
     }
   }
 
-  // #17: Handle backpressure
-  write(page: PageData): void {
-    if (this.outputFormat === 'jsonl') {
-      const ok = this.stream.write(JSON.stringify(page) + '\n');
-      if (!ok) {
-        // Backpressure: wait for drain before writing more
-        // In practice the orchestrator continues; Node handles buffering
-        // but we could await drain in an async version
-      }
-    } else if (this.csvStream) {
-      this.csvStream.write(this.flattenForCsv(page));
-    }
+  /** True once the output stream has failed; further writes are pointless. */
+  get failed(): boolean {
+    return this.error !== null;
   }
 
-  // #9: Handle stream errors in close()
-  async close(): Promise<void> {
+  private fail(err: Error): void {
+    if (this.error) return;
+    this.error = err;
+    for (const waiter of this.errorWaiters) waiter(err);
+    this.errorWaiters.clear();
+  }
+
+  /**
+   * Write one page. Resolves once the stream can take more data, so callers
+   * that await it never buffer the whole crawl in memory (backpressure).
+   * Rejects if the output stream has failed.
+   */
+  async write(page: PageData): Promise<void> {
+    if (this.error) throw this.error;
+    const target = this.csvStream ?? this.stream;
+    const ok = this.outputFormat === 'jsonl'
+      ? this.stream.write(JSON.stringify(page) + '\n')
+      : this.csvStream!.write(this.flattenForCsv(page));
+    if (!ok) await this.waitForDrain(target);
+  }
+
+  private waitForDrain(target: NodeJS.EventEmitter): Promise<void> {
+    if (this.error) return Promise.reject(this.error);
     return new Promise((resolve, reject) => {
-      this.stream.on('error', reject);
+      const onDrain = () => { this.errorWaiters.delete(onError); resolve(); };
+      const onError = (err: Error) => { target.off('drain', onDrain); reject(err); };
+      target.once('drain', onDrain);
+      this.errorWaiters.add(onError);
+    });
+  }
+
+  /** Flush and close the output. Rejects with the first stream error, if any. */
+  async close(): Promise<void> {
+    if (this.error) throw this.error;
+    return new Promise((resolve, reject) => {
+      this.errorWaiters.add(reject);
+      this.stream.once('finish', () => {
+        this.errorWaiters.delete(reject);
+        if (this.error) reject(this.error); else resolve();
+      });
       if (this.csvStream) {
-        this.csvStream.on('error', reject);
         this.csvStream.end();
-        this.stream.on('finish', resolve);
       } else {
-        this.stream.end(resolve);
+        this.stream.end();
       }
     });
   }

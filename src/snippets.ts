@@ -2,7 +2,7 @@ import { resolve, extname } from 'node:path';
 import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import type { Page } from 'playwright';
-import { getBrowser } from './browser.js';
+import { newGuardedContext } from './browser.js';
 import { formatError } from './utils.js';
 
 export interface SnippetFn {
@@ -71,8 +71,7 @@ export async function runSnippets(
 ): Promise<Record<string, unknown>> {
   if (snippets.length === 0) return {};
 
-  const browser = await getBrowser();
-  const context = await browser.newContext({ userAgent });
+  const context = await newGuardedContext(userAgent);
   const page = await context.newPage();
 
   try {

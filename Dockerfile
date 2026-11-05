@@ -2,7 +2,12 @@
 #
 # Build:  docker build -t micelio .
 #         docker build -t micelio --build-arg WITH_CHROMIUM=true .   # JS rendering
-# Run UI: docker run --rm -p 3100:3100 -v micelio-data:/home/micelio/.micelio micelio
+# Run UI: the dashboard listens on all interfaces inside the container, so it
+#         refuses to start without a token:
+#           export MICELIO_AUTH_TOKEN="$(openssl rand -hex 32)"
+#           docker run --rm -p 127.0.0.1:3100:3100 -e MICELIO_AUTH_TOKEN \
+#             -v micelio-data:/home/micelio/.micelio micelio
+#         then open http://localhost:3100/?token=<the token> once in the browser.
 # CLI:    docker run --rm micelio crawl https://example.com --max-pages 100
 #
 # The legacy TypeScript crawler in src/ is not part of this image.
@@ -38,12 +43,17 @@ FROM alpine:3.22
 ARG WITH_CHROMIUM=false
 RUN apk add --no-cache ca-certificates tzdata \
     && if [ "$WITH_CHROMIUM" = "true" ]; then apk add --no-cache chromium nss freetype harfbuzz ttf-freefont; fi \
-    && adduser -D -h /home/micelio micelio
+    && adduser -D -h /home/micelio micelio \
+    && install -d -o micelio -g micelio -m 700 /home/micelio/.micelio
 COPY --from=build /out/micelio /usr/local/bin/micelio
 USER micelio
 WORKDIR /home/micelio
 # UI state (crawl history, settings) lives in ~/.micelio: mount a volume there.
+# The directory is created above owned by micelio, so a fresh named or
+# anonymous volume starts writable for the non-root user (Docker copies the
+# mount point's owner). A bind mount must be writable by the micelio user (uid 1000).
 VOLUME ["/home/micelio/.micelio"]
 EXPOSE 3100
 ENTRYPOINT ["micelio"]
+# Needs MICELIO_AUTH_TOKEN (see above); micelio ui exits with an error without it.
 CMD ["ui", "--host", "0.0.0.0", "--port", "3100"]

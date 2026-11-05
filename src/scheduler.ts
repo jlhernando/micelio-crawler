@@ -3,11 +3,11 @@
  * Designed to run as a foreground process (in terminal, tmux, screen, or systemd).
  */
 
-import { writeFileSync, readFileSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, readdirSync, renameSync, existsSync } from 'node:fs';
 import { resolve, join, parse as parsePath, format as formatPath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { parseCron, nextRun, describeCron, type CronExpression } from './cron-parser.js';
 import { sendWebhook, type WebhookPayload, type WebhookOptions } from './webhook.js';
 
@@ -91,9 +91,18 @@ export interface ScheduleConfig {
 }
 
 /**
- * Build a timestamped output filename for a scheduled crawl.
+ * Build a unique output filename for a scheduled crawl: host, schedule id,
+ * timestamp to the millisecond and a random suffix, so two schedules (or two
+ * scheduler processes) starting in the same minute never share a file. An
+ * existing file (or its HTML report) is never reused.
  */
-function buildOutputFilename(url: string, outputDir: string, format: 'jsonl' | 'csv'): string {
+export function buildOutputFilename(
+  url: string,
+  outputDir: string,
+  format: 'jsonl' | 'csv',
+  id: string = '',
+  now: Date = new Date(),
+): string {
   const hostname = (() => {
     try {
       return new URL(url).hostname.replace(/\./g, '-');
@@ -101,10 +110,14 @@ function buildOutputFilename(url: string, outputDir: string, format: 'jsonl' | '
       return 'crawl';
     }
   })();
-  const now = new Date();
-  const ts = now.toISOString().replace(/[:.]/g, '-').substring(0, 16);
+  const ts = now.toISOString().replace(/[:.]/g, '-').replace(/Z$/, '');
   const ext = format === 'csv' ? 'csv' : 'jsonl';
-  return join(outputDir, `${hostname}-${ts}.${ext}`);
+  const prefix = id && !id.startsWith(hostname) ? `${hostname}-${id}` : (id || hostname);
+  for (;;) {
+    const name = `${prefix}-${ts}-${randomBytes(3).toString('hex')}`;
+    const path = join(outputDir, `${name}.${ext}`);
+    if (!existsSync(path) && !existsSync(join(outputDir, `${name}.html`))) return path;
+  }
 }
 
 /**
@@ -217,7 +230,7 @@ export async function runSchedule(config: ScheduleConfig): Promise<void> {
 
     // Determine output format from crawl args
     const isCsv = crawlArgs.includes('--csv');
-    const outputFile = buildOutputFilename(url, outputDir, isCsv ? 'csv' : 'jsonl');
+    const outputFile = buildOutputFilename(url, outputDir, isCsv ? 'csv' : 'jsonl', id);
 
     // Build the crawl command arguments
     // The schedule command passes through all spider options; we just override the output path

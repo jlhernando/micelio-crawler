@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -114,6 +115,51 @@ func refused(err error) bool {
 // syscall.ECONNREFUSED does not match there.
 const wsaECONNREFUSED = syscall.Errno(10061)
 
+// tokenTransportOK refuses to send the dashboard token in clear text over
+// the network: plain http:// is only allowed to this computer.
+func tokenTransportOK(u *url.URL) error {
+	if u.Scheme == "https" || (u.Scheme == "http" && isLoopback(u.Hostname())) {
+		return nil
+	}
+	return fmt.Errorf("refusing to send the dashboard token to %s://%s: use https:// for a dashboard on another computer", u.Scheme, u.Host)
+}
+
+// CheckTokenTransport reports whether a token may be sent to the dashboard
+// at base (https, or http on this computer).
+func CheckTokenTransport(base string) error {
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("invalid dashboard URL %q", base)
+	}
+	return tokenTransportOK(u)
+}
+
+// isLoopback reports whether host is localhost or a loopback IP.
+func isLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// checkRedirect stops a redirect that would carry the token to another
+// origin or downgrade it from https to plain text.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if req.Header.Get("Authorization") == "" {
+		return nil
+	}
+	prev := via[len(via)-1].URL
+	if req.URL.Scheme != prev.Scheme || !strings.EqualFold(req.URL.Host, prev.Host) {
+		return fmt.Errorf("refusing to follow a redirect from %s://%s to %s://%s with the dashboard token",
+			prev.Scheme, prev.Host, req.URL.Scheme, req.URL.Host)
+	}
+	return tokenTransportOK(req.URL)
+}
+
 func (b *HTTPBackend) do(ctx context.Context, method, path string, query url.Values, body, out any) error {
 	u := b.Base + path
 	if len(query) > 0 {
@@ -136,11 +182,14 @@ func (b *HTTPBackend) do(ctx context.Context, method, path string, query url.Val
 	}
 	req.Header.Set("Accept", "application/json")
 	if b.Token != "" {
+		if err := tokenTransportOK(req.URL); err != nil {
+			return err
+		}
 		req.Header.Set("Authorization", "Bearer "+b.Token)
 	}
 	client := b.Client
 	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
+		client = &http.Client{Timeout: 60 * time.Second, CheckRedirect: checkRedirect}
 	}
 	resp, err := client.Do(req)
 	if err != nil {

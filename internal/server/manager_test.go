@@ -218,3 +218,41 @@ func TestRestartSavesEditedConfig(t *testing.T) {
 		t.Errorf("resume/dbPath saved in the job config: %v", got.Config)
 	}
 }
+
+// A second pause used to swap the pause channel, so a worker already waiting
+// on the first one was never released by Resume and the crawl hung.
+func TestRepeatedPauseReleasesWaiters(t *testing.T) {
+	s := newTestStore(t)
+	m := newTestManager(t, s)
+	job, _ := s.CreateCrawlJob(map[string]interface{}{"url": "https://example.com"})
+	active := &ActiveCrawl{ID: job.ID, Cancel: func() {}, StatusCodes: map[string]int{}}
+	m.mu.Lock()
+	m.active = active
+	m.mu.Unlock()
+	t.Cleanup(func() {
+		m.mu.Lock()
+		m.active = nil
+		m.mu.Unlock()
+	})
+
+	if err := m.PauseCrawl(job.ID); err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan bool, 1)
+	go func() { released <- active.WaitIfPaused(t.Context()) }()
+	time.Sleep(50 * time.Millisecond) // let the worker block on the first channel
+	if err := m.PauseCrawl(job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ResumeCrawl(job.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case ok := <-released:
+		if !ok {
+			t.Fatal("waiter reported cancellation, want resume")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker still blocked after resume")
+	}
+}

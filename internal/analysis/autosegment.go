@@ -200,6 +200,24 @@ func AssignAutoSegments(pages []*types.PageData, groupLabels map[string]string, 
 // PageRank when it varies across pages, else inlink counts (or the link-graph
 // in-degree). Pages without AutoSegments are skipped.
 func AssignAuthoritySegments(pages []*types.PageData, scores map[string]float64) {
+	assignAuthority(pages, scores, func(p *types.PageData, v string) { p.AutoSegments.Authority = v })
+}
+
+// AssignAuthoritySegmentsShared is AssignAuthoritySegments for pages whose
+// AutoSegments other goroutines may read: a page whose bucket changes gets
+// its own copy, an unchanged one is not written.
+func AssignAuthoritySegmentsShared(pages []*types.PageData, scores map[string]float64) {
+	assignAuthority(pages, scores, func(p *types.PageData, v string) {
+		if p.AutoSegments.Authority == v {
+			return
+		}
+		s := *p.AutoSegments
+		s.Authority = v
+		p.AutoSegments = &s
+	})
+}
+
+func assignAuthority(pages []*types.PageData, scores map[string]float64, set func(*types.PageData, string)) {
 	pageRank := func(p *types.PageData) float64 {
 		if s, ok := scores[p.URL]; ok {
 			return s
@@ -218,7 +236,7 @@ func AssignAuthoritySegments(pages []*types.PageData, scores map[string]float64)
 	if len(vals) == 0 {
 		for _, p := range pages {
 			if p.AutoSegments != nil {
-				p.AutoSegments.Authority = ""
+				set(p, "")
 			}
 		}
 		return
@@ -230,7 +248,7 @@ func AssignAuthoritySegments(pages []*types.PageData, scores map[string]float64)
 			continue
 		}
 		if p.StatusCode != 200 {
-			p.AutoSegments.Authority = ""
+			set(p, "")
 			continue
 		}
 		v := value(p)
@@ -238,13 +256,13 @@ func AssignAuthoritySegments(pages []*types.PageData, scores map[string]float64)
 		// templated sites) in "medium" instead of inflating "high".
 		switch {
 		case v <= 0:
-			p.AutoSegments.Authority = "none"
+			set(p, "none")
 		case v > highCut:
-			p.AutoSegments.Authority = "high"
+			set(p, "high")
 		case v >= lowCut:
-			p.AutoSegments.Authority = "medium"
+			set(p, "medium")
 		default:
-			p.AutoSegments.Authority = "low"
+			set(p, "low")
 		}
 	}
 }

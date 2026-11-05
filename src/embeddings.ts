@@ -36,6 +36,12 @@ const DEFAULT_MODELS: Record<string, string> = {
 const MIN_API_INTERVAL_MS = 200;
 let pending: Promise<void> = Promise.resolve();
 
+/** Timeout signal that also aborts with the caller's signal. */
+function withTimeout(ms: number, signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(ms);
+  return signal ? AbortSignal.any([timeout, signal]) : timeout;
+}
+
 /**
  * Generate embeddings for a batch of texts using OpenAI API.
  * Max 50 texts per call (API batch limit).
@@ -44,6 +50,7 @@ async function embedOpenAi(
   apiKey: string,
   model: string,
   texts: string[],
+  signal?: AbortSignal,
 ): Promise<number[][]> {
   const response = await fetch('https://api.openai.com/v1/embeddings', {
     method: 'POST',
@@ -55,7 +62,7 @@ async function embedOpenAi(
       model,
       input: texts,
     }),
-    signal: AbortSignal.timeout(60000),
+    signal: withTimeout(60000, signal),
   });
 
   if (!response.ok) {
@@ -73,7 +80,7 @@ async function embedOpenAi(
  * Generate embeddings for a single text using Ollama API.
  * Ollama does not support batch embedding, so we call one at a time.
  */
-async function embedOllama(model: string, text: string): Promise<number[]> {
+async function embedOllama(model: string, text: string, signal?: AbortSignal): Promise<number[]> {
   const response = await fetch('http://localhost:11434/api/embeddings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -81,7 +88,7 @@ async function embedOllama(model: string, text: string): Promise<number[]> {
       model,
       prompt: text,
     }),
-    signal: AbortSignal.timeout(60000),
+    signal: withTimeout(60000, signal),
   });
 
   if (!response.ok) {
@@ -121,6 +128,7 @@ export async function computeEmbeddings(
   model: string,
   threshold: number,
   onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<EmbeddingStats> {
   const resolvedModel = model || DEFAULT_MODELS[provider] || DEFAULT_MODELS.openai;
 
@@ -137,6 +145,7 @@ export async function computeEmbeddings(
     // Batch up to 25 texts per API call (conservative to stay within token limits)
     const BATCH_SIZE = 25;
     for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+      if (signal?.aborted) break; // no more paid calls once cancelled
       const batch = texts.slice(i, i + BATCH_SIZE);
       await new Promise<void>((resolve) => {
         pending = pending.then(async () => {
@@ -145,7 +154,7 @@ export async function computeEmbeddings(
         });
       });
       try {
-        const vectors = await embedOpenAi(apiKey, resolvedModel, batch);
+        const vectors = await embedOpenAi(apiKey, resolvedModel, batch, signal);
         embeddings.push(...vectors);
         if (vectors.length > 0) dimensions = vectors[0].length;
       } catch (err) {
@@ -158,6 +167,7 @@ export async function computeEmbeddings(
   } else {
     // Ollama: one at a time
     for (let i = 0; i < texts.length; i++) {
+      if (signal?.aborted) break;
       await new Promise<void>((resolve) => {
         pending = pending.then(async () => {
           await new Promise((r) => setTimeout(r, MIN_API_INTERVAL_MS));
@@ -165,7 +175,7 @@ export async function computeEmbeddings(
         });
       });
       try {
-        const vector = await embedOllama(resolvedModel, texts[i]);
+        const vector = await embedOllama(resolvedModel, texts[i], signal);
         embeddings.push(vector);
         if (vector.length > 0) dimensions = vector.length;
       } catch (err) {
@@ -201,7 +211,7 @@ export async function computeEmbeddings(
 
   // Build url -> vector map for downstream consumers (link suggestions)
   const vectorMap = new Map<string, number[]>();
-  for (let i = 0; i < urls.length; i++) {
+  for (let i = 0; i < embeddings.length; i++) {
     if (embeddings[i].length > 0) {
       vectorMap.set(urls[i], embeddings[i]);
     }

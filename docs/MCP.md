@@ -72,6 +72,11 @@ If your dashboard runs with `--auth-token`, add the token:
 | `--server <url>` | `http://127.0.0.1:3100` | Dashboard to read crawls from |
 | `--auth-token <token>` | `MICELIO_AUTH_TOKEN` | Dashboard token, if it was started with `--auth-token` |
 | `--allow-crawl` | off | Add `crawl_start`, `crawl_wait` and `crawl_stop` |
+
+The token is only sent over `https://` or to a dashboard on this computer
+(`localhost`, `127.0.0.1`, `::1`). `micelio mcp --server http://other-host:3100`
+with a token refuses to start; put the remote dashboard behind HTTPS. Redirects
+to another origin or from `https` to `http` are not followed with the token.
 | `--no-autostart` | off | Fail with a clear error instead of starting the dashboard |
 
 ## Tools

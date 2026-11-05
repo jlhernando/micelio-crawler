@@ -1,4 +1,5 @@
 import type { PageData, CrawlStats } from './types.js';
+import { jsonForScript } from './utils.js';
 
 /**
  * Lightweight page data for embedding in HTML (strip heavy fields).
@@ -139,14 +140,14 @@ export function generateHtmlReport(
 ): string {
   const crawledUrls = new Set(pages.map(p => p.url));
   const lightPages = lightenPages(pages, stats.pageRankScores, crawledUrls);
-  // #1 fix: Escape </script> sequences to prevent XSS via embedded JSON
-  const pagesJson = JSON.stringify(lightPages).replace(/<\//g, '<\\/');
+  // #1 fix: no </script>, <!-- or other markup can come out of the embedded JSON
+  const pagesJson = jsonForScript(lightPages);
   // Convert Map to plain object for JSON serialization; strip vectors to avoid bloating HTML
   const embeddingStatsClean = stats.embeddingStats
     ? { ...stats.embeddingStats, vectors: undefined }
     : null;
   const statsForJson = { ...stats, pageRankScores: undefined, embeddingStats: embeddingStatsClean };
-  const statsJson = JSON.stringify(statsForJson).replace(/<\//g, '<\\/');
+  const statsJson = jsonForScript(statsForJson);
 
   return `<!DOCTYPE html>
 <html lang="en">

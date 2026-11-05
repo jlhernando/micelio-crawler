@@ -28,6 +28,7 @@ import { fetchPlausibleData } from './plausible.js';
 import { testRobotsMultiAgent, KNOWN_USER_AGENTS } from './robots.js';
 import { fetchHead, type FetchOptions as HeadFetchOptions } from './fetcher.js';
 import { HeadResultWriter } from './head-writer.js';
+import { setAllowPrivateNetworks } from './net-guard.js';
 import type { HeadResult } from './types.js';
 
 // ── Typed CLI options ────────────────────────────────────
@@ -287,6 +288,8 @@ function buildCommonConfig(opts: CommonOptions): Record<string, unknown> {
 
 // ── Shared CLI options ───────────────────────────────────
 
+const ALLOW_PRIVATE_HELP = 'Allow requests to localhost and private networks (blocked by default to prevent SSRF)';
+
 function addCommonOptions(cmd: Command): Command {
   return cmd
     .option('-c, --concurrency <number>', 'Concurrent workers (1-20)', '3')
@@ -345,7 +348,8 @@ function addCommonOptions(cmd: Command): Command {
     .option('--timeout <seconds>', 'Stop crawl after N seconds (0 = unlimited)', '0')
     .option('--language <code>', 'Language for n-gram stopwords (e.g., en, es, fr, de). Auto-detected if omitted')
     .option('--no-robots', 'Ignore robots.txt (crawl all URLs regardless of Disallow rules)')
-    .option('--show-blocked-internal', 'Include internal URLs blocked by robots.txt in results', false);
+    .option('--show-blocked-internal', 'Include internal URLs blocked by robots.txt in results', false)
+    .option('--allow-private', ALLOW_PRIVATE_HELP, false);
 }
 
 // ── Command handlers ─────────────────────────────────────
@@ -452,7 +456,11 @@ const program = new Command();
 program
   .name('micelio')
   .description('High-performance Node.js technical SEO crawler')
-  .version('1.0.0');
+  .version('1.0.0')
+  // --allow-private (crawl commands only, never the dashboard) lifts the SSRF guard
+  .hook('preAction', (_cmd, action) => {
+    if (action.opts().allowPrivate === true) setAllowPrivateNetworks(true);
+  });
 
 // Spider subcommand (default)
 addCommonOptions(
@@ -751,14 +759,21 @@ program
   .description('Launch the interactive web dashboard for Micelio')
   .option('-p, --port <number>', 'Port number for the UI server', '3100')
   .option('--no-open', 'Do not auto-open the browser')
-  .action(async (opts: { port: string; open: boolean }) => {
+  .option('--host <host>', 'Address to listen on (non-loopback requires --auth-token)', '127.0.0.1')
+  .option('--auth-token <token>', 'Bearer token required on /api/* and /ws (or MICELIO_AUTH_TOKEN)')
+  .option('--trusted-proxy <url>', 'The only proxy dashboard crawls may use (or MICELIO_TRUSTED_PROXY); other proxies are refused')
+  .action(async (opts: { port: string; open: boolean; host: string; authToken?: string; trustedProxy?: string }) => {
     const port = parseInt(opts.port, 10);
     if (isNaN(port) || port < 1 || port > 65535) {
       console.error(`Error: Invalid port "${opts.port}". Must be 1-65535.`);
       process.exit(1);
     }
     const { startUiServer } = await import('./ui-server.js');
-    await startUiServer(port, opts.open !== false);
+    await startUiServer(port, opts.open !== false, {
+      host: opts.host,
+      authToken: opts.authToken || process.env.MICELIO_AUTH_TOKEN || '',
+      trustedProxy: opts.trustedProxy || process.env.MICELIO_TRUSTED_PROXY || '',
+    });
   });
 
 // ── Schedules (list) subcommand ──────────────────────────
@@ -813,6 +828,7 @@ program
   .option('--agents <agents>', 'Comma-separated user-agents (default: major bots)', '')
   .option('--urls <file>', 'File with URLs to test (one per line)')
   .option('--all-agents', 'Test all known user-agents', false)
+  .option('--allow-private', ALLOW_PRIVATE_HELP, false)
   .action(async (url: string, opts: { agents: string; urls?: string; allAgents: boolean }) => {
     try {
       new URL(url);
@@ -940,6 +956,7 @@ program
   .option('-H, --header <header>', 'Custom HTTP header (Name: Value)', collectHeaders, {})
   .option('--cookie <cookie>', 'Cookie string to send with requests')
   .option('--proxy <url>', 'Route requests through a proxy')
+  .option('--allow-private', ALLOW_PRIVATE_HELP, false)
   .action(async (file: string, opts: HeadOptions) => {
     let content: string;
     try {
@@ -1173,7 +1190,7 @@ async function runCrawl(config: ReturnType<typeof mergeConfig>): Promise<void> {
     const hasAnalyticsEnrichment = pages.some(p => p.gscData || p.ga4Data || p.cruxData || p.plausibleData);
     if (hasAnalyticsEnrichment) {
       const rewriter = new ResultWriter(config.outputPath, config.outputFormat);
-      for (const page of pages) rewriter.write(page);
+      for (const page of pages) await rewriter.write(page);
       await rewriter.close();
     }
 

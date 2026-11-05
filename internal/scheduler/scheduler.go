@@ -42,6 +42,9 @@ type State struct {
 	LastCrawlID    string `json:"lastCrawlId,omitempty"` // dashboard crawl job of the last run
 	Running        bool   `json:"running,omitempty"`
 	Paused         bool   `json:"paused,omitempty"` // waiting for the check to pass again
+	// Warning says what was dropped or changed from a saved config that
+	// newer checks refuse (e.g. a key file outside ~/.micelio/keys).
+	Warning string `json:"warning,omitempty"`
 
 	CrawlConfig map[string]interface{} `json:"crawlConfig,omitempty"`
 	Precheck    *Precheck              `json:"precheck,omitempty"`
@@ -65,6 +68,7 @@ type Config struct {
 	Source   string                 // "ui" (dashboard) or "cli"; default "cli"
 	CrawlMap map[string]interface{} // dashboard-format config, persisted for "ui" schedules
 	Precheck *Precheck
+	Warning  string // shown with the schedule (State.Warning)
 	// Runner executes one crawl. Nil runs crawler.Crawl directly and writes
 	// the output file (CLI behaviour).
 	Runner Runner
@@ -154,9 +158,12 @@ func New(cfg Config) (*Scheduler, error) {
 		return nil, fmt.Errorf("get home dir: %w", err)
 	}
 	stateDir := filepath.Join(homeDir, ".micelio", "schedules")
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+	// State files hold the crawl config (cookies, auth headers, API keys)
+	// and the webhook URL: owner only.
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create state dir: %w", err)
 	}
+	os.Chmod(stateDir, 0o700)
 
 	if cfg.Source == "" {
 		cfg.Source = "cli"
@@ -190,6 +197,7 @@ func New(cfg Config) (*Scheduler, error) {
 	s.state.Name, s.state.Source = cfg.Name, cfg.Source
 	s.state.CrawlConfig, s.state.Precheck = cfg.CrawlMap, cfg.Precheck
 	s.state.Running, s.state.Paused = false, false
+	s.state.Warning = cfg.Warning
 	if cfg.Webhook != nil {
 		s.state.Webhook = cfg.Webhook.URL
 	}
@@ -305,6 +313,9 @@ func (s *Scheduler) runOnce() {
 		if !check.OK {
 			res = RunResult{Status: "skipped", Reason: check.Reason}
 			fmt.Fprintf(os.Stderr, "Skipped: %s\n", check.Reason)
+			if check.Output != "" {
+				fmt.Fprintf(os.Stderr, "Check output: %s\n", check.Output)
+			}
 		}
 	}
 	if res.Status == "" {
@@ -426,6 +437,9 @@ func (s *Scheduler) monitorPrecheck(ctx context.Context, ctl *RunControl) {
 				fmt.Fprintf(os.Stderr, "\nCheck passes again, resuming crawl\n")
 			} else {
 				fmt.Fprintf(os.Stderr, "\nCheck failed (%s), pausing crawl\n", check.Reason)
+				if check.Output != "" {
+					fmt.Fprintf(os.Stderr, "Check output: %s\n", check.Output)
+				}
 			}
 		}
 		ctl.set(!check.OK, check.Reason)
@@ -511,7 +525,8 @@ func (s *Scheduler) saveState() {
 	}
 	path := filepath.Join(s.stateDir, stateCopy.ID+".json")
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+	os.Remove(tmpPath) // WriteFile keeps the mode of an existing file
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
 		log.Printf("[scheduler] write state error: %v", err)
 		return
 	}

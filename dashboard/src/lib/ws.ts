@@ -7,8 +7,10 @@
  * reconnect when one page unmounts just before the next mounts).
  */
 
+import { auth } from './stores/auth.svelte';
+
 export interface WsMessage {
-  type: 'progress' | 'page' | 'error' | 'complete' | 'paused' | 'resumed' | 'stopping' | 'cancelled' | 'analysis_progress' | 'tuned' | 'analysis_complete' | 'log_upload_progress' | 'log_progress' | 'log_complete' | 'log_delete_done' | 'merge_progress';
+  type: 'progress' | 'page' | 'error' | 'complete' | 'paused' | 'resumed' | 'stopping' | 'cancelled' | 'analysis_progress' | 'tuned' | 'warning' | 'analysis_complete' | 'log_upload_progress' | 'log_progress' | 'log_complete' | 'log_delete_done' | 'merge_progress';
   crawlId?: string;
   data: Record<string, unknown>;
 }
@@ -44,6 +46,8 @@ function connect() {
 
   socket.onclose = () => {
     if (ws === socket) ws = null;
+    // Not logged in (an API call got 401): the handshake would fail forever.
+    if (auth.required) return;
     if (handlers.size > 0 && !reconnectTimer) reconnectTimer = setTimeout(connect, RECONNECT_MS);
   };
 

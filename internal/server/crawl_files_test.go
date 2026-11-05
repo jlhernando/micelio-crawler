@@ -1,12 +1,14 @@
 package server
 
 import (
+	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
+	"zombiezen.com/go/sqlite/sqlitex"
 )
 
 func touch(t *testing.T, path string) {
@@ -82,5 +84,153 @@ func TestRemoveOrphanCrawlFiles(t *testing.T) {
 	}
 	if !exists(kept.DBPath) || !exists(other) {
 		t.Error("removed a file that is in use or not a crawl DB")
+	}
+}
+
+// A failed jobs lookup is no proof a crawl file is unused: keep the file.
+func TestRemoveCrawlFileKeepsFileWhenLookupFails(t *testing.T) {
+	s := newTestStore(t)
+	job, _ := s.CreateCrawlJob(map[string]interface{}{"seedUrl": "https://a.test/"})
+	touch(t, job.DBPath)
+	orphan := filepath.Join(s.crawlDir, uuid.NewString()+".db")
+	touch(t, orphan)
+	// Simulates an unreadable UI database.
+	if err := sqlitex.Execute(s.conn, "ALTER TABLE crawl_jobs RENAME TO crawl_jobs_gone", nil); err != nil {
+		t.Fatal(err)
+	}
+	s.removeCrawlFile(job.DBPath)
+	s.removeOrphanCrawlFiles()
+	if !exists(job.DBPath) {
+		t.Error("crawl file deleted although its jobs could not be checked")
+	}
+	if !exists(orphan) {
+		t.Error("startup cleanup deleted a file although the jobs could not be checked")
+	}
+}
+
+// A crawl that an import (and its deferred analysis) is still using cannot
+// be deleted; once the work ends it can.
+func TestDeleteCrawlWaitsForImport(t *testing.T) {
+	s := newTestStore(t)
+	m := newTestManager(t, s)
+	src := filepath.Join(t.TempDir(), "site.db")
+	writeTestCrawlDB(t, src)
+
+	job, err := m.StartImport(src, ImportOptions{LinkIntelligence: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := m.DeleteCrawl(job.ID)
+	if !errors.Is(err, ErrCrawlBusy) || deleted {
+		t.Fatalf("delete during import = %v, %v; want ErrCrawlBusy", deleted, err)
+	}
+	m.WaitBackground()
+	if got, _ := s.GetCrawlJob(job.ID); got == nil || got.Status != "completed" {
+		t.Fatalf("import did not complete: %+v", got)
+	}
+	if deleted, err := m.DeleteCrawl(job.ID); err != nil || !deleted {
+		t.Fatalf("delete after import = %v, %v", deleted, err)
+	}
+	if exists(job.DBPath) {
+		t.Error("crawl file left behind")
+	}
+	if m.GetCachedResults(job.ID) != nil {
+		t.Error("deleted crawl still cached")
+	}
+}
+
+// While a crawl is being deleted, no crawl, restart or result load of it
+// can start; holds taken before the delete make it refuse.
+func TestDeleteCrawlBlocksNewWork(t *testing.T) {
+	s := newTestStore(t)
+	m := newTestManager(t, s)
+	job, _ := s.CreateCrawlJob(map[string]interface{}{"seedUrl": "https://a.test/"})
+	if err := os.WriteFile(job.DBPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.UpdateCrawlJob(job.ID, map[string]interface{}{"status": "completed"})
+	s.SaveCrawlStats(job.ID, []byte(`{"totalPages":0}`))
+
+	m.mu.Lock()
+	m.deleting = map[string]bool{job.ID: true}
+	m.mu.Unlock()
+	if err := m.StartCrawl(job.ID, map[string]interface{}{"seedUrl": "https://a.test/"}); !errors.Is(err, ErrCrawlBusy) {
+		t.Errorf("StartCrawl while deleting = %v", err)
+	}
+	if _, err := m.RestartCrawl(job.ID, nil); !errors.Is(err, ErrCrawlBusy) {
+		t.Errorf("RestartCrawl while deleting = %v", err)
+	}
+	if r := m.GetOrLoadResults(job.ID); r != nil {
+		t.Error("results loaded while deleting")
+	}
+	if r := m.GetQuickStats(job.ID); r != nil {
+		t.Error("stats cached while deleting")
+	}
+	if _, err := m.DeleteCrawl(job.ID); !errors.Is(err, ErrCrawlBusy) {
+		t.Errorf("second delete = %v", err)
+	}
+	m.mu.Lock()
+	m.deleting = nil
+	m.mu.Unlock()
+
+	rel, err := m.holdJob(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.DeleteCrawl(job.ID); !errors.Is(err, ErrCrawlBusy) {
+		t.Errorf("delete while held = %v", err)
+	}
+	rel()
+	rel() // idempotent
+	if deleted, err := m.DeleteCrawl(job.ID); err != nil || !deleted {
+		t.Errorf("delete after release = %v, %v", deleted, err)
+	}
+	if len(m.jobHolds) != 0 || len(m.deleting) != 0 {
+		t.Errorf("leftover state: holds %v deleting %v", m.jobHolds, m.deleting)
+	}
+}
+
+// Deferred analysis does not make a delete wait: the delete cancels it and
+// the crawl DB is removed when the analysis lets go of it. A hard hold
+// (import, crawl) still refuses the delete.
+func TestDeleteCrawlCancelsDeferredAndRemovesFileLater(t *testing.T) {
+	s := newTestStore(t)
+	m := newTestManager(t, s)
+	job, _ := s.CreateCrawlJob(map[string]interface{}{"seedUrl": "https://a.test/"})
+	if err := os.WriteFile(job.DBPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.UpdateCrawlJob(job.ID, map[string]interface{}{"status": "completed"})
+
+	ctx, done := m.startDeferred(job.ID)
+	soft := m.retainSoft(job.ID)
+	hard, err := m.holdJob(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.DeleteCrawl(job.ID); !errors.Is(err, ErrCrawlBusy) {
+		t.Errorf("delete with a hard hold = %v, want ErrCrawlBusy", err)
+	}
+	hard()
+
+	ok, err := m.DeleteCrawl(job.ID)
+	if err != nil || !ok {
+		t.Fatalf("delete during deferred analysis = %v, %v", ok, err)
+	}
+	if ctx.Err() == nil {
+		t.Error("deferred analysis not cancelled")
+	}
+	if _, err := os.Stat(job.DBPath); err != nil {
+		t.Errorf("crawl DB removed while deferred analysis still holds it: %v", err)
+	}
+	done()
+	soft()
+	if _, err := os.Stat(job.DBPath); !os.IsNotExist(err) {
+		t.Errorf("crawl DB kept after the last hold ended: %v", err)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.jobHolds)+len(m.softHolds)+len(m.pendingRemove) != 0 {
+		t.Errorf("leftover state: holds %v soft %v pending %v", m.jobHolds, m.softHolds, m.pendingRemove)
 	}
 }

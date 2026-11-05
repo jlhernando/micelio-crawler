@@ -548,11 +548,16 @@ func runBatchIntegrations(ctx context.Context, pages []*types.PageData, config t
 			if days == 0 {
 				days = 30
 			}
-			host := config.PlausibleHost
-			if host == "" {
-				host = "https://plausible.io"
+			trusted := config.PlausibleHostTrusted || config.SkipSSRF
+			host, err := integration.ValidatePlausibleHost(config.PlausibleHost, trusted)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "\n  [warn] Plausible skipped: %v\n", err)
+				return
 			}
 			client := integration.NewPlausibleClient(config.PlausibleAPIKey, config.PlausibleSiteID, days, host)
+			if trusted {
+				client.AllowPrivateHost()
+			}
 			plausibleData, err := client.FetchBatch(ctx, urls)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "\n  [warn] Plausible fetch: %v\n", err)

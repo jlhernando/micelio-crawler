@@ -43,7 +43,9 @@
     if (!crawlConfig || recrawling) return;
     recrawling = true;
     try {
-      const { id } = await api.startCrawl(crawlConfig);
+      // The API masks secrets (cookies, auth headers, keys); fromCrawl lets
+      // the server put the stored ones back.
+      const { id } = await api.startCrawl({ ...crawlConfig, fromCrawl: crawlId });
       window.location.hash = `/monitor/${id}`;
     } catch {
       recrawling = false;

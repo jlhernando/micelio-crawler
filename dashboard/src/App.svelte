@@ -4,6 +4,7 @@
   import Setup from './routes/Setup.svelte';
   import Monitor from './routes/Monitor.svelte';
   import Results from './routes/Results.svelte';
+  import { auth, loginWithToken } from './lib/stores/auth.svelte';
 
   // Setup, Monitor and Results ship in the main bundle; the other routes are
   // split into their own chunks and fetched on first visit.
@@ -45,6 +46,8 @@
     return { page: 'setup', params: {} };
   });
 
+  let token = $state('');
+
   let page = $derived(routeInfo.page);
   let routeParams = $derived(routeInfo.params);
 </script>
@@ -57,6 +60,24 @@
   </div>
 {/snippet}
 
+{#if auth.required}
+  <!-- The server needs its access token and this browser has no login cookie. -->
+  <div class="max-w-xl mx-auto mt-16 rounded-md border border-border bg-surface-2 p-5 text-sm">
+    <p class="text-fg font-medium mb-2">This dashboard needs its access token.</p>
+    <p class="text-fg-2 mb-4">
+      It was started with <code>--auth-token</code> or <code>MICELIO_AUTH_TOKEN</code>. Open
+      <code>{location.origin}/?token=&lt;token&gt;</code> once, or enter the token below. The browser then keeps a login cookie.
+    </p>
+    {#if auth.failed}
+      <p class="text-danger mb-3" role="alert">Wrong token, try again.</p>
+    {/if}
+    <form class="flex gap-2" onsubmit={(e) => { e.preventDefault(); if (token.trim()) loginWithToken(token.trim()); }}>
+      <input type="password" bind:value={token} placeholder="Access token" autocomplete="current-password"
+        class="flex-1 px-3 py-1.5 rounded-lg border border-border bg-surface text-fg" />
+      <button type="submit" class="px-3 py-1.5 rounded-lg bg-accent text-surface font-medium cursor-pointer">Log in</button>
+    </form>
+  </div>
+{:else}
 <Layout {currentPath}>
   {#if page === 'setup'}
     <Setup />
@@ -82,3 +103,4 @@
     {#await loadSettings() then { default: Settings }}<Settings />{:catch err}{@render loadFailed(err)}{/await}
   {/if}
 </Layout>
+{/if}

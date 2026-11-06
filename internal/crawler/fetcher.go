@@ -169,11 +169,20 @@ func newClient(timeout time.Duration, proxy *url.URL, ssrfProtect bool, cache *d
 	if proxy != nil {
 		transport.Proxy = http.ProxyURL(proxy)
 	}
+	var rt http.RoundTripper = transport
 	if ssrfProtect {
-		transport.DialContext = ssrfSafeDialer(&net.Dialer{
+		dial := ssrfSafeDialer(&net.Dialer{
 			Timeout:   30 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}, cache)
+		transport.DialContext = dial
+		// A proxy (--proxy, Tor, or HTTP(S)_PROXY) would resolve the target
+		// itself, past the dialer's check: give it the checked IP instead.
+		lookup := net.DefaultResolver.LookupIPAddr
+		if cache != nil {
+			lookup = cache.LookupIPAddr
+		}
+		rt = netguard.NewProxyTransport(transport, transport.Proxy, dial, lookup)
 	}
 	jar, _ := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	return &http.Client{
@@ -182,7 +191,7 @@ func newClient(timeout time.Duration, proxy *url.URL, ssrfProtect bool, cache *d
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse // Don't follow redirects
 		},
-		Transport: transport,
+		Transport: rt,
 	}
 }
 
@@ -190,19 +199,20 @@ func newClient(timeout time.Duration, proxy *url.URL, ssrfProtect bool, cache *d
 // Use for webhook dispatch or other cases where redirect following is needed.
 // Environment proxies are used, but a proxy resolves and reaches the target
 // itself, past the dialer's private-address check, so the target is checked
-// before the request goes to the proxy (netguard.GuardProxy). Every redirect
-// hop is checked too (netguard.CheckRedirect).
+// and resolved here and the proxy only gets the checked IP
+// (netguard.ProxyTransport). Every redirect hop is checked too
+// (netguard.CheckRedirect).
 func SafeClientFollowRedirects(timeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = netguard.GuardProxy(http.ProxyFromEnvironment)
-	transport.DialContext = ssrfSafeDialer(&net.Dialer{
+	dial := ssrfSafeDialer(&net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}, nil)
+	transport.DialContext = dial
 	return &http.Client{
 		Timeout:       timeout,
 		CheckRedirect: netguard.CheckRedirect,
-		Transport:     transport,
+		Transport:     netguard.NewProxyTransport(transport, http.ProxyFromEnvironment, dial, nil),
 	}
 }
 

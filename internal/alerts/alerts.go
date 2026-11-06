@@ -317,7 +317,7 @@ func isPrivateHost(host string) bool {
 
 // newSafeClient returns the client every alert delivery to a user-set URL
 // uses: private addresses refused after DNS and on every redirect, and
-// environment proxies used only after the target is checked (GuardProxy).
+// environment proxies get only the checked IP of the target (ProxyTransport).
 // Tests swap it to reach a local server.
 var newSafeClient = netguard.HTTPClient
 

@@ -13,6 +13,46 @@ import (
 	"github.com/micelio/micelio/internal/scheduler"
 )
 
+// newCrawlTarget follows crawler.credentialsAllowed: the original hosts
+// (seed, list, sitemaps, allowed domains) and their www twins, same port,
+// https never moved to http; no other subdomain.
+func TestNewCrawlTargetHostRule(t *testing.T) {
+	orig := map[string]any{
+		"seedUrl":        "http://example.com/",
+		"sitemapUrls":    []any{"https://maps.example.net/sitemap.xml"},
+		"allowedDomains": []any{"blog.example.org"},
+	}
+	for seed, want := range map[string]string{
+		"http://example.com/x":               "",
+		"https://example.com/":               "", // upgrade, default ports
+		"http://www.example.com/":            "",
+		"https://maps.example.net/":          "",
+		"https://www.maps.example.net/":      "",
+		"http://maps.example.net/":           "http://maps.example.net",
+		"https://blog.example.org/":          "",
+		"https://www.blog.example.org/":      "",
+		"https://blog.example.org:8443/":     "https://blog.example.org",
+		"https://shop.example.com/":          "https://shop.example.com",
+		"https://attacker.example.com/":      "https://attacker.example.com",
+		"https://evil.blog.example.org/":     "https://evil.blog.example.org",
+		"http://example.com:8080/":           "http://example.com",
+		"https://example.com.attacker.test/": "https://example.com.attacker.test",
+	} {
+		if got := newCrawlTarget(map[string]any{"seedUrl": seed}, orig); got != want {
+			t.Errorf("seed %s: newCrawlTarget = %q, want %q", seed, got, want)
+		}
+	}
+	for d, want := range map[string]string{
+		"example.com": "", "www.example.com": "", "maps.example.net": "", "blog.example.org": "",
+		"shop.example.com": "shop.example.com", "attacker.example.com": "attacker.example.com",
+	} {
+		in := map[string]any{"seedUrl": "http://example.com/", "allowedDomains": []any{d}}
+		if got := newCrawlTarget(in, orig); got != want {
+			t.Errorf("allowed domain %s: newCrawlTarget = %q, want %q", d, got, want)
+		}
+	}
+}
+
 // A restored secret stays bound to where it was stored for: changing the
 // crawl's site or a service's host means typing it again.
 func TestRestoreSecretsBoundToDestination(t *testing.T) {
@@ -38,6 +78,14 @@ func TestRestoreSecretsBoundToDestination(t *testing.T) {
 		{"list url added", func(c map[string]any) { c["urlList"] = "https://example.com/a\nhttps://attacker.example/b" }, ""},
 		{"sitemap on another host", func(c map[string]any) { c["sitemapUrls"] = []any{"https://attacker.example/sitemap.xml"} }, ""},
 		{"allowed domain added", func(c map[string]any) { c["allowedDomains"] = []any{"attacker.example"} }, ""},
+		// A subdomain may belong to someone else (shared hosting, SaaS
+		// tenants): the crawler does not send it the credentials either.
+		{"subdomain", func(c map[string]any) { c["seedUrl"] = "https://shop.example.com/" }, ""},
+		{"attacker subdomain", func(c map[string]any) { c["seedUrl"] = "https://attacker.example.com/" }, ""},
+		{"www of a subdomain", func(c map[string]any) { c["seedUrl"] = "https://www.attacker.example.com/" }, ""},
+		{"list url on a subdomain", func(c map[string]any) { c["urlList"] = "https://example.com/a\nhttps://attacker.example.com/b" }, ""},
+		{"subdomain as allowed domain", func(c map[string]any) { c["allowedDomains"] = []any{"attacker.example.com"} }, ""},
+		{"parent domain", func(c map[string]any) { c["seedUrl"] = "https://com/" }, ""},
 		{"plausible host changed", func(c map[string]any) { c["plausibleHost"] = "https://attacker.example" }, "plausibleApiKey"},
 		{"ai provider changed", func(c map[string]any) { c["aiProvider"] = "ollama" }, "aiKey"},
 	}
@@ -63,7 +111,8 @@ func TestRestoreSecretsBoundToDestination(t *testing.T) {
 		{"unchanged", func(map[string]any) {}},
 		{"new path", func(c map[string]any) { c["seedUrl"] = "https://example.com/blog/" }},
 		{"www", func(c map[string]any) { c["seedUrl"] = "https://www.example.com/" }},
-		{"subdomain", func(c map[string]any) { c["seedUrl"] = "https://shop.example.com/" }},
+		{"www with explicit default port", func(c map[string]any) { c["seedUrl"] = "https://www.example.com:443/" }},
+		{"allowed domain www twin", func(c map[string]any) { c["allowedDomains"] = []any{"www.example.com"} }},
 		{"secrets re-entered for a new site", func(c map[string]any) {
 			c["seedUrl"] = "https://other.example/"
 			c["cookies"] = "session=NEW"

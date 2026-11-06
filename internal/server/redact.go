@@ -370,8 +370,12 @@ func scopeValue(v any) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(fmt.Sprint(v))), "/")
 }
 
-// crawlOrigin is a site a crawl sends its cookies and headers to.
-type crawlOrigin struct{ scheme, host, port string }
+// crawlOrigin is a site a crawl sends its cookies and headers to. host has
+// no "www." prefix, so a host and its www twin compare equal.
+type crawlOrigin struct {
+	scheme, host, port string
+	defaultPort        bool // no port in the URL
+}
 
 func originOf(raw string) (crawlOrigin, bool) {
 	u, err := url.Parse(strings.ReplaceAll(strings.TrimSpace(raw), secretMask, secrets.Placeholder))
@@ -380,19 +384,28 @@ func originOf(raw string) (crawlOrigin, bool) {
 	}
 	o := crawlOrigin{scheme: strings.ToLower(u.Scheme), host: strings.TrimPrefix(strings.ToLower(strings.TrimSuffix(u.Hostname(), ".")), "www."), port: u.Port()}
 	if o.port == "" {
+		o.defaultPort = true
 		o.port = map[string]string{"http": "80", "https": "443"}[o.scheme]
 	}
 	return o, true
 }
 
-func domainCovers(parent, host string) bool {
-	return host == parent || strings.HasSuffix(host, "."+parent)
+// covers reports whether the crawl's credentials, stored for o, may go to
+// t: the same host or its www twin, on the same port (an http -> https
+// upgrade with default ports counts as the same), never from https to http.
+func (o crawlOrigin) covers(t crawlOrigin) bool {
+	if o.host != t.host || (o.scheme == "https" && t.scheme != "https") {
+		return false
+	}
+	return t.port == o.port || (o.defaultPort && t.defaultPort)
 }
 
 // newCrawlTarget returns a site or allowed domain of in that orig does not
-// cover ("" if none): the same host or a subdomain of it, www and apex
-// alike, never moved from https to http (the rules the crawler uses to send
-// credentials, see crawler.credentialsAllowed).
+// cover ("" if none). Covered means one of orig's hosts (seed, URL list,
+// sitemaps, allowed domains) or its www twin, on the same port, never moved
+// from https to http: the rule the crawler uses to send credentials (see
+// crawler.credentialsAllowed). Other subdomains are not covered: on shared
+// hosting or SaaS platforms (tenant.example.com) they belong to someone else.
 func newCrawlTarget(in, orig map[string]any) string {
 	var origins []crawlOrigin
 	for _, s := range crawlURLs(orig) {
@@ -408,10 +421,11 @@ func newCrawlTarget(in, orig map[string]any) string {
 		}
 		covered := false
 		for _, o := range origins {
-			if domainCovers(o.host, t.host) && t.port == o.port && !(o.scheme == "https" && t.scheme != "https") {
-				covered = true
-				break
-			}
+			covered = covered || o.covers(t)
+		}
+		for _, d := range origDomains {
+			// An allowed domain has no scheme or port: only default ports.
+			covered = covered || (d == t.host && t.defaultPort)
 		}
 		if !covered {
 			return t.scheme + "://" + t.host
@@ -420,10 +434,10 @@ func newCrawlTarget(in, orig map[string]any) string {
 	for _, d := range allowedDomainsOf(in) {
 		covered := false
 		for _, o := range origins {
-			covered = covered || domainCovers(o.host, d)
+			covered = covered || o.host == d
 		}
 		for _, od := range origDomains {
-			covered = covered || domainCovers(od, d)
+			covered = covered || od == d
 		}
 		if !covered {
 			return d

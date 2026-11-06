@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"github.com/micelio/micelio/internal/crawler"
+	"github.com/micelio/micelio/internal/netguard"
 )
 
 // With HTTP(S)_PROXY set, webhook delivery uses the proxy, but only after
-// the target is checked (the dialer only sees the proxy's address).
+// the target is checked, and the proxy only gets the checked IP (the
+// dialer only sees the proxy's address).
 func TestWebhookClientGuardsEnvironmentProxy(t *testing.T) {
 	var proxyHits atomic.Int32
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -24,8 +26,8 @@ func TestWebhookClientGuardsEnvironmentProxy(t *testing.T) {
 	t.Setenv("NO_PROXY", "")
 
 	c := crawler.SafeClientFollowRedirects(5 * time.Second)
-	if c.Transport.(*http.Transport).Proxy == nil {
-		t.Fatal("webhook transport ignores the environment proxy")
+	if _, ok := c.Transport.(*netguard.ProxyTransport); !ok {
+		t.Fatalf("webhook transport %T does not guard the environment proxy", c.Transport)
 	}
 	if Send(Options{URL: "http://internal.example.invalid/hook"}, Payload{Event: "x"}) {
 		t.Fatal("webhook to an unresolvable host delivered through the proxy")

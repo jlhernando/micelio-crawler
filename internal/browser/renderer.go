@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -96,14 +97,25 @@ func NewRenderer(proxy string, cfg ...RenderConfig) *Renderer {
 		chromedp.Flag("no-sandbox", true),
 	)
 	var guard *netguard.Proxy
-	if proxy != "" {
-		opts = append(opts, chromedp.ProxyServer(proxy))
-	} else if len(cfg) > 0 && cfg[0].GuardNetwork {
+	if len(cfg) > 0 && cfg[0].GuardNetwork {
 		// Chrome resolves names and connects on its own, so a check made
 		// before its requests could be fooled by DNS that changes answers,
 		// and WebSockets skip request interception. All its traffic goes
-		// through the guarded proxy instead, loopback included.
-		if g, err := netguard.StartProxy(nil); err == nil {
+		// through the guarded proxy instead, loopback included. With a crawl
+		// proxy the guarded proxy chains to it, sending it the checked IP of
+		// each target, never the name (the crawl proxy would resolve it
+		// again, and DNS could point it into its own network).
+		start := func() (*netguard.Proxy, error) { return netguard.StartProxy(nil) }
+		if proxy != "" {
+			start = func() (*netguard.Proxy, error) {
+				u, err := url.Parse(proxy)
+				if err != nil {
+					return nil, err
+				}
+				return netguard.StartProxyVia(u, nil)
+			}
+		}
+		if g, err := start(); err == nil {
 			guard = g
 			opts = append(opts, chromedp.ProxyServer("http://"+g.Addr()),
 				chromedp.Flag("proxy-bypass-list", "<-loopback>"))
@@ -112,6 +124,8 @@ func NewRenderer(proxy string, cfg ...RenderConfig) *Renderer {
 			opts = append(opts, chromedp.ProxyServer("http://127.0.0.1:9"),
 				chromedp.Flag("proxy-bypass-list", "<-loopback>"))
 		}
+	} else if proxy != "" {
+		opts = append(opts, chromedp.ProxyServer(proxy))
 	}
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 

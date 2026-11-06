@@ -65,11 +65,12 @@ machine. Another interface needs a token, or the dashboard refuses to start:
 ```bash
 export MICELIO_AUTH_TOKEN="$(openssl rand -hex 32)"
 micelio ui --host 0.0.0.0 --port 3100
-# In the browser, open once: http://<host>:3100/?token=<the token>
+# In the browser, open http://<host>:3100 and enter the token once
 ```
 
-The `?token=` visit sets a login cookie (derived from the token, never the token
-itself), so the dashboard works as usual afterwards. Requests from other
+Logging in sets a login cookie (derived from the token, never the token
+itself), so the dashboard works as usual afterwards. Repeated wrong tokens
+are slowed down (up to 5 minutes between tries). Requests from other
 websites are refused, so a page you visit cannot start crawls or updates
 through your local dashboard.
 
@@ -273,7 +274,10 @@ The New Crawl form groups advanced controls by purpose:
 - **Rate Limiting & Safety**: retries per URL, total crawl time, adaptive rate,
   and memory limits.
 - **HTTP & Authentication**: user-agent presets, headers, cookies, proxy, stealth
-  fingerprinting, and Tor circuit rotation.
+  fingerprinting, and Tor circuit rotation. The proxy field only takes the
+  proxy the dashboard was started with (`micelio ui --trusted-proxy <url>` or
+  `MICELIO_TRUSTED_PROXY`, `tor` for Tor); any other proxy is refused, because
+  a proxy can reach this computer and its network.
 - **JavaScript Rendering**: headless Chrome rendering, resource blocking, render
   timeout, DOM/render comparison, and page snippets.
 - **Custom Extraction**: named CSS selectors and literal or regular-expression
@@ -669,7 +673,10 @@ still uses `-o` and `--db`). A schedule's output folder must be a relative path
 inside the folder `micelio ui` runs in.
 
 Each request is also capped. Change a cap with an environment variable (also
-read from `~/.micelio/micelio.env`); the CLI does not use them:
+read from `~/.micelio/micelio.env`). The CLI uses only the import caps,
+`MICELIO_MAX_CRAWL_PAGES` (for `micelio import` when it imports into
+`~/.micelio` itself: no dashboard running, or `--local`) and the log limits
+noted below:
 
 | Variable | Default | Caps |
 |---|---|---|
@@ -679,9 +686,23 @@ read from `~/.micelio/micelio.env`); the CLI does not use them:
 | `MICELIO_MAX_LOG_PENDING` | 8 | Running plus waiting log analyses |
 | `MICELIO_MAX_IMPORT_GB` | 32 | One imported crawl file |
 | `MICELIO_MAX_IMPORT_DECOMPRESSED_GB` | 64 | A `.gz`/`.zst` JSONL import once decompressed |
+| `MICELIO_MAX_LOG_URLS` | 30,000,000 | Distinct URLs one log analysis keeps; hits on more go to an `(other URLs)` row and the results show a warning |
+| `MICELIO_MAX_LOG_DECOMPRESSED_GB` | 64 | One `.gz` log file once decompressed (the file fails past it) |
+| `MICELIO_LOG_MEMLIMIT_GB` | 4 | Soft memory limit while a log analysis runs with GC off, only when no `--memlimit`/`GOMEMLIMIT` is set |
+| `MICELIO_MAX_VERIFY_IPS` | 5,000 | Bot IPs one verification checks with DNS (shared between bots; the rest show as skipped) |
+
+The log limits also apply to `micelio logs`.
 
 Concurrency (100), depth (1,000), render timeout (600 s) and link suggestions
 (100,000) have fixed caps.
+
+Connections are bounded too: request headers must arrive within 10 s, an idle
+keep-alive connection closes after 2 min, headers are capped at 64 KB, and a
+request body or response that makes no progress for 2 min is cut (uploads and
+exports of any length work while bytes keep moving). The live-update WebSocket
+accepts 64 browser tabs at once and closes a client that sends a message over
+4 KB. One log×crawl merge runs at a time (others wait); it reads the log URLs
+50,000 at a time instead of loading them all.
 
 **Upgrading from an older version.** Move key files into `~/.micelio/keys` and
 snippets into `~/.micelio/snippets`, then select them again in Settings or New

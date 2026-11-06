@@ -2,12 +2,12 @@ package storage
 
 import (
 	"bufio"
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/micelio/micelio/internal/csvsafe"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -15,7 +15,7 @@ import (
 type HeadResultWriter struct {
 	file   *os.File
 	buf    *bufio.Writer
-	csv    *csv.Writer
+	csv    *csvsafe.Writer
 	format string
 	count  int
 }
@@ -34,7 +34,7 @@ func NewHeadResultWriter(path string, format string) (*HeadResultWriter, error) 
 	}
 
 	if format == "csv" {
-		w.csv = csv.NewWriter(w.buf)
+		w.csv = csvsafe.NewWriter(w.buf)
 		if err := w.csv.Write(headCSVHeaders()); err != nil {
 			f.Close()
 			return nil, fmt.Errorf("write CSV header: %w", err)

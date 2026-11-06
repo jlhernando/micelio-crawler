@@ -281,6 +281,7 @@ func TestURLExplain(t *testing.T) {
 
 	type explain struct {
 		URL        string   `json:"url"`
+		FinalURL   string   `json:"finalUrl"`
 		Indexable  bool     `json:"indexable"`
 		Reasons    []string `json:"reasons"`
 		StatusCode int      `json:"statusCode"`
@@ -315,7 +316,7 @@ func TestURLExplain(t *testing.T) {
 	// A redirect is not indexed itself, whatever its target is.
 	var old explain
 	callOK(t, cs, "url_explain", map[string]any{"id": f.crawlID, "url": f.url("/old")}, &old)
-	if old.Indexable || !anyContains(old.Reasons, "301") || !anyContains(old.Reasons, f.url("/a")) {
+	if old.Indexable || !anyContains(old.Reasons, "301") || old.FinalURL != f.url("/a") {
 		t.Errorf("/old = %+v", old)
 	}
 

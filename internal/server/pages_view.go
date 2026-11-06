@@ -27,7 +27,13 @@ func pageQueryFromValues(q url.Values) pageQuery {
 		robotsBlocked:  q.Get("robotsBlocked"),
 		sortField:      q.Get("sort"),
 		sortOrder:      q.Get("order"),
-		segment:        q.Get("segment"),
+		segment:        canonicalSegment(q.Get("segment")),
+	}
+	// "all" means no filter: one cache key for both spellings.
+	for _, f := range []*string{&pq.status, &pq.indexable, &pq.template, &pq.classification, &pq.robotsBlocked} {
+		if *f == "all" {
+			*f = ""
+		}
 	}
 	if pq.sortField != "" && !validSortFields[pq.sortField] {
 		pq.sortField = "" // ignore unknown sort fields
@@ -36,6 +42,36 @@ func pageQueryFromValues(q url.Values) pageQuery {
 		pq.sortOrder = "asc"
 	}
 	return pq
+}
+
+// noSegmentMatch is the canonical segment of a filter on an unknown
+// dimension with a value: it matches no page.
+const noSegmentMatch = "\x00:"
+
+// segmentDims are the dimensions pageInSegment understands.
+var segmentDims = func() map[string]bool {
+	m := map[string]bool{"rule": true}
+	for _, d := range types.SegmentDimensions {
+		m[d] = true
+	}
+	return m
+}()
+
+// canonicalSegment maps every segment spelling to the one that filters
+// the same pages, so junk values ("x1", "x2", "nope:1"...) share a cache
+// entry instead of each forcing a full-crawl sort.
+func canonicalSegment(seg string) string {
+	dim, value, ok := strings.Cut(seg, ":")
+	if !ok || dim == "" {
+		return "" // ignored by pageIndices
+	}
+	if !segmentDims[dim] {
+		if value == "" {
+			return "" // every page has "" for an unknown dimension
+		}
+		return noSegmentMatch
+	}
+	return seg
 }
 
 func (pq pageQuery) key() string {
@@ -54,6 +90,9 @@ func pageIndices(pages []*types.PageData, pq pageQuery) []int32 {
 		(pq.robotsBlocked == "" || pq.robotsBlocked == "all") &&
 		pq.issue == ""
 
+	if pq.segment == noSegmentMatch {
+		return []int32{}
+	}
 	var dupSet map[string]bool
 	if pq.issue == "duplicate-titles" || pq.issue == "duplicate-descriptions" {
 		dupSet = computeDuplicateSet(pages, pq.issue)
@@ -153,22 +192,44 @@ func sortPageIndices(pages []*types.PageData, idx []int32, field, order string) 
 // (4 bytes per row), so paging through a sorted or filtered table does not
 // copy and re-sort every page on each request.
 type pageViewCache struct {
-	mu      sync.Mutex
-	gen     string
-	entries map[string][]int32
-	order   []string
+	mu       sync.Mutex
+	gen      string
+	entries  map[string][]int32
+	order    []string
+	inflight map[string]*viewCall // same-key requests wait for one computation
+}
+
+// viewCall is one in-flight view computation.
+type viewCall struct {
+	done chan struct{}
+	idx  []int32
 }
 
 const maxPageViews = 8
+
+// viewSlots caps how many full-crawl filter/sort computations run at
+// once across all crawls. Each one allocates an index the size of the
+// crawl, so a burst of distinct queries cannot multiply memory and CPU.
+var viewSlots = make(chan struct{}, 4)
+
+// computePageIndices is swapped in tests to count computations.
+var computePageIndices = pageIndices
+
+// pagesGen identifies the current page set: it changes whenever pages
+// are replaced or reloaded, or deferred analysis finishes. Caller holds
+// r.mu (read).
+func (r *CrawlResults) pagesGen() string {
+	if len(r.Pages) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%p/%d/%t/%t", r.Pages[0], len(r.Pages), r.AnalysisPending, r.PagesReady)
+}
 
 // pageView returns cached indices for pq, computing them on a miss. The
 // cache resets whenever the page set changes (pages replaced or reloaded,
 // deferred analysis finished). Caller holds r.mu (read).
 func (r *CrawlResults) pageView(pq pageQuery) []int32 {
-	gen := ""
-	if len(r.Pages) > 0 {
-		gen = fmt.Sprintf("%p/%d/%t/%t", r.Pages[0], len(r.Pages), r.AnalysisPending, r.PagesReady)
-	}
+	gen := r.pagesGen()
 	key := pq.key()
 	c := &r.views
 	c.mu.Lock()
@@ -179,9 +240,34 @@ func (r *CrawlResults) pageView(pq pageQuery) []int32 {
 		c.mu.Unlock()
 		return idx
 	}
+	flightKey := gen + "\x01" + key
+	if call, ok := c.inflight[flightKey]; ok {
+		c.mu.Unlock()
+		<-call.done
+		return call.idx
+	}
+	call := &viewCall{done: make(chan struct{})}
+	if c.inflight == nil {
+		c.inflight = map[string]*viewCall{}
+	}
+	c.inflight[flightKey] = call
 	c.mu.Unlock()
 
-	idx := pageIndices(r.Pages, pq)
+	var idx []int32
+	func() {
+		// Release waiters and the slot even if the computation panics
+		// (net/http recovers handler panics; waiters would hang).
+		viewSlots <- struct{}{}
+		defer func() {
+			<-viewSlots
+			c.mu.Lock()
+			call.idx = idx
+			delete(c.inflight, flightKey)
+			close(call.done)
+			c.mu.Unlock()
+		}()
+		idx = computePageIndices(r.Pages, pq)
+	}()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

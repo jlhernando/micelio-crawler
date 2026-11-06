@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/micelio/micelio/internal/analysis"
 	"github.com/micelio/micelio/internal/crawler"
+	"github.com/micelio/micelio/internal/termsafe"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -41,7 +43,7 @@ func agentCheckCmd() *cobra.Command {
 			}
 			rep := crawler.CheckAgentReadiness(ctx, siteURL, opts)
 			if rep.Error != "" {
-				return fmt.Errorf("%s: %s", siteURL, rep.Error)
+				return fmt.Errorf("%s: %s", termsafe.String(siteURL), termsafe.String(rep.Error))
 			}
 			stats := analysis.BuildAgentReadiness([]types.AgentHostReport{rep}, nil)
 			if jsonOut {
@@ -49,7 +51,7 @@ func agentCheckCmd() *cobra.Command {
 				enc.SetIndent("", "  ")
 				return enc.Encode(stats)
 			}
-			printAgentReport(stats.Hosts[0])
+			printAgentReport(os.Stdout, stats.Hosts[0])
 			return nil
 		},
 	}
@@ -59,28 +61,31 @@ func agentCheckCmd() *cobra.Command {
 	return cmd
 }
 
-func printAgentReport(h types.AgentHostReport) {
-	fmt.Printf("\nAgent readiness: %s\n", h.URL)
-	fmt.Printf("Score %d/100 · %s · %d requests\n", h.Score, h.Level, h.Requests)
+// printAgentReport prints the report for a person. Every string from the
+// checked site (evidence, robots.txt values, Content-Signal) goes through
+// termsafe: a site must not send escape sequences to the terminal.
+func printAgentReport(w io.Writer, h types.AgentHostReport) {
+	fmt.Fprintf(w, "\nAgent readiness: %s\n", termsafe.String(h.URL))
+	fmt.Fprintf(w, "Score %d/100 · %s · %d requests\n", h.Score, termsafe.String(h.Level), h.Requests)
 	marks := map[string]string{types.AgentPass: "PASS", types.AgentWarn: "WARN", types.AgentFail: "FAIL", types.AgentNA: " -- "}
 	for _, cat := range h.Categories {
 		score := "n/a"
 		if cat.Score >= 0 {
 			score = fmt.Sprintf("%d", cat.Score)
 		}
-		fmt.Printf("\n%s (%s)\n", strings.ToUpper(cat.Category), score)
+		fmt.Fprintf(w, "\n%s (%s)\n", strings.ToUpper(cat.Category), score)
 		for _, c := range h.Checks {
 			if c.Category != cat.Category {
 				continue
 			}
-			fmt.Printf("  [%s] %-45s %s\n", marks[c.Status], c.Title, c.Evidence)
+			fmt.Fprintf(w, "  [%s] %-45s %s\n", marks[c.Status], termsafe.String(c.Title), termsafe.String(c.Evidence))
 			if c.Fix != "" {
-				fmt.Printf("         fix: %s\n", c.Fix)
+				fmt.Fprintf(w, "         fix: %s\n", termsafe.String(c.Fix))
 			}
 		}
 	}
 	if len(h.Bots) > 0 {
-		fmt.Println("\nAI BOTS (robots.txt rules for the checked page)")
+		fmt.Fprintln(w, "\nAI BOTS (robots.txt rules for the checked page)")
 		for _, b := range h.Bots {
 			state := "unknown"
 			if b.Allowed != nil {
@@ -92,11 +97,11 @@ func printAgentReport(h types.AgentHostReport) {
 			if b.LiveStatus != 0 {
 				state += fmt.Sprintf(", live %d", b.LiveStatus)
 			}
-			fmt.Printf("  %-22s %-12s %-9s %s\n", b.Bot, b.Owner, b.Purpose, state)
+			fmt.Fprintf(w, "  %-22s %-12s %-9s %s\n", termsafe.String(b.Bot), termsafe.String(b.Owner), termsafe.String(b.Purpose), state)
 		}
 	}
 	if len(h.ContentSignals) > 0 {
-		fmt.Printf("\nContent-Signal: %s\n", strings.Join(h.ContentSignals, " | "))
+		fmt.Fprintf(w, "\nContent-Signal: %s\n", strings.Join(termsafe.Strings(h.ContentSignals), " | "))
 	}
-	fmt.Println()
+	fmt.Fprintln(w)
 }

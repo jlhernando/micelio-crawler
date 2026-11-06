@@ -1,6 +1,7 @@
 import { createWriteStream, type WriteStream } from 'node:fs';
 import { format } from 'fast-csv';
 import type { HeadResult } from './types.js';
+import { csvSafeRecord } from './sanitize.js';
 
 export class HeadResultWriter {
   private stream: WriteStream;
@@ -39,7 +40,7 @@ export class HeadResultWriter {
   }
 
   private flattenForCsv(result: HeadResult): Record<string, string | number | boolean | null> {
-    return {
+    return csvSafeRecord({
       url: result.url,
       final_url: result.finalUrl,
       status_code: result.statusCode,
@@ -57,6 +58,6 @@ export class HeadResultWriter {
       referrer_policy: result.referrerPolicy || '',
       cache_control: result.cacheControl || '',
       error: result.error || '',
-    };
+    });
   }
 }

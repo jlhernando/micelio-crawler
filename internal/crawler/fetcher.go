@@ -3,6 +3,7 @@ package crawler
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -129,7 +130,7 @@ func ssrfSafeDialer(base *net.Dialer, cache *dnsCache) func(ctx context.Context,
 		if cache != nil {
 			ips, err = cache.LookupIPAddr(ctx, host)
 		} else {
-			ips, err = net.DefaultResolver.LookupIPAddr(ctx, host)
+			ips, err = lookupHost(ctx, host)
 		}
 		if err != nil {
 			return nil, err
@@ -143,6 +144,16 @@ func ssrfSafeDialer(base *net.Dialer, cache *dnsCache) func(ctx context.Context,
 		return base.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
 	}
 }
+
+// proxyDial connects to a proxy the local user configured (--proxy, Tor,
+// HTTP(S)_PROXY, the dashboard's --trusted-proxy). It accepts loopback and
+// private addresses; targets reached through the proxy are still checked
+// (netguard.ProxyTransport).
+var proxyDial netguard.DialFunc = netguard.ProxyDialer(30 * time.Second).DialContext
+
+// crawlTLSConfig, when set, is the TLS config of crawl clients (tests only:
+// trusts a test server's certificate).
+var crawlTLSConfig *tls.Config
 
 // DefaultClient returns an HTTP client configured for crawling.
 // It does NOT follow redirects (we track them manually).
@@ -169,11 +180,26 @@ func newClient(timeout time.Duration, proxy *url.URL, ssrfProtect bool, cache *d
 	if proxy != nil {
 		transport.Proxy = http.ProxyURL(proxy)
 	}
+	var rt http.RoundTripper = transport
 	if ssrfProtect {
-		transport.DialContext = ssrfSafeDialer(&net.Dialer{
+		dial := ssrfSafeDialer(&net.Dialer{
 			Timeout:   30 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}, cache)
+		transport.DialContext = dial
+		// A proxy (--proxy, Tor, or HTTP(S)_PROXY) would resolve the target
+		// itself, past the dialer's check: give it the checked IP instead.
+		// The proxy itself is the local user's choice (the dashboard only
+		// accepts its --trusted-proxy), so it is reached even on loopback
+		// or a private address: Tor listens on 127.0.0.1:9050.
+		lookup := netguard.LookupFunc(lookupHost)
+		if cache != nil {
+			lookup = cache.LookupIPAddr
+		}
+		rt = netguard.NewProxyTransport(transport, transport.Proxy, proxyDial, lookup)
+	}
+	if crawlTLSConfig != nil {
+		transport.TLSClientConfig = crawlTLSConfig.Clone()
 	}
 	jar, _ := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	return &http.Client{
@@ -182,7 +208,7 @@ func newClient(timeout time.Duration, proxy *url.URL, ssrfProtect bool, cache *d
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse // Don't follow redirects
 		},
-		Transport: transport,
+		Transport: rt,
 	}
 }
 
@@ -190,19 +216,20 @@ func newClient(timeout time.Duration, proxy *url.URL, ssrfProtect bool, cache *d
 // Use for webhook dispatch or other cases where redirect following is needed.
 // Environment proxies are used, but a proxy resolves and reaches the target
 // itself, past the dialer's private-address check, so the target is checked
-// before the request goes to the proxy (netguard.GuardProxy). Every redirect
-// hop is checked too (netguard.CheckRedirect).
+// and resolved here and the proxy only gets the checked IP
+// (netguard.ProxyTransport). Every redirect hop is checked too
+// (netguard.CheckRedirect).
 func SafeClientFollowRedirects(timeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = netguard.GuardProxy(http.ProxyFromEnvironment)
-	transport.DialContext = ssrfSafeDialer(&net.Dialer{
+	dial := ssrfSafeDialer(&net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}, nil)
+	transport.DialContext = dial
 	return &http.Client{
 		Timeout:       timeout,
 		CheckRedirect: netguard.CheckRedirect,
-		Transport:     transport,
+		Transport:     netguard.NewProxyTransport(transport, http.ProxyFromEnvironment, proxyDial, nil),
 	}
 }
 
@@ -644,9 +671,12 @@ func setHeaders(req *http.Request, opts FetchOptions) {
 
 // credentialsAllowed reports whether the crawl's cookies and custom headers
 // (Authorization, X-Api-Key...), meant for the site at from, may be sent to
-// to. Like net/http on redirects: same host or a subdomain of it, plus the
-// www/apex pair (www.example.com <-> example.com, a common first redirect),
-// and never after a downgrade from https to http.
+// to: the same host or its www/apex twin (www.example.com <-> example.com, a
+// common first redirect), on the same port, and never after a downgrade
+// from https to http. Other subdomains are not trusted: on shared hosting
+// or SaaS platforms (tenant.example.com) they belong to someone else.
+// Requests that start on another in-scope host (an allowed domain) use that
+// host as from, so they still get the credentials.
 func credentialsAllowed(from, to *url.URL) bool {
 	if from == nil || to == nil {
 		return false
@@ -658,8 +688,22 @@ func credentialsAllowed(from, to *url.URL) bool {
 	if fh == "" {
 		return false
 	}
-	return th == fh || strings.HasSuffix(th, "."+fh) ||
-		strings.TrimPrefix(th, "www.") == strings.TrimPrefix(fh, "www.")
+	if effectivePort(from) != effectivePort(to) && !(from.Port() == "" && to.Port() == "") {
+		return false
+	}
+	return th == fh || strings.TrimPrefix(th, "www.") == strings.TrimPrefix(fh, "www.")
+}
+
+// effectivePort is u's port, or the scheme's default (an http -> https
+// upgrade moves 80 -> 443 without a real port change).
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return "80"
 }
 
 // setHeadersFor sets the request headers. With creds false the custom

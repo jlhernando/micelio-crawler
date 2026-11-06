@@ -1,7 +1,6 @@
 package netguard
 
 import (
-	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -27,53 +26,11 @@ func TestHTTPClientRefusesPrivateAddress(t *testing.T) {
 	}
 }
 
-// With a proxy in use, the dialer only sees the proxy, so the target is
-// checked before the request is handed to it: literal private hosts and
-// names resolving to a private address never reach the proxy.
-func TestGuardProxyChecksTarget(t *testing.T) {
-	var proxyHits atomic.Int32
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { proxyHits.Add(1) }))
-	defer proxy.Close()
-	pu, _ := url.Parse(proxy.URL)
-
-	old := lookupIPAddr
-	defer func() { lookupIPAddr = old }()
-	lookupIPAddr = func(_ context.Context, host string) ([]net.IPAddr, error) {
-		switch host {
-		case "internal.example":
-			return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}, {IP: net.ParseIP("10.0.0.5")}}, nil
-		case "public.example":
-			return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, nil
-		}
-		return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
-	}
-
-	c := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: GuardProxy(http.ProxyURL(pu))}}
-	for _, raw := range []string{
-		"http://127.0.0.1/", "http://169.254.169.254/latest/meta-data", "http://localhost/",
-		"http://[::1]/", "http://internal.example/", "http://missing.example/",
-	} {
-		if _, err := c.Get(raw); err == nil {
-			t.Errorf("%s: request allowed through the proxy", raw)
-		}
-	}
-	if proxyHits.Load() != 0 {
-		t.Fatalf("proxy reached %d times for blocked targets", proxyHits.Load())
-	}
-	resp, err := c.Get("http://public.example/")
-	if err != nil {
-		t.Fatalf("public target refused: %v", err)
-	}
-	resp.Body.Close()
-	if proxyHits.Load() != 1 {
-		t.Fatal("public target did not go through the proxy")
-	}
-}
-
 // HTTPClient honours the environment proxy (some machines have no other
-// way out), guarded by GuardProxy.
+// way out), guarded by ProxyTransport.
 func TestHTTPClientUsesGuardedEnvironmentProxy(t *testing.T) {
-	if HTTPClient(time.Second).Transport.(*http.Transport).Proxy == nil {
+	pt, ok := HTTPClient(time.Second).Transport.(*ProxyTransport)
+	if !ok || pt.proxy == nil {
 		t.Fatal("transport ignores the environment proxy")
 	}
 }

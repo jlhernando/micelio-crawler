@@ -107,7 +107,8 @@ func TestRedactURL(t *testing.T) {
 	}{
 		{"https://hooks.slack.com/services/T00/B00/xxxx", "https://hooks.slack.com/..."},
 		{"http://localhost:8080/webhook?token=secret", "http://localhost:8080/..."},
-		{"not-a-url", "not-a-url"},
+		{"not-a-url", "[invalid URL]"},
+		{"http://%zz/hook?token=secret", "[invalid URL]"},
 	}
 	for _, tc := range tests {
 		got := RedactURL(tc.input)

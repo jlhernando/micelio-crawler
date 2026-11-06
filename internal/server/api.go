@@ -2,7 +2,6 @@ package server
 
 import (
 	"compress/gzip"
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/micelio/micelio/internal/analysis"
 	"github.com/micelio/micelio/internal/crawler"
+	"github.com/micelio/micelio/internal/csvsafe"
 	"github.com/micelio/micelio/internal/logs"
 	"github.com/micelio/micelio/internal/report"
 	"github.com/micelio/micelio/internal/scheduler"
@@ -97,6 +97,12 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 	mux.HandleFunc("POST /api/crawl/start", func(w http.ResponseWriter, r *http.Request) {
 		config, err := readJSON(r)
 		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// Only the trusted proxy (micelio ui --trusted-proxy); its masked
+		// form becomes the real URL before the other secrets are restored.
+		if err := manager.applyTrustedProxy(config); err != nil {
 			jsonError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -195,6 +201,10 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			var orig map[string]interface{}
 			if old, err := store.GetCrawlJob(r.PathValue("id")); err == nil && old != nil {
 				orig = old.Config
+			}
+			if err := manager.applyTrustedProxy(configOverride); err != nil {
+				jsonError(w, err.Error(), http.StatusBadRequest)
+				return
 			}
 			if err := restoreConfigSecrets(configOverride, orig); err != nil {
 				jsonError(w, err.Error(), http.StatusBadRequest)
@@ -629,7 +639,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		}
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=crawl-%s.csv", r.PathValue("id")))
-		csvWriter := csv.NewWriter(w)
+		csvWriter := csvsafe.NewWriter(w)
 		csvWriter.Write([]string{"url", "statusCode", "title", "metaDescription", "h1", "wordCount", "depth", "internalLinks", "externalLinks", "inlinks", "canonical", "indexable"})
 		for _, p := range results.Pages {
 			title := ""
@@ -684,7 +694,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		}
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=crawl-%s-filtered-%d.csv", r.PathValue("id"), len(filtered)))
-		csvWriter := csv.NewWriter(w)
+		csvWriter := csvsafe.NewWriter(w)
 		csvWriter.Write([]string{"url", "statusCode", "title", "metaDescription", "h1", "wordCount", "depth", "internalLinks", "externalLinks", "inlinks", "canonical", "indexable"})
 		for _, p := range filtered {
 			title := ""
@@ -1220,6 +1230,15 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			manager.emit(ProgressEvent{Type: "merge_progress", Data: data})
 		}
 
+		// One merge at a time: the pairs-table writer holds the store lock
+		// anyway, and each merge holds the crawl's page list in memory.
+		select {
+		case mergeSlot <- struct{}{}:
+			defer func() { <-mergeSlot }()
+		case <-r.Context().Done():
+			return
+		}
+
 		emitPhase("loading_log_stats", nil)
 		raw, err := store.LoadLogStats(logID)
 		if err != nil || raw == nil {
@@ -1341,30 +1360,24 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			"logUrls":   urlCount,
 		})
 
-		// Load all log URLs into memory so the DB lock is released before the
-		// merge begins. ~100 B/row × 5M rows ≈ 500 MB — acceptable.
+		// Stream the log URLs in batches on the URL connection: memory stays
+		// at one batch (a log with millions of unique URLs used to be
+		// loaded whole), and the store lock the writer below holds is not
+		// needed to read them.
 		usingCappedFallback := urlCount == 0
-		var logURLs []logs.URLStat
-		if usingCappedFallback {
-			logURLs = logStats.TopURLs
-		} else {
-			emitPhase("loading_urls", map[string]interface{}{"urlCount": urlCount})
-			var loadErr error
-			logURLs, loadErr = store.LoadAllLogURLStats(logID)
-			if loadErr != nil {
-				emitPhase("error", map[string]interface{}{"error": loadErr.Error()})
-				jsonError(w, "failed to load log URLs: "+loadErr.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-
 		iterator := func(fn func(logs.URLStat) error) error {
-			for i := range logURLs {
-				if err := fn(logURLs[i]); err != nil {
-					return err
+			if usingCappedFallback {
+				for i := range logStats.TopURLs {
+					if err := fn(logStats.TopURLs[i]); err != nil {
+						return err
+					}
 				}
+				return nil
 			}
-			return nil
+			return store.IterateLogURLStatsBatched(logID, mergeURLBatch, fn)
+		}
+		if !usingCappedFallback {
+			emitPhase("loading_urls", map[string]interface{}{"urlCount": urlCount})
 		}
 
 		// Pipe merged pages to a writer goroutine that does everything in a

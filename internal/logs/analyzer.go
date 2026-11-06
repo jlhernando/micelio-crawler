@@ -1,18 +1,20 @@
 package logs
 
 import (
+	"fmt"
 	"hash/maphash"
 	"log"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
 	"sort"
 	"sync"
+
+	"github.com/micelio/micelio/internal/gctune"
 )
 
 const maxTopURLs = 500
 const maxBotURLs = 100_000
-const maxBotIPs  = 10_000
+const maxBotIPs = 10_000
 
 // URLStatsFlusher is called by the aggregator to persist URL stats in batches.
 // Called whenever the in-memory URL map exceeds a threshold, and once at the
@@ -23,8 +25,8 @@ type URLStatsFlusher func(batch []URLStat) error
 type AnalysisResult struct {
 	Stats      *LogStats
 	Format     Format
-	BotIPs     map[string]map[string]struct{}    // bot name -> set of IPs
-	AllURLs    []URLStat                         // legacy: materialized URL list
+	BotIPs     map[string]map[string]struct{}     // bot name -> set of IPs
+	AllURLs    []URLStat                          // legacy: materialized URL list
 	StreamURLs func(fn func(URLStat) error) error // streams sorted bot URLs without materializing
 }
 
@@ -32,8 +34,7 @@ type AnalysisResult struct {
 // If flusher is non-nil, per-URL stats are flushed incrementally (batches of ~500K URLs)
 // during parsing instead of accumulating in memory.
 func AnalyzeFull(path string, formatHint Format, onProgress ProgressFunc, flusher URLStatsFlusher) (*AnalysisResult, error) {
-	prevGC := debug.SetGCPercent(-1)
-	defer debug.SetGCPercent(prevGC)
+	defer suppressGC()()
 	a := newAggregator()
 	a.urlFlusher = flusher
 	format, totalLines, err := ParseFileWithFormat(path, formatHint, a.add, onProgress)
@@ -56,8 +57,24 @@ func AnalyzeFull(path string, formatHint Format, onProgress ProgressFunc, flushe
 	return res, nil
 }
 
+// suppressGC switches GC off while an analysis parses and returns the
+// function that undoes it. The aggregator's maps create millions of
+// pointer-bearing entries that dominate GC scan time (58%+ CPU in
+// profiles). With GC off the soft memory limit still makes the runtime
+// collect near the cap, so a default limit (MICELIO_LOG_MEMLIMIT_GB) is set
+// when the process has none. gctune counts concurrent analyses so the last
+// one to finish restores the original settings (plain save/restore could
+// leave GC off for good). No explicit runtime.GC(): a full scan of millions
+// of map entries would block for minutes.
+func suppressGC() (restore func()) {
+	return gctune.Hold(-1, limits().MemLimit)
+}
+
 type aggregator struct {
 	stats       LogStats
+	maxURLs     int  // distinct URLs kept in memory (MICELIO_MAX_LOG_URLS)
+	urlsCapped  bool // MaxURLs reached: new URLs go to OtherURLsPath
+	timeCapped  bool // a timeline map reached maxTimeKeys
 	urlHits     map[string]*urlAccum
 	botURLSets  map[string]map[uint64]struct{} // path hash → struct{} (saves ~100 bytes/entry vs full string)
 	botURLCaps  map[string]bool                // true if exceeded cap
@@ -101,9 +118,10 @@ func newAggregator() *aggregator {
 			BotHourlyHits:      make(map[string]map[string]int64),
 			HourlyHitsTimeline: make(map[string]int64),
 		},
-		urlHits:    make(map[string]*urlAccum),
-		botURLSets: make(map[string]map[uint64]struct{}),
-		botURLCaps: make(map[string]bool),
+		maxURLs:     limits().MaxURLs,
+		urlHits:     make(map[string]*urlAccum),
+		botURLSets:  make(map[string]map[uint64]struct{}),
+		botURLCaps:  make(map[string]bool),
 		botIPs:      make(map[string]map[string]struct{}),
 		botIPCaps:   make(map[string]bool),
 		botHeatmaps: make(map[string]*[7][24]int64),
@@ -127,7 +145,10 @@ func (a *aggregator) add(e *LogEntry) {
 		a.lastTime = ts
 	}
 
-	// Status codes
+	// Status codes (garbage values count as 0 so the map stays small).
+	if e.Status < 0 || e.Status > maxStatusCode {
+		e.Status = 0
+	}
 	a.stats.StatusCodes[e.Status]++
 	a.stats.StatusGroups[statusGroup(e.Status)]++
 
@@ -145,13 +166,12 @@ func (a *aggregator) add(e *LogEntry) {
 	a.stats.Heatmap[weekday][hour]++
 
 	// Daily
-	a.stats.DailyHits[day]++
+	a.incTime(a.stats.DailyHits, day)
 
 	// Hourly timeline (format "2026-04-07T14") — total hits per hour-stamp.
 	// Matches ts[:13] which is day + "T" + HH.
 	if len(ts) >= 13 {
-		hourKey := ts[:13]
-		a.stats.HourlyHitsTimeline[hourKey]++
+		a.incTime(a.stats.HourlyHitsTimeline, ts[:13])
 	}
 
 	// URL tracking
@@ -226,9 +246,9 @@ func (a *aggregator) addBot(e *LogEntry, ts, day string) {
 	}
 
 	// Bot daily + hourly hits (maps pre-allocated above)
-	a.stats.BotDailyHits[botName][day]++
+	a.incTime(a.stats.BotDailyHits[botName], day)
 	if len(ts) >= 13 {
-		a.stats.BotHourlyHits[botName][ts[:13]]++
+		a.incTime(a.stats.BotHourlyHits[botName], ts[:13])
 	}
 
 	if e.Bot.Mobile {
@@ -243,18 +263,43 @@ func (a *aggregator) addBot(e *LogEntry, ts, day string) {
 		if a.stats.AIBotTrends[botName] == nil {
 			a.stats.AIBotTrends[botName] = make(map[string]int64)
 		}
-		a.stats.AIBotTrends[botName][day]++
+		a.incTime(a.stats.AIBotTrends[botName], day)
 	}
 	if e.Status >= 400 {
 		a.errorHits++
 	}
 }
 
+// incTime counts one hit for a day or hour-stamp key. Timestamps come from
+// the log, so a hostile file could hold millions of distinct ones: past
+// maxTimeKeys keys new ones are dropped (the length check keeps the common
+// path to one map operation).
+func (a *aggregator) incTime(m map[string]int64, key string) {
+	if len(m) < maxTimeKeys {
+		m[key]++
+		return
+	}
+	if _, ok := m[key]; ok {
+		m[key]++
+		return
+	}
+	a.timeCapped = true
+}
+
 func (a *aggregator) trackURL(e *LogEntry) {
 	u, ok := a.urlHits[e.Path]
 	if !ok {
-		u = &urlAccum{}
-		a.urlHits[e.Path] = u
+		key := e.Path
+		if len(a.urlHits) >= a.maxURLs {
+			// Too many distinct URLs in memory: count the hit, not the URL.
+			a.urlsCapped = true
+			key = OtherURLsPath
+			u = a.urlHits[key]
+		}
+		if u == nil {
+			u = &urlAccum{}
+			a.urlHits[key] = u
+		}
 	}
 	u.hits++
 	u.bytes += e.Bytes
@@ -371,6 +416,18 @@ func StreamBotURLsSorted(urlHits map[string]*urlAccum, fn func(URLStat) error) e
 
 func (a *aggregator) finalize() *LogStats {
 	a.stats.DateRange = [2]string{a.firstTime, a.lastTime}
+	if a.urlsCapped {
+		a.stats.Warnings = append(a.stats.Warnings, fmt.Sprintf(
+			"More than %d distinct URLs: hits on further URLs are counted under %q (raise MICELIO_MAX_LOG_URLS to keep them).",
+			a.maxURLs, OtherURLsPath))
+	}
+	if a.timeCapped {
+		a.stats.Warnings = append(a.stats.Warnings, fmt.Sprintf(
+			"More than %d distinct days or hours in the log: hits on further dates are left out of the timelines.", maxTimeKeys))
+	}
+	for _, w := range a.stats.Warnings {
+		log.Printf("[logs] %s", w)
+	}
 
 	// Set unique URL counts on bot stats
 	for name, bs := range a.stats.BotHits {
@@ -492,16 +549,16 @@ func (a *aggregator) buildBotHeatmaps() map[string][7][24]int64 {
 
 // MultiProgress describes per-file progress during a multi-file parse.
 type MultiProgress struct {
-	FileIndex    int
-	Filename     string
-	Processed    int64 // lines processed in this file
-	BytesRead    int64 // bytes read from this file
-	FileSize     int64 // total size of this file
-	FilesTotal   int
-	FilesDone    int   // files that have finished parsing
-	TotalBytes   int64 // aggregate bytesRead across all files
-	TotalSize    int64 // aggregate fileSize across all files
-	TotalLines   int64 // aggregate processed lines across all files
+	FileIndex  int
+	Filename   string
+	Processed  int64 // lines processed in this file
+	BytesRead  int64 // bytes read from this file
+	FileSize   int64 // total size of this file
+	FilesTotal int
+	FilesDone  int   // files that have finished parsing
+	TotalBytes int64 // aggregate bytesRead across all files
+	TotalSize  int64 // aggregate fileSize across all files
+	TotalLines int64 // aggregate processed lines across all files
 }
 
 // MultiProgressFunc receives per-file progress events from AnalyzeMulti.
@@ -509,12 +566,12 @@ type MultiProgressFunc func(MultiProgress)
 
 // FileResult holds the per-file outcome of a multi-file analysis.
 type FileResult struct {
-	Path       string
-	Filename   string
-	Size       int64
-	Lines      int64
-	Format     Format
-	Error      string
+	Path     string
+	Filename string
+	Size     int64
+	Lines    int64
+	Format   Format
+	Error    string
 }
 
 // MultiAnalysisResult is the combined output of AnalyzeMulti.
@@ -523,7 +580,7 @@ type MultiAnalysisResult struct {
 	Format     Format
 	Files      []FileResult
 	BotIPs     map[string]map[string]struct{}
-	AllURLs    []URLStat                       // populated only when no flusher was provided (legacy)
+	AllURLs    []URLStat                          // populated only when no flusher was provided (legacy)
 	StreamURLs func(fn func(URLStat) error) error // streams sorted bot URLs without materializing; nil if flusher was used
 }
 
@@ -539,14 +596,8 @@ func AnalyzeMulti(paths []string, formatHint Format, workers int, onProgress Mul
 		return &MultiAnalysisResult{Stats: newAggregator().finalize()}, nil
 	}
 
-	// Suppress GC during the parse-heavy phase. The aggregator's maps
-	// create millions of pointer-bearing entries that dominate GC scan
-	// time (58%+ CPU in profiles). With GOMEMLIMIT set, the runtime still
-	// triggers GC when approaching the memory cap, preventing OOM.
-	// GC is restored on return; no explicit runtime.GC() — forcing a full
-	// scan of millions of map entries would block for minutes.
-	prevGC := debug.SetGCPercent(-1)
-	defer debug.SetGCPercent(prevGC)
+	// Suppress GC during the parse-heavy phase (see suppressGC).
+	defer suppressGC()()
 
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
@@ -918,4 +969,3 @@ func statusGroup(code int) string {
 		return "other"
 	}
 }
-

@@ -2,6 +2,7 @@ import { createWriteStream, type WriteStream } from 'node:fs';
 import { format } from 'fast-csv';
 import type { PageData } from './types.js';
 import { normalizeUrlForComparison } from './utils.js';
+import { csvSafeRecord } from './sanitize.js';
 
 export class ResultWriter {
   private stream: WriteStream;
@@ -142,8 +143,16 @@ function flattenSnippetResults(data: Record<string, unknown>): Record<string, st
   return flat;
 }
 
-/** Flatten a PageData into a flat CSV-ready record. Exported for use by the export API. */
+/**
+ * Flatten a PageData into a flat CSV-ready record. Exported for use by the
+ * export API. String cells that a spreadsheet would run as a formula
+ * (=, +, -, @, tab, CR) are prefixed with an apostrophe; numbers stay numbers.
+ */
 export function flattenPageForCsv(page: PageData): Record<string, string | number | boolean> {
+  return csvSafeRecord(flattenPageRaw(page));
+}
+
+function flattenPageRaw(page: PageData): Record<string, string | number | boolean> {
   return {
     url: page.url,
     final_url: page.finalUrl,

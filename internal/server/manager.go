@@ -51,6 +51,7 @@ type CrawlResults struct {
 	loadCancel      context.CancelFunc // cancels background page loading goroutine
 	mu              sync.RWMutex       // protects Pages during deferred analysis
 	views           pageViewCache      // /pages filter+sort results (pages_view.go)
+	wordBuckets     wordBucketCache    // legacy word-count histogram (wordcount.go)
 }
 
 // ActiveCrawl tracks a running crawl job.
@@ -115,6 +116,11 @@ type CrawlManager struct {
 	// SkipSSRF lets crawls reach loopback and private addresses. Tests
 	// only: no API, flag or setting can turn it on.
 	SkipSSRF bool
+	// TrustedProxy is the only proxy dashboard and API crawl configs may
+	// use (micelio ui --trusted-proxy, MICELIO_TRUSTED_PROXY); "" = none.
+	// Set by the local user at start, so the crawler reaches it even on
+	// loopback or a private address (Tor, a local forward proxy).
+	TrustedProxy string
 	// testBeforeCache runs just before a crawl's results are cached.
 	testBeforeCache func(crawlID string)
 	// analyzing holds crawls marked completed whose results are not cached
@@ -359,6 +365,9 @@ func (m *CrawlManager) RestartCrawl(oldJobID string, configOverride map[string]i
 	if configOverride != nil && len(configOverride) > 0 {
 		config = configOverride
 	}
+	if err := m.applyTrustedProxy(config); err != nil {
+		return "", err
+	}
 	config["resume"] = true
 	config["dbPath"] = oldJob.DBPath
 
@@ -533,6 +542,23 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		m.emit(ProgressEvent{CrawlID: crawlID, Type: "warning", Data: map[string]interface{}{"crawlId": crawlID, "message": w}})
 	}
 	crawlConfig.SkipSSRF = m.SkipSSRF
+	// Configs stored before the trusted-proxy rule, or a dashboard started
+	// without the proxy a schedule was saved with, must not reach a proxy
+	// the local user did not set.
+	if err := m.checkRunProxy(crawlConfig.Proxy); err != nil {
+		log.Printf("crawl %s: %v", crawlID, err)
+		if err2 := m.store.UpdateCrawlJob(crawlID, map[string]interface{}{
+			"status": "failed", "completedAt": time.Now().UTC().Format(time.RFC3339),
+		}); err2 != nil {
+			log.Printf("store: update crawl %s failure: %v", crawlID, err2)
+		}
+		m.store.AddCrawlEvent(crawlID, "failed", err.Error())
+		m.emit(ProgressEvent{CrawlID: crawlID, Type: "error", Data: map[string]interface{}{"crawlId": crawlID, "error": err.Error()}})
+		return
+	}
+	if crawlConfig.Proxy != "" {
+		crawlConfig.Proxy = strings.TrimSpace(m.TrustedProxy) // never a masked form
+	}
 
 	// Memory optimization: use SQLite crawl DB so the crawler keeps only
 	// lightweight LinkEntry structs in memory instead of full PageData.
@@ -1859,6 +1885,8 @@ func (m *CrawlManager) runLogAnalysisMulti(jobID string, filePaths, filenames []
 	// so the large map doesn't cause scan overhead). URLs are persisted in a
 	// single bulk INSERT after parsing — ~10x faster than incremental UPSERT
 	// which was the bottleneck (99% of CPU in profiles was SQLite B-tree lookups).
+	// Memory stays bounded: distinct URLs are capped (MICELIO_MAX_LOG_URLS)
+	// and so is .gz expansion (MICELIO_MAX_LOG_DECOMPRESSED_GB).
 	parseStart := time.Now()
 	result, err := logs.AnalyzeMulti(filePaths, formatHint, workers, func(mp logs.MultiProgress) {
 		// Update the per-file slot.
@@ -1986,7 +2014,8 @@ func (m *CrawlManager) runBotVerification(jobID string) (map[string]*logs.Verifi
 		return nil, nil, fmt.Errorf("no bot IP data for job %s (data available only in current session)", jobID)
 	}
 
-	verifier := logs.NewBotVerifier()
-	stats, spoofed := verifier.VerifyBotIPs(botIPs)
+	// Shared verifier: one DNS cache and one run per job however many
+	// requests arrive; IPs checked are capped (MICELIO_MAX_VERIFY_IPS).
+	stats, spoofed := logs.SharedBotVerifier().VerifyJob(jobID, botIPs)
 	return stats, spoofed, nil
 }

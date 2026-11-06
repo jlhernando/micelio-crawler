@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -158,65 +160,99 @@ func RunGscOAuthFlow(clientID, clientSecret string) error {
 	return nil
 }
 
+// oauthResult is how the callback ends the flow: a code or an error.
+type oauthResult struct {
+	code string
+	err  error
+}
+
+// oauthCallbackHandler handles the OAuth redirect to the loopback server.
+// The state is checked first, on every callback: a page in the user's
+// browser can send requests to this port, but without the random state it
+// can neither end nor feed the flow (such requests get 400 and change
+// nothing). The first valid callback is delivered on done; later ones are
+// refused, and the handler never blocks on done.
+func oauthCallbackHandler(expectedState string, done chan<- oauthResult) http.HandlerFunc {
+	var once sync.Once
+	finish := func(res oauthResult) (first bool) {
+		once.Do(func() {
+			first = true
+			select {
+			case done <- res:
+			default:
+			}
+		})
+		return first
+	}
+	page := func(w http.ResponseWriter, status int, html string) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.WriteHeader(status)
+		fmt.Fprint(w, html)
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		got := q.Get("state")
+		if got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expectedState)) != 1 {
+			page(w, http.StatusBadRequest, "<h1>Invalid state parameter</h1><p>Authorization rejected for security reasons.</p>")
+			return
+		}
+		if errParam := q.Get("error"); errParam != "" {
+			if !finish(oauthResult{err: fmt.Errorf("OAuth error: %q", truncate(errParam, 100))}) {
+				page(w, http.StatusConflict, "<h1>Already done</h1><p>You can close this window.</p>")
+				return
+			}
+			page(w, http.StatusOK, "<h1>Authorization failed</h1><p>You can close this window.</p>")
+			return
+		}
+		code := q.Get("code")
+		if code == "" {
+			http.NotFound(w, r)
+			return
+		}
+		if !finish(oauthResult{code: code}) {
+			page(w, http.StatusConflict, "<h1>Already done</h1><p>You can close this window.</p>")
+			return
+		}
+		page(w, http.StatusOK, "<h1>Authorization successful!</h1><p>You can close this window and return to the terminal.</p>")
+	}
+}
+
 func waitForOAuthCallback(expectedState string) (string, error) {
-	codeCh := make(chan string, 1)
-	errCh := make(chan error, 1)
+	done := make(chan oauthResult, 1)
+	listenErr := make(chan error, 1)
 
 	mux := http.NewServeMux()
-	srv := &http.Server{Addr: oauthPort, Handler: mux}
-
-	mux.HandleFunc("/oauth2callback", func(w http.ResponseWriter, r *http.Request) {
-		if errParam := r.URL.Query().Get("error"); errParam != "" {
-			w.Header().Set("Content-Type", "text/html")
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, "<h1>Authorization failed</h1><p>You can close this window.</p>")
-			errCh <- fmt.Errorf("OAuth error: %s", errParam)
-			return
-		}
-
-		// Verify CSRF state token
-		if returnedState := r.URL.Query().Get("state"); returnedState != expectedState {
-			w.Header().Set("Content-Type", "text/html")
-			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprint(w, "<h1>Invalid state parameter</h1><p>Authorization rejected for security reasons.</p>")
-			errCh <- fmt.Errorf("OAuth state mismatch (possible CSRF)")
-			return
-		}
-
-		authCode := r.URL.Query().Get("code")
-		if authCode != "" {
-			w.Header().Set("Content-Type", "text/html")
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, "<h1>Authorization successful!</h1><p>You can close this window and return to the terminal.</p>")
-			codeCh <- authCode
-			return
-		}
-
-		w.WriteHeader(http.StatusNotFound)
-	})
+	mux.HandleFunc("/oauth2callback", oauthCallbackHandler(expectedState, done))
+	srv := &http.Server{Addr: oauthPort, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errCh <- err
+			listenErr <- err // buffered: read at most once, never blocks
+		}
+	}()
+	// Shutdown waits for running handlers, which never block: bound it
+	// anyway so the flow always ends.
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if srv.Shutdown(ctx) != nil {
+			srv.Close()
 		}
 	}()
 
 	timer := time.NewTimer(oauthTimeout)
 	defer timer.Stop()
 
-	var code string
 	select {
-	case code = <-codeCh:
-	case err := <-errCh:
-		_ = srv.Shutdown(context.Background())
+	case res := <-done:
+		return res.code, res.err
+	case err := <-listenErr:
 		return "", err
 	case <-timer.C:
-		_ = srv.Shutdown(context.Background())
 		return "", fmt.Errorf("OAuth flow timed out after %v", oauthTimeout)
 	}
-
-	_ = srv.Shutdown(context.Background())
-	return code, nil
 }
 
 func exchangeOAuthCode(clientID, clientSecret, code string) (*OAuthToken, error) {

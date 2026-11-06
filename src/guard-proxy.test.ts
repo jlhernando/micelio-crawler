@@ -167,7 +167,7 @@ describe('guarded proxy', () => {
     expect((await getViaProxy(proxy.port, `http://127.0.0.1:${serverPort}/x`)).status).toBe(200);
   });
 
-  it('chains to a trusted upstream proxy only after checking the target', async () => {
+  it('chains to a trusted upstream proxy with the checked IP, never the host name', async () => {
     // A naive upstream that forwards anything to the local server, so only
     // the front proxy's check stands between a target and the server
     const seen: string[] = [];
@@ -203,7 +203,7 @@ describe('guarded proxy', () => {
       expect(hits).toEqual([]);
       expect((await getViaProxy(front.port, `http://public.test:${serverPort}/via`)).status).toBe(200);
       expect((await connectViaProxy(front.port, `public.test:${serverPort}`)).status).toBe(200);
-      expect(seen).toEqual([`GET http://public.test:${serverPort}/via`, `CONNECT public.test:${serverPort}`]);
+      expect(seen).toEqual([`GET http://${PUBLIC_IP}:${serverPort}/via`, `CONNECT ${PUBLIC_IP}:${serverPort}`]);
       const basic = `Basic ${Buffer.from('user:p@ss').toString('base64')}`;
       expect(auth).toEqual([basic, basic]);
       expect(hits).toEqual(['public.test /via', 'public.test /tunnel']);

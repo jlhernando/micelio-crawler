@@ -32,7 +32,13 @@ func newTestStore(t *testing.T) *UiStore {
 	if err := s.seedPresets(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	// The URL-stats connection, as in OpenUiStore (log URL tables).
+	urlConn, err := sqlite.OpenConn(dbPath, sqlite.OpenCreate|sqlite.OpenReadWrite|sqlite.OpenWAL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.urlConn = urlConn
+	t.Cleanup(func() { urlConn.Close(); conn.Close() })
 	return s
 }
 

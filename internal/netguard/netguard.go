@@ -93,3 +93,15 @@ func Dialer(timeout time.Duration) *net.Dialer {
 		},
 	}
 }
+
+// ProxyDialer returns a dialer for the connection to a proxy the local user
+// configured: CLI --proxy (Tor included), HTTP(S)_PROXY, or the dashboard's
+// --trusted-proxy. Unlike Dialer it accepts loopback and private addresses,
+// because a local proxy (Tor on 127.0.0.1:9050, a forward proxy on the
+// LAN) is the usual case and the user chose it. Only use it for proxy
+// URLs that come from the local user, never from a crawl config sent over
+// HTTP. Targets reached through the proxy are still checked and pinned
+// (DialThrough).
+func ProxyDialer(timeout time.Duration) *net.Dialer {
+	return &net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}
+}

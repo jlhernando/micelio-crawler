@@ -10,15 +10,20 @@
  * and resolved here with guardedLookup, and the checked address is dialled.
  *
  * Serves plain HTTP (absolute-URI requests) and CONNECT tunnels (HTTPS,
- * WebSockets). With a trusted upstream proxy (CLI --proxy), targets get the
- * URL-level check plus a local DNS pre-check (like netguard.GuardProxy) and
- * are then handed to the upstream, which resolves them itself.
+ * WebSockets). With a trusted upstream proxy (CLI --proxy), targets are
+ * resolved and checked here too, and the upstream gets the checked IP
+ * address, never the host name: a CONNECT to <ip>:<port>, a SOCKS5 IPv4/IPv6
+ * address, a SOCKS4 IPv4 address, or an absolute URI with the IP plus the
+ * original Host header. The upstream never resolves the name, so DNS that
+ * answers differently the second time cannot send it into its own network.
+ * TLS stays end to end (Chromium <-> origin inside the opaque tunnel), so SNI
+ * and certificate checks still use the original host name.
  */
 import { createServer, request as httpRequest, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http';
-import { connect as netConnect, type AddressInfo, type Socket } from 'node:net';
+import { connect as netConnect, isIP, type AddressInfo, type Socket } from 'node:net';
 import { connect as tlsConnect } from 'node:tls';
 import type { Duplex } from 'node:stream';
-import { assertPublicUrl, bareHost, BlockedAddressError, resolvePublicAddress } from './net-guard.js';
+import { bareHost, BlockedAddressError, parseIPv6, resolvePublicAddress } from './net-guard.js';
 
 const CONNECT_TIMEOUT_MS = 30_000;
 
@@ -39,7 +44,7 @@ export interface GuardedProxy {
   close(): Promise<void>;
 }
 
-interface Target {
+export interface Target {
   host: string; // bare host name or IP literal
   port: number;
 }
@@ -55,12 +60,12 @@ function parseAuthority(authority: string, defaultPort: number): Target | null {
   }
 }
 
-function hostForUrl(host: string): string {
+export function hostForUrl(host: string): string {
   return host.includes(':') ? `[${host}]` : host;
 }
 
 /** Resolves once the socket is connected; rejects on error or timeout. */
-function whenConnected(socket: Socket, event: 'connect' | 'secureConnect' = 'connect'): Promise<Socket> {
+export function whenConnected(socket: Socket, event: 'connect' | 'secureConnect' = 'connect'): Promise<Socket> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       socket.destroy();
@@ -118,12 +123,12 @@ function readReply(socket: Socket, done: (buf: Buffer) => number | null): Promis
   });
 }
 
-function basicAuth(u: URL): string {
+export function basicAuth(u: URL): string {
   return Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64');
 }
 
 /** Connect to the trusted upstream proxy itself (user-configured address). */
-async function dialUpstream(upstream: URL): Promise<Socket> {
+export async function dialUpstream(upstream: URL): Promise<Socket> {
   const host = bareHost(upstream.hostname);
   const defaults: Record<string, number> = { 'http:': 80, 'https:': 443, 'socks4:': 1080, 'socks4a:': 1080, 'socks5:': 1080, 'socks5h:': 1080 };
   const port = upstream.port ? Number(upstream.port) : defaults[upstream.protocol] ?? 1080;
@@ -133,14 +138,38 @@ async function dialUpstream(upstream: URL): Promise<Socket> {
   return whenConnected(netConnect({ host, port }));
 }
 
-/** A socket tunnelled to target through the upstream proxy. */
-async function tunnelThroughUpstream(upstream: URL, target: Target): Promise<Socket> {
+function isSocks4(upstream: URL): boolean {
+  return upstream.protocol === 'socks4:' || upstream.protocol === 'socks4a:';
+}
+
+/** Network-order bytes of an IP literal (4 for IPv4, 16 for IPv6). */
+function ipBytes(ip: string): Buffer {
+  if (isIP(ip) === 4) return Buffer.from(ip.split('.').map(Number));
+  const words = parseIPv6(ip);
+  if (!words) throw new Error(`not an IP address: ${ip}`);
+  const out = Buffer.alloc(16);
+  words.forEach((w, i) => out.writeUInt16BE(w, i * 2));
+  return out;
+}
+
+/**
+ * A socket tunnelled through the upstream proxy to an IP address that has
+ * already passed the guard. The proxy only ever sees that IP (CONNECT
+ * authority, SOCKS address), so it has no name to resolve. A proxy that
+ * refuses IP targets makes the request fail; it never falls back to a name.
+ */
+export async function tunnelThroughUpstream(upstream: URL, target: Target): Promise<Socket> {
+  const family = isIP(target.host);
+  if (!family) throw new Error(`upstream proxy target must be a checked IP address, got ${target.host}`);
+  if (family === 6 && isSocks4(upstream)) {
+    throw new BlockedAddressError(`SOCKS4 proxy cannot reach IPv6 address ${target.host}; use an HTTP or SOCKS5 proxy`);
+  }
+  const authority = `${hostForUrl(target.host)}:${target.port}`;
   const socket = await dialUpstream(upstream);
   try {
     switch (upstream.protocol) {
       case 'http:':
       case 'https:': {
-        const authority = `${hostForUrl(target.host)}:${target.port}`;
         let head = `CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n`;
         if (upstream.username) head += `Proxy-Authorization: Basic ${basicAuth(upstream)}\r\n`;
         socket.write(head + '\r\n');
@@ -149,7 +178,9 @@ async function tunnelThroughUpstream(upstream: URL, target: Target): Promise<Soc
           return i < 0 ? null : i + 4;
         });
         const status = /^HTTP\/1\.[01] (\d{3})/.exec(reply.toString('latin1'));
-        if (!status || status[1] !== '200') throw new Error(`upstream proxy refused CONNECT (${status?.[1] ?? 'bad reply'})`);
+        if (!status || status[1] !== '200') {
+          throw new Error(`upstream proxy refused CONNECT to ${authority} (${status?.[1] ?? 'bad reply'}); the proxy must accept IP-address targets`);
+        }
         return socket;
       }
       case 'socks5:':
@@ -167,12 +198,13 @@ async function tunnelThroughUpstream(upstream: URL, target: Target): Promise<Soc
         } else if (method[1] !== 0) {
           throw new Error('SOCKS5 proxy accepts no supported auth method');
         }
-        const name = Buffer.from(target.host);
+        // Address type 1 (IPv4) or 4 (IPv6), never 3 (domain name)
+        const addr = ipBytes(target.host);
         const port = Buffer.from([target.port >> 8, target.port & 0xff]);
-        socket.write(Buffer.concat([Buffer.from([5, 1, 0, 3, name.length]), name, port]));
+        socket.write(Buffer.concat([Buffer.from([5, 1, 0, family === 4 ? 1 : 4]), addr, port]));
         await readReply(socket, (b) => {
           if (b.length < 5) return null;
-          if (b[1] !== 0) throw new Error(`SOCKS5 connect failed (code ${b[1]})`);
+          if (b[1] !== 0) throw new Error(`SOCKS5 connect to ${authority} failed (code ${b[1]}); the proxy must accept IP-address targets`);
           const len = b[3] === 1 ? 4 : b[3] === 4 ? 16 : b[3] === 3 ? 1 + b[4] : -1;
           if (len < 0) throw new Error('SOCKS5 bad reply');
           return b.length >= 4 + len + 2 ? 4 + len + 2 : null;
@@ -181,15 +213,15 @@ async function tunnelThroughUpstream(upstream: URL, target: Target): Promise<Soc
       }
       case 'socks4:':
       case 'socks4a:': {
-        // SOCKS4a: IP 0.0.0.1 + host name, the proxy resolves it
+        // Plain SOCKS4 with the checked IPv4 address (never SOCKS4a + name)
         const user = Buffer.from(decodeURIComponent(upstream.username || ''));
         const req = Buffer.concat([
-          Buffer.from([4, 1, target.port >> 8, target.port & 0xff, 0, 0, 0, 1]),
-          user, Buffer.from([0]), Buffer.from(target.host), Buffer.from([0]),
+          Buffer.from([4, 1, target.port >> 8, target.port & 0xff]), ipBytes(target.host),
+          user, Buffer.from([0]),
         ]);
         socket.write(req);
         const reply = await readReply(socket, (b) => (b.length >= 8 ? 8 : null));
-        if (reply[1] !== 0x5a) throw new Error(`SOCKS4 connect failed (code ${reply[1]})`);
+        if (reply[1] !== 0x5a) throw new Error(`SOCKS4 connect to ${authority} failed (code ${reply[1]})`);
         return socket;
       }
       default:
@@ -199,6 +231,15 @@ async function tunnelThroughUpstream(upstream: URL, target: Target): Promise<Soc
     socket.destroy();
     throw err;
   }
+}
+
+/**
+ * Resolve a target with the guard and tunnel to the checked address through
+ * the upstream. SOCKS4 asks DNS for IPv4 only, since it cannot carry IPv6.
+ */
+export async function openUpstreamTunnel(upstream: URL, target: Target): Promise<Socket> {
+  const { address } = await resolvePublicAddress(target.host, isSocks4(upstream) ? 4 : undefined);
+  return tunnelThroughUpstream(upstream, { host: address, port: target.port });
 }
 
 const HOP_BY_HOP = new Set([
@@ -232,11 +273,8 @@ export async function startGuardedProxy(options: GuardedProxyOptions = {}): Prom
 
   /** A connected socket to target, after the guard. */
   async function openTarget(target: Target): Promise<Socket> {
-    if (upstream) {
-      // The upstream resolves the name itself: check it here first
-      await assertPublicUrl(`http://${hostForUrl(target.host)}:${target.port}/`);
-      return tunnelThroughUpstream(upstream, target);
-    }
+    // Resolve here and hand the upstream only the checked address
+    if (upstream) return openUpstreamTunnel(upstream, target);
     // Direct: resolve here and dial exactly the checked address
     const { address } = await resolvePublicAddress(target.host);
     return whenConnected(connectAddress(address, target.port));
@@ -273,12 +311,15 @@ export async function startGuardedProxy(options: GuardedProxyOptions = {}): Prom
     let out: ReturnType<typeof httpRequest>;
     try {
       if (upstream && (upstream.protocol === 'http:' || upstream.protocol === 'https:')) {
-        // Forward the absolute-URI request to the upstream HTTP proxy
-        await assertPublicUrl(url.href);
+        // Forward an absolute-URI request with the checked IP to the upstream
+        // HTTP proxy; the Host header keeps the original name for the origin
+        const { address } = await resolvePublicAddress(target.host);
         const socket = await dialUpstream(upstream);
         track(socket);
+        headers.host = url.host;
         if (upstream.username) headers['proxy-authorization'] = `Basic ${basicAuth(upstream)}`;
-        out = httpRequest({ method: req.method, path: url.href, headers, createConnection: () => socket });
+        const path = `http://${hostForUrl(address)}:${target.port}${url.pathname}${url.search}`;
+        out = httpRequest({ method: req.method, path, headers, setHost: false, createConnection: () => socket });
       } else {
         const socket = await openTarget(target);
         track(socket);

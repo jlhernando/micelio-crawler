@@ -152,7 +152,11 @@ func (m *CrawlManager) newUISchedule(store *UiStore, req scheduleRequest) (*sche
 	// (and re-run) a config the start endpoint would refuse.
 	var warnings []string
 	if req.resumed {
+		// A saved proxy that is no longer trusted fails each run
+		// (runCrawl), with a clear event, instead of dropping the schedule.
 		warnings = relaxCrawlConfig(config)
+	} else if err := m.applyTrustedProxy(config); err != nil {
+		return nil, err
 	} else if err := sanitizeCrawlConfig(config); err != nil {
 		return nil, err
 	}

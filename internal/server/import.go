@@ -39,8 +39,8 @@ type ImportOptions struct {
 	Name string
 	// LinkIntelligence forces link analysis even if the crawl ran without it.
 	LinkIntelligence bool
-	// limit bounds uploads from the dashboard; zero values mean no limit
-	// (the CLI importing a local file).
+	// limit bounds what the import may expand into; zero values mean no
+	// limit. Dashboard uploads and the CLI (LimitImport) set it.
 	limit importLimit
 }
 

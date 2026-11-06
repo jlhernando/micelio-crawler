@@ -187,19 +187,31 @@ export const SUPPORTED_LANGUAGES = Object.keys(STOPWORDS).filter(k => STOPWORDS[
 
 // Maximum unique terms to track per gram size (memory cap)
 const MAX_ENTRIES = 50_000;
+/** Characters of body text read per page; the rest is ignored (hostile pages can be huge). */
+export const MAX_PAGE_CHARS = 200_000;
+/** Tokens used per page after stopword filtering. */
+export const MAX_PAGE_TOKENS = 20_000;
 
 /**
  * Tokenize text: lowercase, strip punctuation, split on whitespace.
  * Returns only tokens with 2+ characters that are not stop words.
  * Supports accented characters for multilingual text.
+ * Reads at most MAX_PAGE_CHARS characters and returns at most MAX_PAGE_TOKENS tokens.
  */
 function tokenize(text: string, stopwords: Set<string>): string[] {
-  return text
+  const cleaned = text
+    .slice(0, MAX_PAGE_CHARS)
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s'-]/gu, ' ')  // keep letters (any script), numbers, apostrophes, hyphens
-    .split(/\s+/)
-    .map(w => w.replace(/^['-]+|['-]+$/g, ''))  // strip leading/trailing punctuation
-    .filter(w => w.length >= 2 && !stopwords.has(w) && !/^\d+$/.test(w));
+    .replace(/[^\p{L}\p{N}\s'-]/gu, ' ');  // keep letters (any script), numbers, apostrophes, hyphens
+  const tokens: string[] = [];
+  for (const raw of cleaned.split(/\s+/)) {
+    const w = raw.replace(/^['-]+|['-]+$/g, '');  // strip leading/trailing punctuation
+    if (w.length >= 2 && !stopwords.has(w) && !/^\d+$/.test(w)) {
+      tokens.push(w);
+      if (tokens.length >= MAX_PAGE_TOKENS) break;
+    }
+  }
+  return tokens;
 }
 
 /**
@@ -244,61 +256,35 @@ export class NgramAnalyzer {
     this.totalPages++;
     this.totalTokens += tokens.length;
 
-    // Track which terms appear on this page (for page count)
-    const pageUnigrams = new Set<string>();
-    const pageBigrams = new Set<string>();
-    const pageTrigrams = new Set<string>();
+    // Count this page's terms locally (bounded by MAX_PAGE_TOKENS), then
+    // merge into the site-wide maps, pruning as soon as a map hits its cap.
+    const pageUnigrams = new Map<string, number>();
+    const pageBigrams = new Map<string, number>();
+    const pageTrigrams = new Map<string, number>();
+    for (let i = 0; i < tokens.length; i++) {
+      bumpLocal(pageUnigrams, tokens[i]);
+      if (i + 1 < tokens.length) bumpLocal(pageBigrams, `${tokens[i]} ${tokens[i + 1]}`);
+      if (i + 2 < tokens.length) bumpLocal(pageTrigrams, `${tokens[i]} ${tokens[i + 1]} ${tokens[i + 2]}`);
+    }
+    this.merge(this.unigrams, pageUnigrams);
+    this.merge(this.bigrams, pageBigrams);
+    this.merge(this.trigrams, pageTrigrams);
+  }
 
-    // Unigrams
-    for (const token of tokens) {
-      const entry = this.unigrams.get(token);
+  private merge(
+    map: Map<string, { count: number; pages: number }>,
+    page: Map<string, number>,
+  ): void {
+    for (const [term, count] of page) {
+      const entry = map.get(term);
       if (entry) {
-        entry.count++;
-      } else {
-        this.unigrams.set(token, { count: 1, pages: 0 });
+        entry.count += count;
+        entry.pages++;
+        continue;
       }
-      pageUnigrams.add(token);
+      if (map.size >= MAX_ENTRIES) this.prune(map);
+      map.set(term, { count, pages: 1 });
     }
-
-    // Bigrams
-    for (let i = 0; i < tokens.length - 1; i++) {
-      const bigram = `${tokens[i]} ${tokens[i + 1]}`;
-      const entry = this.bigrams.get(bigram);
-      if (entry) {
-        entry.count++;
-      } else {
-        this.bigrams.set(bigram, { count: 1, pages: 0 });
-      }
-      pageBigrams.add(bigram);
-    }
-
-    // Trigrams
-    for (let i = 0; i < tokens.length - 2; i++) {
-      const trigram = `${tokens[i]} ${tokens[i + 1]} ${tokens[i + 2]}`;
-      const entry = this.trigrams.get(trigram);
-      if (entry) {
-        entry.count++;
-      } else {
-        this.trigrams.set(trigram, { count: 1, pages: 0 });
-      }
-      pageTrigrams.add(trigram);
-    }
-
-    // Update page counts
-    for (const term of pageUnigrams) {
-      this.unigrams.get(term)!.pages++;
-    }
-    for (const term of pageBigrams) {
-      this.bigrams.get(term)!.pages++;
-    }
-    for (const term of pageTrigrams) {
-      this.trigrams.get(term)!.pages++;
-    }
-
-    // Memory cap: prune if too large
-    this.pruneIfNeeded(this.unigrams);
-    this.pruneIfNeeded(this.bigrams);
-    this.pruneIfNeeded(this.trigrams);
   }
 
   /**
@@ -354,12 +340,12 @@ export class NgramAnalyzer {
   }
 
   /**
-   * Prune map to MAX_ENTRIES by removing lowest-count entries.
+   * Shrink a full map to 75% of MAX_ENTRIES by removing lowest-count entries.
+   * Called before an insert would go past MAX_ENTRIES, so the map (and the
+   * sort here) never grows beyond the cap.
    */
-  private pruneIfNeeded(map: Map<string, { count: number; pages: number }>): void {
-    if (map.size <= MAX_ENTRIES) return;
-
-    // Sort entries by count, keep top half
+  private prune(map: Map<string, { count: number; pages: number }>): void {
+    if (map.size < MAX_ENTRIES) return;
     const entries = Array.from(map.entries())
       .sort(([, a], [, b]) => b.count - a.count);
 
@@ -369,4 +355,13 @@ export class NgramAnalyzer {
       map.set(entries[i][0], entries[i][1]);
     }
   }
+
+  /** Largest number of terms held for any gram size (for tests and diagnostics). */
+  get maxTrackedTerms(): number {
+    return Math.max(this.unigrams.size, this.bigrams.size, this.trigrams.size);
+  }
+}
+
+function bumpLocal(map: Map<string, number>, term: string): void {
+  map.set(term, (map.get(term) ?? 0) + 1);
 }

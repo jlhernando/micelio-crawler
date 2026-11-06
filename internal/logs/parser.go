@@ -3,6 +3,7 @@ package logs
 import (
 	"bufio"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -29,6 +30,23 @@ type countingReader struct {
 func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	c.n += int64(n)
+	return n, err
+}
+
+// limitedReader fails with a clear error once more than max bytes were
+// read, so a small .gz cannot expand without end (a "gzip bomb").
+type limitedReader struct {
+	r   io.Reader
+	n   int64
+	max int64
+}
+
+func (l *limitedReader) Read(p []byte) (int, error) {
+	n, err := l.r.Read(p)
+	l.n += int64(n)
+	if l.n > l.max {
+		return n, fmt.Errorf("file expands to more than %.1f GiB once decompressed; raise MICELIO_MAX_LOG_DECOMPRESSED_GB to allow it", float64(l.max)/float64(gib))
+	}
 	return n, err
 }
 
@@ -70,7 +88,7 @@ func ParseFileWithState(path string, formatHint Format, state *ParseState, onEnt
 			return FormatUnknown, 0, err
 		}
 		defer gz.Close()
-		base = gz
+		base = &limitedReader{r: gz, max: limits().MaxDecompressedBytes}
 		// When gzipped, byte-based progress against fileSize under-reports
 		// the decompressed work. We fall back to fileSize denominator anyway;
 		// UI will show "approximately".
@@ -81,17 +99,20 @@ func ParseFileWithState(path string, formatHint Format, state *ParseState, onEnt
 	scanner.Buffer(make([]byte, 1024*1024), maxLineSize)
 
 	// Collect sample lines for format detection. `firstLines` holds raw
-	// pre-detection lines we'll replay; headers are captured and dropped
-	// here so they don't get re-parsed as data rows.
+	// pre-detection data lines we'll replay (at most sampleLines, each at
+	// most maxLineSize); blank and comment lines are only counted, never
+	// kept, so a file of millions of comments cannot fill memory. Headers
+	// are captured and dropped here so they don't get re-parsed as data rows.
 	var sample []string
 	var firstLines []string
+	var skippedLines int64 // blank/comment lines before detection
 	headerCaptured := false
 	for len(sample) < sampleLines && scanner.Scan() {
 		line := scanner.Text()
 		// Strip a BOM on the very first line (common in Windows-exported CSVs).
 		trimmed := stripBOM(strings.TrimSpace(line))
 		if trimmed == "" {
-			firstLines = append(firstLines, line)
+			skippedLines++
 			continue
 		}
 		// W3C #Fields directive: consume, don't add to firstLines (not data).
@@ -101,7 +122,7 @@ func ParseFileWithState(path string, formatHint Format, state *ParseState, onEnt
 			continue
 		}
 		if trimmed[0] == '#' {
-			firstLines = append(firstLines, line)
+			skippedLines++
 			continue
 		}
 		// First non-comment line: check whether it's a TSV or CSV header row
@@ -165,7 +186,7 @@ func ParseFileWithState(path string, formatHint Format, state *ParseState, onEnt
 		}
 	}
 
-	var processed int64
+	processed := skippedLines
 	var lastBytesEmit int64
 
 	emit := func() {

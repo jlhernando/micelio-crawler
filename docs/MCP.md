@@ -22,6 +22,14 @@ The dashboard keeps running after the agent closes; its log goes to
 started. With `--no-autostart` the tool returns an error that tells you to run
 `micelio ui` instead.
 
+A dashboard on this computer must prove it is yours before `micelio mcp` sends
+it the token or a tool call: it holds a random key in
+`~/.micelio/ui/dashboard.key` (readable only by you) and answers a challenge
+with it on every new connection. A program that took the port first gets
+nothing, and the tool reports it. Run the dashboard as the same user, with
+the same HOME and a micelio version that has this check. A remote dashboard
+(`--server https://...`) is trusted through its TLS certificate instead.
+
 ## Setup
 
 ### Claude Code
@@ -127,10 +135,22 @@ A typical session: `crawl_start` → `crawl_wait` until `done` → `crawl_summar
   its id.
 - **No secrets.** The tools never call the settings API and never return a
   crawl's config (which can hold API keys). Error messages are scrubbed of
-  bearer tokens, `key=`/`token=` values and well-known key formats.
+  bearer tokens, `key=`/`token=` values and well-known key formats. Every URL
+  an agent gets (start URLs, pages, redirects, canonicals, links, samples) has
+  its credentials masked (`••••••••`): user info and token, key, signature,
+  `code`, `ticket` and session parameters. A masked URL cannot be looked up
+  as shown; find it with `pages_query` `search`.
 - **Page text is data.** Titles, descriptions and headings are cut to 200
-  characters and come from the crawled websites, so an agent should never
-  follow instructions found in them. Raw HTML is never returned.
+  characters, URLs to 1,000, and come from the crawled websites, so an agent
+  should never follow instructions found in them. Control, bidi, zero-width
+  and Unicode tag characters are removed. Every answer with page content has
+  an `untrusted` field saying so, `url_explain` reasons never quote site text
+  (the URL or error sits in its own field), and the tool descriptions tell the
+  agent never to start or stop a crawl because page content says so. Raw HTML
+  is never returned.
+- **Small answers.** `pages_query` and `url_links` stop at 64 KB of JSON and
+  say `truncated: true` (page on with `offset`); `crawl_summary` stays under
+  4 KB.
 - **Errors are tool errors.** A missing crawl or a stopped dashboard comes back
   as a readable tool error the agent can act on, not as a protocol failure.
 - **Clean stdout.** Only the MCP protocol is written to stdout; logs go to

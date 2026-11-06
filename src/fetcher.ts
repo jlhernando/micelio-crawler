@@ -3,6 +3,8 @@ import type { FetchResult, HeadResult, RedirectHop } from './types.js';
 import { renderPage } from './browser.js';
 import { formatError } from './utils.js';
 import { assertPublicUrl, BlockedAddressError, credentialHostAllowed, guardedDispatcher, stripCredentialsOnCrossOrigin, urlBlockReason } from './net-guard.js';
+import { PinnedProxyAgent } from './proxy-dispatcher.js';
+import { DEFAULT_MAX_HTML_BYTES, readBodyCapped } from './body-limit.js';
 
 const MAX_RETRIES = 3;
 const MAX_REDIRECTS = 10;
@@ -27,8 +29,10 @@ export interface FetchOptions {
   cookies?: string;
   /**
    * Custom proxy. Without one, requests use the SSRF-guarded dispatcher.
-   * A proxy resolves and connects to targets itself, so with one every
-   * target (each redirect hop too) is resolved and checked here first.
+   * Use pinnedProxyDispatcher (proxy-dispatcher.ts): it resolves and checks
+   * every target (each redirect hop too) here and hands the proxy only the
+   * checked IP. Any other dispatcher gets a pre-check, which cannot stop a
+   * proxy that resolves the name again.
    */
   dispatcher?: Dispatcher;
   /**
@@ -39,6 +43,11 @@ export interface FetchOptions {
    * and its www/apex twin get them.
    */
   credentialHosts?: ReadonlySet<string>;
+  /**
+   * Most bytes of HTML read per page (default 10 MB). Longer bodies are cut
+   * at the cap and the connection is closed, like the Go crawler does.
+   */
+  maxBodyBytes?: number;
 }
 
 /** Errors raised by the SSRF guard are final: retrying cannot help. */
@@ -86,7 +95,7 @@ export async function fetchPage(
 
   while (true) {
     try {
-      if (options.dispatcher) await assertPublicUrl(currentUrl);
+      if (options.dispatcher && !(options.dispatcher instanceof PinnedProxyAgent)) await assertPublicUrl(currentUrl);
       const { statusCode, headers, body } = await request(currentUrl, {
         headers: requestHeaders,
         maxRedirections: 0,
@@ -145,14 +154,21 @@ export async function fetchPage(
       let html = '';
       let transferSize = 0;
       if (isHtml) {
-        html = await body.text();
+        // Stream with a byte cap: a hostile server cannot make us buffer an
+        // endless or giant body (Content-Length is not trusted either).
+        const maxBytes = options.maxBodyBytes && options.maxBodyBytes > 0 ? options.maxBodyBytes : DEFAULT_MAX_HTML_BYTES;
+        const capped = await readBodyCapped(body, maxBytes);
+        html = capped.text;
+        if (capped.truncated) {
+          process.stderr.write(`  [warn] HTML body over ${maxBytes} bytes, truncated: ${currentUrl.slice(0, 200)}\n`);
+        }
         // Estimate transfer size from content-length header or byte length of body
         const clHeader = headers['content-length'];
         if (typeof clHeader === 'string') {
           transferSize = parseInt(clHeader, 10) || 0;
         }
         if (transferSize === 0 && html) {
-          transferSize = Buffer.byteLength(html, 'utf-8');
+          transferSize = capped.bytes;
         }
       } else {
         await body.dump();
@@ -306,7 +322,7 @@ export async function fetchHead(
 
   while (true) {
     try {
-      if (options.dispatcher) await assertPublicUrl(currentUrl);
+      if (options.dispatcher && !(options.dispatcher instanceof PinnedProxyAgent)) await assertPublicUrl(currentUrl);
       const { statusCode, headers, body } = await request(currentUrl, {
         method: 'HEAD',
         headers: requestHeaders,

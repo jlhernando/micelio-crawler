@@ -37,6 +37,7 @@ import (
 	"github.com/micelio/micelio/internal/scheduler"
 	"github.com/micelio/micelio/internal/server"
 	"github.com/micelio/micelio/internal/storage"
+	"github.com/micelio/micelio/internal/termsafe"
 	"github.com/micelio/micelio/internal/types"
 	"github.com/micelio/micelio/internal/webhook"
 )
@@ -306,6 +307,7 @@ func uiCmd() *cobra.Command {
 		insecureNoAuth bool
 		pprof          bool
 		allowedHosts   []string
+		trustedProxy   string
 	)
 
 	cmd := &cobra.Command{
@@ -331,6 +333,9 @@ func uiCmd() *cobra.Command {
 			if env := os.Getenv("MICELIO_ALLOWED_HOSTS"); env != "" {
 				allowedHosts = append(allowedHosts, strings.Split(env, ",")...)
 			}
+			if trustedProxy == "" {
+				trustedProxy = os.Getenv("MICELIO_TRUSTED_PROXY")
+			}
 			fmt.Fprintf(os.Stderr, "\n  Micelio %s — starting web UI on %s:%d\n\n", version, host, port)
 			return server.StartUIServerWithOptions(server.ServerOptions{
 				Port:           port,
@@ -340,6 +345,7 @@ func uiCmd() *cobra.Command {
 				InsecureNoAuth: insecureNoAuth,
 				Pprof:          pprof,
 				AllowedHosts:   allowedHosts,
+				TrustedProxy:   trustedProxy,
 			}, dashboardFS())
 		},
 	}
@@ -349,6 +355,7 @@ func uiCmd() *cobra.Command {
 	cmd.Flags().StringVar(&authToken, "auth-token", "", "Bearer token for API authentication (or MICELIO_AUTH_TOKEN env, which keeps it out of the process list)")
 	cmd.Flags().BoolVar(&insecureNoAuth, "insecure-no-auth", false, "Allow a non-loopback --host without a token (only behind a proxy that authenticates)")
 	cmd.Flags().StringArrayVar(&allowedHosts, "allowed-host", nil, "Host name a reverse proxy or tunnel serves the dashboard on, or an exact origin like http://localhost:5175 (repeatable, or MICELIO_ALLOWED_HOSTS comma-separated): passes the Host check and counts as the dashboard's own origin on the port it names (80/443 if none)")
+	cmd.Flags().StringVar(&trustedProxy, "trusted-proxy", "", "The only proxy dashboard crawls may use (http://, https://, socks5:// URL or 'tor'; or MICELIO_TRUSTED_PROXY, e.g. in ~/.micelio/micelio.env). It may be on this computer or the local network; crawl configs naming any other proxy are refused")
 	cmd.Flags().BoolVar(&pprof, "pprof", false, "Serve /debug/pprof/ on a non-loopback --host too (always on for loopback; needs the token when one is set)")
 	return cmd
 }
@@ -406,14 +413,14 @@ func robotsTestCmd() *cobra.Command {
 			var statusCode int
 			robotsUnavailable := false // 5xx = treat as fully restricted per Google spec
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: could not fetch robots.txt: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Warning: could not fetch robots.txt: %s\n", termsafe.String(err.Error()))
 				robotsUnavailable = true
 			} else {
 				statusCode = resp.StatusCode
 				body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 				resp.Body.Close()
 				if readErr != nil {
-					fmt.Fprintf(os.Stderr, "Warning: could not read robots.txt body: %v\n", readErr)
+					fmt.Fprintf(os.Stderr, "Warning: could not read robots.txt body: %s\n", termsafe.String(readErr.Error()))
 					robotsUnavailable = true
 				} else if statusCode == 200 {
 					robotsTxt = string(body)
@@ -505,13 +512,15 @@ func robotsTestCmd() *cobra.Command {
 				return enc.Encode(output)
 			}
 
-			// Pretty-print table
-			fmt.Printf("\nRobots.txt Test: %s (HTTP %d)\n\n", robotsURL, statusCode)
+			// Pretty-print table. Sitemap lines come from the site's
+			// robots.txt: termsafe keeps escape sequences in them off the
+			// terminal (the JSON output above quotes them already).
+			fmt.Printf("\nRobots.txt Test: %s (HTTP %d)\n\n", termsafe.String(robotsURL), statusCode)
 
 			if len(sitemapURLs) > 0 {
 				fmt.Printf("Sitemaps:\n")
 				for _, s := range sitemapURLs {
-					fmt.Printf("  %s\n", s)
+					fmt.Printf("  %s\n", termsafe.String(s))
 				}
 				fmt.Println()
 			}
@@ -526,13 +535,13 @@ func robotsTestCmd() *cobra.Command {
 			// Print matrix
 			fmt.Printf("%-40s", "URL / Agent")
 			for _, ua := range uas {
-				fmt.Printf(" %-12s", truncate(ua, 12))
+				fmt.Printf(" %-12s", truncate(termsafe.String(ua), 12))
 			}
 			fmt.Println()
 			fmt.Println(strings.Repeat("-", 40+13*len(uas)))
 
 			for _, testURL := range testURLs {
-				fmt.Printf("%-40s", truncate(testURL, 40))
+				fmt.Printf("%-40s", truncate(termsafe.String(testURL), 40))
 				for _, ua := range uas {
 					key := testURL + "\x00" + ua
 					r := resultMap[key]
@@ -738,7 +747,7 @@ func diffCmd() *cobra.Command {
 				comparison := report.ComputeComparison(oldPages, &oldStats, newPages, &newStats)
 
 				// Print summary
-				report.PrintComparisonSummary(os.Stdout, comparison)
+				report.PrintComparisonSummary(termsafe.NewWriter(os.Stdout), comparison)
 
 				if jsonOutput != "" {
 					data, err := json.MarshalIndent(comparison, "", "  ")
@@ -752,7 +761,7 @@ func diffCmd() *cobra.Command {
 				}
 			} else {
 				diff := report.ComputeDiff(oldPages, newPages)
-				report.PrintDiffSummary(os.Stdout, diff)
+				report.PrintDiffSummary(termsafe.NewWriter(os.Stdout), diff)
 
 				if htmlOutput != "" {
 					f, err := os.Create(htmlOutput)
@@ -1083,7 +1092,7 @@ func schedulesCmd() *cobra.Command {
 					duration = fmt.Sprintf("%ds", s.LastDurationMs/1000)
 				}
 
-				fmt.Printf("  %s\n", s.URL)
+				fmt.Printf("  %s\n", termsafe.String(s.URL))
 				fmt.Printf("    Schedule:  %s (%s)\n", describeCron(s.Cron), s.Cron)
 				fmt.Printf("    Last run:  %s [%s] %d pages, %s\n", lastRun, status, s.LastPages, duration)
 				fmt.Printf("    Next run:  %s\n", nextRun)
@@ -1399,7 +1408,7 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 
 	result, err := crawler.Crawl(ctx, config, func(p crawler.CrawlProgress) {
 		fmt.Fprintf(os.Stderr, "\r  [%d/%d] %.1f p/s — %s",
-			p.Crawled, p.TotalSeen, p.Rate, truncate(p.CurrentURL, 60))
+			p.Crawled, p.TotalSeen, p.Rate, truncate(termsafe.String(p.CurrentURL), 60))
 	}, storeArg...)
 	if err != nil {
 		return fmt.Errorf("crawl failed: %w", err)
@@ -1425,7 +1434,7 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 		})
 		fmt.Fprintf(os.Stderr, "\r  External: %d/%d checked\n", extSummary.Checked, extSummary.Total)
 		if extSummary.RateLimited > 0 {
-			fmt.Fprintf(os.Stderr, "  External links: %d not checked, sites limiting requests (429): %s\n", extSummary.RateLimited, strings.Join(extSummary.RateLimitedHosts, ", "))
+			fmt.Fprintf(os.Stderr, "  External links: %d not checked, sites limiting requests (429): %s\n", extSummary.RateLimited, strings.Join(termsafe.Strings(extSummary.RateLimitedHosts), ", "))
 		}
 		if n := extSummary.Skipped - extSummary.RateLimited; n > 0 {
 			fmt.Fprintf(os.Stderr, "  External links: %d not checked (cap %d or cancelled)\n", n, crawler.DefaultExternalCheckMaxURLs)

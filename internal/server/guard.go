@@ -14,8 +14,8 @@ import (
 	"strings"
 )
 
-// sessionCookieName names the browser login cookie. It is set by opening
-// the dashboard once with ?token=<token> and sent back on every same-origin
+// sessionCookieName names the browser login cookie. It is set by the login
+// screen (POST /login, see withLogin) and sent back on every same-origin
 // fetch and WebSocket, so the Svelte app needs no token handling. Cookies
 // ignore ports, so the port is in the name: two dashboards on one host keep
 // separate logins.
@@ -275,16 +275,50 @@ func authorized(r *http.Request, token, cookie string) bool {
 	return false
 }
 
-// withLogin turns a dashboard visit with ?token=<token> into the login
-// cookie and redirects to the same page without the token, so it does not
-// stay in the address bar or history. A wrong token sends a browser back
-// to the page with ?login=failed (no token), where the login screen says
-// so; other clients get a 401.
+// withLogin logs a browser in: it sets the login cookie, which holds
+// sessionValue(token), never the token itself.
+//
+//   - POST /login with a form field token (the dashboard's login screen)
+//     answers 204 with the cookie, or 401 for a wrong token. The token
+//     travels in the request body, so it never lands in a URL, the browser
+//     history or a proxy's access log.
+//   - A visit with ?token=<token> (a link the user typed or bookmarked)
+//     still works: it sets the cookie and redirects to the same page
+//     without the token, with Referrer-Policy: no-referrer and no caching,
+//     so the URL with the token is not passed on. A wrong token sends a
+//     browser back to the page with ?login=failed (no token), where the
+//     login screen says so; other clients get a 401.
+//
+// /api/ and /ws never take the token from the URL: only the Authorization
+// header or the cookie.
 func withLogin(token, cookie string, next http.Handler) http.Handler {
+	setCookie := func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{
+			Name:     cookie,
+			Value:    sessionValue(token),
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+			SameSite: http.SameSiteStrictMode,
+		})
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isLoginPost(r) {
+			w.Header().Set("Cache-Control", "no-store")
+			r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+			if !tokenEqual(r.PostFormValue("token"), token) {
+				guardError(w, http.StatusUnauthorized, "invalid token")
+				return
+			}
+			setCookie(w, r)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		q := r.URL.Query()
 		if r.Method == http.MethodGet && q.Has("token") && r.URL.Path != "/ws" &&
 			!strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			w.Header().Set("Cache-Control", "no-store")
 			if !tokenEqual(q.Get("token"), token) {
 				if !isPageNavigation(r) {
 					http.Error(w, "invalid token", http.StatusUnauthorized)
@@ -298,14 +332,7 @@ func withLogin(token, cookie string, next http.Handler) http.Handler {
 				return
 			}
 			q.Del("login")
-			http.SetCookie(w, &http.Cookie{
-				Name:     cookie,
-				Value:    sessionValue(token),
-				Path:     "/",
-				HttpOnly: true,
-				Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
-				SameSite: http.SameSiteStrictMode,
-			})
+			setCookie(w, r)
 			q.Del("token")
 			dest := *r.URL
 			dest.RawQuery = q.Encode()

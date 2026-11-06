@@ -14,7 +14,9 @@ import (
 	"github.com/micelio/micelio/internal/analysis"
 	"github.com/micelio/micelio/internal/browser"
 	"github.com/micelio/micelio/internal/integration"
+	"github.com/micelio/micelio/internal/netguard"
 	"github.com/micelio/micelio/internal/storage"
+	"github.com/micelio/micelio/internal/termsafe"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -228,7 +230,11 @@ func (s *crawlSession) setupHTTPClient() error {
 		client = newClient(timeout, proxyURL, true, s.dnsCache)
 	}
 	// Make sure the connection pool is not the bottleneck at high concurrency.
-	if t, ok := client.Transport.(*http.Transport); ok {
+	t, ok := client.Transport.(*http.Transport)
+	if pt, isPT := client.Transport.(*netguard.ProxyTransport); isPT {
+		t, ok = pt.Base(), true
+	}
+	if ok {
 		if t.MaxIdleConnsPerHost < s.config.Concurrency {
 			t.MaxIdleConnsPerHost = s.config.Concurrency
 		}
@@ -479,7 +485,11 @@ func (s *crawlSession) setupBrowser() {
 	// proxy so none reaches this computer or its networks.
 	cfg.GuardNetwork = !s.config.SkipSSRF
 	cfg.Device = s.config.Device
-	s.renderer = browser.NewRenderer(s.config.Proxy, cfg)
+	proxy := s.config.Proxy
+	if s.torManager != nil {
+		proxy = s.torManager.ProxyURL().String() // "tor" is not a URL
+	}
+	s.renderer = browser.NewRenderer(proxy, cfg)
 	s.browserSem = make(chan struct{}, 4)
 	features := "max 4 tabs"
 	if cfg.BlockResources {
@@ -769,7 +779,7 @@ func (s *crawlSession) seedSitemapMode(ctx context.Context) error {
 		})
 		if err != nil {
 			lastErr = err
-			fmt.Fprintf(os.Stderr, "  [sitemap] %s: %v\n", sm, err)
+			fmt.Fprintf(os.Stderr, "  [sitemap] %s: %s\n", termsafe.String(sm), termsafe.String(err.Error()))
 			continue
 		}
 		fetched++

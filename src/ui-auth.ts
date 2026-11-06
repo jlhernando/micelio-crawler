@@ -18,6 +18,20 @@ export interface UiAccessOptions {
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
+/**
+ * Request target as a URL, parsed against a constant base: the Host header is
+ * client-controlled and a malformed one (e.g. "[::1") makes new URL throw.
+ * Only pathname and search are meaningful. Returns null when unparsable.
+ */
+export function parseRequestUrl(req: { url?: string }): URL | null {
+  const target = req.url || '/';
+  try {
+    return target.startsWith('/') ? new URL(`http://localhost${target}`) : new URL(target, 'http://localhost/');
+  } catch {
+    return null;
+  }
+}
+
 export function isLoopbackHost(host: string): boolean {
   const h = host.replace(/^\[|\]$/g, '').toLowerCase();
   return LOOPBACK_HOSTS.has(h) || /^127\.\d+\.\d+\.\d+$/.test(h);

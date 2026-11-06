@@ -1,6 +1,7 @@
 import pLimit from 'p-limit';
 import * as cheerio from 'cheerio';
-import { ProxyAgent, type Dispatcher } from 'undici';
+import type { Dispatcher } from 'undici';
+import { pinnedProxyDispatcher, type PinnedProxyAgent } from './proxy-dispatcher.js';
 import type { CrawlConfig, PageData, ExternalLinkResult, ResourceEntry, PageWeightData, SitemapExtensionCounts, SitemapEntry } from './types.js';
 import { CrawlQueue } from './queue.js';
 import { RobotsChecker } from './robots.js';
@@ -230,15 +231,16 @@ export async function crawl(
   const transferSizeMap = new Map<string, number>();
   const resourceRefsMap = new Map<string, ResourceEntry[]>();
 
-  // Phase 12.3: Create shared ProxyAgent if proxy is configured. The proxy
-  // resolves targets itself, so fetchPage/fetchHead resolve and check every
-  // target (and redirect hop) before handing it over. The browser chains to
-  // the proxy through its local guarded proxy. Always set (or clear) it: the
-  // dashboard runs many crawls in one process.
+  // Phase 12.3: Create a shared proxy dispatcher if a proxy is configured.
+  // It resolves and checks every target (and redirect hop) here and gives the
+  // proxy only the checked IP, so the proxy never resolves a crawled name.
+  // The browser chains to the proxy through its local guarded proxy, which
+  // pins the IP the same way. Always set (or clear) it: the dashboard runs
+  // many crawls in one process.
   let proxyDispatcher: Dispatcher | undefined;
   setBrowserProxy(config.proxy || '');
   if (config.proxy) {
-    proxyDispatcher = new ProxyAgent(config.proxy);
+    proxyDispatcher = pinnedProxyDispatcher(config.proxy);
     // Redact credentials before logging
     try {
       const proxyUrl = new URL(config.proxy);
@@ -266,6 +268,7 @@ export async function crawl(
     cookies: config.cookies,
     dispatcher: proxyDispatcher,
     credentialHosts,
+    maxBodyBytes: config.maxBodyBytes,
   };
 
   // Phase 3: Extraction options
@@ -830,9 +833,9 @@ export async function crawl(
     await closeBrowser();
   }
 
-  // Close ProxyAgent to release connection pool
-  if (proxyDispatcher && 'close' in proxyDispatcher) {
-    await (proxyDispatcher as ProxyAgent).close();
+  // Close the proxy dispatcher to release its connection pools
+  if (proxyDispatcher) {
+    await (proxyDispatcher as PinnedProxyAgent).close();
   }
 
   // Memory optimization: Clear transient maps that are no longer needed

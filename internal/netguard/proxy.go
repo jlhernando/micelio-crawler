@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -21,7 +22,10 @@ type Proxy struct {
 	ln   net.Listener
 	srv  *http.Server
 	dial DialFunc
-	tr   *http.Transport
+	tr   interface {
+		http.RoundTripper
+		CloseIdleConnections()
+	}
 	once sync.Once
 }
 
@@ -35,17 +39,52 @@ func StartProxy(dial DialFunc) (*Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &Proxy{ln: ln, dial: dial}
-	p.tr = &http.Transport{
+	p := &Proxy{ln: ln, dial: dial, tr: proxyBaseTransport(dial)}
+	p.serveOn()
+	return p, nil
+}
+
+func proxyBaseTransport(dial DialFunc) *http.Transport {
+	return &http.Transport{
 		Proxy:                 nil, // never chain to an environment proxy
 		DialContext:           dial,
 		MaxIdleConnsPerHost:   4,
 		IdleConnTimeout:       30 * time.Second,
 		ResponseHeaderTimeout: 60 * time.Second,
 	}
-	p.srv = &http.Server{Handler: http.HandlerFunc(p.serve), ReadHeaderTimeout: 30 * time.Second}
-	go p.srv.Serve(ln)
+}
+
+// StartProxyVia starts a guarded proxy that chains to upstream (http,
+// https or socks5; credentials in the URL are sent). Each target is checked
+// and resolved here and upstream only gets the checked IP (DialThrough,
+// ProxyTransport), so it cannot be steered by DNS that changes answers.
+// upstream must be a proxy the local user configured (CLI --proxy, Tor,
+// micelio ui --trusted-proxy): dialUpstream connects to it (nil:
+// ProxyDialer(30 s), which accepts a proxy on loopback or a private
+// network). Requests that would not use upstream go out on the guarded
+// Dialer.
+func StartProxyVia(upstream *url.URL, dialUpstream DialFunc) (*Proxy, error) {
+	if dialUpstream == nil {
+		dialUpstream = ProxyDialer(30 * time.Second).DialContext
+	}
+	dial, err := DialThrough(upstream, dialUpstream, nil)
+	if err != nil {
+		return nil, err
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	base := proxyBaseTransport(Dialer(30 * time.Second).DialContext)
+	p := &Proxy{ln: ln, dial: dial,
+		tr: NewProxyTransport(base, http.ProxyURL(upstream), dialUpstream, nil)}
+	p.serveOn()
 	return p, nil
+}
+
+func (p *Proxy) serveOn() {
+	p.srv = &http.Server{Handler: http.HandlerFunc(p.serve), ReadHeaderTimeout: 30 * time.Second}
+	go p.srv.Serve(p.ln)
 }
 
 // Addr is the proxy's host:port.

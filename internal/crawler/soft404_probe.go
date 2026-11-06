@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/micelio/micelio/internal/extract"
+	"github.com/micelio/micelio/internal/termsafe"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -52,9 +53,9 @@ func (s *crawlSession) setupSoft404Probe(ctx context.Context) {
 	}
 	switch {
 	case probe.Error != "":
-		fmt.Fprintf(os.Stderr, "  [soft404] check skipped: %s\n", probe.Error)
+		fmt.Fprintf(os.Stderr, "  [soft404] check skipped: %s\n", termsafe.String(probe.Error))
 	case probe.StatusCode == 200 && probe.FinalURL != "" && probe.FinalURL != probeURL:
-		fmt.Fprintf(os.Stderr, "  [soft404] %s redirects a page that does not exist to %s (soft 404s likely)\n", seed.Host, probe.FinalURL)
+		fmt.Fprintf(os.Stderr, "  [soft404] %s redirects a page that does not exist to %s (soft 404s likely)\n", seed.Host, termsafe.String(probe.FinalURL))
 	case probe.StatusCode == 200:
 		fmt.Fprintf(os.Stderr, "  [soft404] %s answers 200 for a page that does not exist (soft 404s likely)\n", seed.Host)
 	default:

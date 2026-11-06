@@ -10,6 +10,7 @@ import { homedir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
 import { parseCron, nextRun, describeCron, type CronExpression } from './cron-parser.js';
 import { sendWebhook, type WebhookPayload, type WebhookOptions } from './webhook.js';
+import { redactUrl } from './utils.js';
 
 // ── Schedule state ──────────────────────────────────────
 
@@ -162,11 +163,12 @@ export async function runSchedule(config: ScheduleConfig): Promise<void> {
 
   const description = describeCron(cronExpr);
   process.stderr.write(`\nSchedule: ${description}\n`);
-  process.stderr.write(`  URL:      ${url}\n`);
+  // Logs may be kept for long (systemd journal): never print credentials.
+  process.stderr.write(`  URL:      ${redactUrl(url)}\n`);
   process.stderr.write(`  Cron:     ${cronExpr}\n`);
   process.stderr.write(`  Output:   ${resolve(outputDir)}/\n`);
   if (webhook) {
-    process.stderr.write(`  Webhook:  ${webhook.url}\n`);
+    process.stderr.write(`  Webhook:  ${redactUrl(webhook.url, 'origin')}\n`);
   }
   if (maxRuns > 0) {
     process.stderr.write(`  Max runs: ${maxRuns}\n`);

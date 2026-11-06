@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto';
 import type { DiffResult } from './types.js';
 import { jsonForScript } from './utils.js';
+import { safeConsole, termSafe } from './sanitize.js';
 
 /**
  * Print a terminal report summarizing the crawl diff.
  */
 export function printDiffReport(result: DiffResult): void {
+  // URLs and old/new values come from crawled pages: sanitize every line.
+  const console = safeConsole;
   const line = '\u2500'.repeat(60);
   const delta = (oldVal: number, newVal: number): string => {
     const diff = newVal - oldVal;
@@ -47,7 +50,7 @@ export function printDiffReport(result: DiffResult): void {
   if (result.addedUrls.length > 0) {
     console.log(`\n  Added URLs (${result.addedUrls.length}):`);
     for (const url of result.addedUrls.slice(0, 20)) {
-      console.log(`    + ${url}`);
+      console.log(`    + ${termSafe(url)}`);
     }
     if (result.addedUrls.length > 20) {
       console.log(`    ... and ${result.addedUrls.length - 20} more`);
@@ -58,7 +61,7 @@ export function printDiffReport(result: DiffResult): void {
   if (result.removedUrls.length > 0) {
     console.log(`\n  Removed URLs (${result.removedUrls.length}):`);
     for (const url of result.removedUrls.slice(0, 20)) {
-      console.log(`    - ${url}`);
+      console.log(`    - ${termSafe(url)}`);
     }
     if (result.removedUrls.length > 20) {
       console.log(`    ... and ${result.removedUrls.length - 20} more`);
@@ -69,11 +72,11 @@ export function printDiffReport(result: DiffResult): void {
   if (result.changedUrls.length > 0) {
     console.log(`\n  Changed URLs (${result.changedUrls.length}):`);
     for (const change of result.changedUrls.slice(0, 30)) {
-      console.log(`    ~ ${change.url}`);
+      console.log(`    ~ ${termSafe(change.url)}`);
       for (const c of change.changes) {
-        const oldStr = String(c.oldValue).substring(0, 60);
-        const newStr = String(c.newValue).substring(0, 60);
-        console.log(`      ${c.field}: "${oldStr}" \u2192 "${newStr}"`);
+        const oldStr = termSafe(c.oldValue).substring(0, 60);
+        const newStr = termSafe(c.newValue).substring(0, 60);
+        console.log(`      ${termSafe(c.field)}: "${oldStr}" \u2192 "${newStr}"`);
       }
     }
     if (result.changedUrls.length > 30) {

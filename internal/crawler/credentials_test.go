@@ -66,13 +66,20 @@ func TestCredentialsAllowed(t *testing.T) {
 	}{
 		{"https://example.com/", "https://example.com/a", true},
 		{"https://example.com/", "https://www.example.com/a", true},
-		{"https://example.com:8443/", "https://EXAMPLE.com/a", true},
+		{"https://example.com:8443/", "https://EXAMPLE.com:8443/a", true},
+		// A port change is another service on the host.
+		{"https://example.com:8443/", "https://example.com/a", false},
+		{"https://example.com/", "https://example.com:8443/a", false},
 		{"https://example.com/", "https://evil.com/", false},
 		{"https://example.com/", "https://notexample.com/", false},
 		{"https://www.example.com/", "https://example.com/", true},
 		{"https://www.staging.example.com/", "https://staging.example.com/a", true},
 		{"https://staging.example.com/", "https://www.staging.example.com/a", true},
-		{"https://www.example.com/", "https://cdn.www.example.com/", true},
+		// Other subdomains may belong to someone else (SaaS tenants,
+		// shared hosting): no credentials.
+		{"https://www.example.com/", "https://cdn.www.example.com/", false},
+		{"https://example.com/", "https://shop.example.com/", false},
+		{"https://acme.myshop.example/", "https://attacker.acme.myshop.example/", false},
 		{"https://www.example.com/", "http://example.com/", false},
 		{"https://example.com/", "https://wwwexample.com/", false},
 		{"https://www.example.com/", "https://wwwexample.com/", false},

@@ -644,9 +644,12 @@ func setHeaders(req *http.Request, opts FetchOptions) {
 
 // credentialsAllowed reports whether the crawl's cookies and custom headers
 // (Authorization, X-Api-Key...), meant for the site at from, may be sent to
-// to. Like net/http on redirects: same host or a subdomain of it, plus the
-// www/apex pair (www.example.com <-> example.com, a common first redirect),
-// and never after a downgrade from https to http.
+// to: the same host or its www/apex twin (www.example.com <-> example.com, a
+// common first redirect), on the same port, and never after a downgrade
+// from https to http. Other subdomains are not trusted: on shared hosting
+// or SaaS platforms (tenant.example.com) they belong to someone else.
+// Requests that start on another in-scope host (an allowed domain) use that
+// host as from, so they still get the credentials.
 func credentialsAllowed(from, to *url.URL) bool {
 	if from == nil || to == nil {
 		return false
@@ -658,8 +661,22 @@ func credentialsAllowed(from, to *url.URL) bool {
 	if fh == "" {
 		return false
 	}
-	return th == fh || strings.HasSuffix(th, "."+fh) ||
-		strings.TrimPrefix(th, "www.") == strings.TrimPrefix(fh, "www.")
+	if effectivePort(from) != effectivePort(to) && !(from.Port() == "" && to.Port() == "") {
+		return false
+	}
+	return th == fh || strings.TrimPrefix(th, "www.") == strings.TrimPrefix(fh, "www.")
+}
+
+// effectivePort is u's port, or the scheme's default (an http -> https
+// upgrade moves 80 -> 443 without a real port change).
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return "80"
 }
 
 // setHeadersFor sets the request headers. With creds false the custom

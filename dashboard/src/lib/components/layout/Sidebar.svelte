@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../../api';
+  import { createWsClient, type WsMessage } from '../../ws';
 
   let { currentPath, collapsed, onToggle }: {
     currentPath: string;
@@ -18,7 +19,13 @@
   let activeCrawls = $state<ActiveCrawl[]>([]);
   let pollInterval: ReturnType<typeof setInterval> | null = null;
 
+  // One list request at a time: progress messages for a crawl not listed
+  // yet arrive many per second.
+  let fetching = false;
+
   async function fetchActiveCrawls() {
+    if (fetching) return;
+    fetching = true;
     try {
       const data = await api.listCrawls();
       activeCrawls = (data.crawls || [])
@@ -31,8 +38,37 @@
         }));
     } catch {
       // silent — sidebar should never break
+    } finally {
+      fetching = false;
     }
   }
+
+  // Live page counts from the same WebSocket progress the Monitor reads
+  // (the polled /api/crawls is only a fallback between events). The socket
+  // is only held while a crawl is running or paused.
+  function handleWs(msg: WsMessage) {
+    if (!msg.crawlId) return;
+    if (msg.type === 'progress') {
+      if (msg.data.phase) return; // resume/analysis loading phases
+      const crawled = msg.data.crawled as number | undefined;
+      if (typeof crawled !== 'number') return;
+      const crawl = activeCrawls.find((c) => c.id === msg.crawlId);
+      if (!crawl) {
+        fetchActiveCrawls(); // a crawl we have not listed yet
+        return;
+      }
+      if (crawled !== crawl.pageCount) crawl.pageCount = crawled;
+    } else if (msg.type === 'paused' || msg.type === 'resumed' || msg.type === 'complete' || msg.type === 'cancelled') {
+      fetchActiveCrawls();
+    }
+  }
+
+  let hasActive = $derived(activeCrawls.length > 0);
+  $effect(() => {
+    if (!hasActive) return;
+    const client = createWsClient(handleWs);
+    return () => client.close();
+  });
 
   onMount(() => {
     fetchActiveCrawls();

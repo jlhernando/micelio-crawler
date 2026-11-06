@@ -143,6 +143,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			return
 		}
 		job = redactedJob(job)
+		manager.withLiveCounts([]*CrawlJob{job})
 		// A crawl is marked completed before its analysis runs: "analyzing"
 		// says its results are not available yet (crawls and imports).
 		analyzing := job.Status == "completed" && manager.IsAnalyzing(id)
@@ -751,7 +752,9 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		jsonOK(w, map[string]interface{}{"crawls": redactedJobs(jobs), "total": len(jobs)})
+		out := redactedJobs(jobs)
+		manager.withLiveCounts(out) // DB count lags up to 10 pages
+		jsonOK(w, map[string]interface{}{"crawls": out, "total": len(jobs)})
 	})
 
 	mux.HandleFunc("POST /api/crawl/diff", func(w http.ResponseWriter, r *http.Request) {

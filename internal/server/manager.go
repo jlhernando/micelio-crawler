@@ -501,6 +501,38 @@ func (m *CrawlManager) activeCounters(crawlID string) (queued, totalSeen, exclud
 	return m.active.Queued, m.active.TotalSeen, m.active.Excluded
 }
 
+// activePageCounts returns the live page and error counts of the active
+// crawl. The DB copy is only written every 10 pages, so lists and status
+// answers use these for the running crawl to match the Monitor.
+func (m *CrawlManager) activePageCounts(crawlID string) (pages, errors int, ok bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.active == nil || m.active.ID != crawlID {
+		return 0, 0, false
+	}
+	return m.active.PageCount, m.active.ErrorCount, true
+}
+
+// withLiveCounts swaps the DB page and error counts of the active crawl's
+// job for the live ones. Jobs must be copies (redactedJobs makes them).
+func (m *CrawlManager) withLiveCounts(jobs []*CrawlJob) {
+	for _, j := range jobs {
+		if j == nil || (j.Status != "running" && j.Status != "paused") {
+			continue
+		}
+		if pages, errs, ok := m.activePageCounts(j.ID); ok {
+			// Never go backwards: a resumed crawl's DB count may be ahead
+			// until its first progress event.
+			if pages > j.PageCount {
+				j.PageCount = pages
+			}
+			if errs > j.ErrorCount {
+				j.ErrorCount = errs
+			}
+		}
+	}
+}
+
 // CrawlError is one failed page shown in the Monitor's error list.
 type CrawlError struct {
 	URL        string `json:"url"`

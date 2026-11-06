@@ -3,6 +3,7 @@ package crawler
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -129,7 +130,7 @@ func ssrfSafeDialer(base *net.Dialer, cache *dnsCache) func(ctx context.Context,
 		if cache != nil {
 			ips, err = cache.LookupIPAddr(ctx, host)
 		} else {
-			ips, err = net.DefaultResolver.LookupIPAddr(ctx, host)
+			ips, err = lookupHost(ctx, host)
 		}
 		if err != nil {
 			return nil, err
@@ -143,6 +144,16 @@ func ssrfSafeDialer(base *net.Dialer, cache *dnsCache) func(ctx context.Context,
 		return base.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
 	}
 }
+
+// proxyDial connects to a proxy the local user configured (--proxy, Tor,
+// HTTP(S)_PROXY, the dashboard's --trusted-proxy). It accepts loopback and
+// private addresses; targets reached through the proxy are still checked
+// (netguard.ProxyTransport).
+var proxyDial netguard.DialFunc = netguard.ProxyDialer(30 * time.Second).DialContext
+
+// crawlTLSConfig, when set, is the TLS config of crawl clients (tests only:
+// trusts a test server's certificate).
+var crawlTLSConfig *tls.Config
 
 // DefaultClient returns an HTTP client configured for crawling.
 // It does NOT follow redirects (we track them manually).
@@ -178,11 +189,17 @@ func newClient(timeout time.Duration, proxy *url.URL, ssrfProtect bool, cache *d
 		transport.DialContext = dial
 		// A proxy (--proxy, Tor, or HTTP(S)_PROXY) would resolve the target
 		// itself, past the dialer's check: give it the checked IP instead.
-		lookup := net.DefaultResolver.LookupIPAddr
+		// The proxy itself is the local user's choice (the dashboard only
+		// accepts its --trusted-proxy), so it is reached even on loopback
+		// or a private address: Tor listens on 127.0.0.1:9050.
+		lookup := netguard.LookupFunc(lookupHost)
 		if cache != nil {
 			lookup = cache.LookupIPAddr
 		}
-		rt = netguard.NewProxyTransport(transport, transport.Proxy, dial, lookup)
+		rt = netguard.NewProxyTransport(transport, transport.Proxy, proxyDial, lookup)
+	}
+	if crawlTLSConfig != nil {
+		transport.TLSClientConfig = crawlTLSConfig.Clone()
 	}
 	jar, _ := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	return &http.Client{
@@ -212,7 +229,7 @@ func SafeClientFollowRedirects(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout:       timeout,
 		CheckRedirect: netguard.CheckRedirect,
-		Transport:     netguard.NewProxyTransport(transport, http.ProxyFromEnvironment, dial, nil),
+		Transport:     netguard.NewProxyTransport(transport, http.ProxyFromEnvironment, proxyDial, nil),
 	}
 }
 

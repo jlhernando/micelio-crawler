@@ -96,6 +96,10 @@ type ServerOptions struct {
 	// Pprof serves /debug/pprof/ when Host is not loopback (it is always
 	// on for loopback). It sits behind the same token as /api/.
 	Pprof bool
+	// TrustedProxy is the only proxy dashboard crawls may use
+	// (--trusted-proxy, MICELIO_TRUSTED_PROXY): http(s)://, socks5:// or
+	// "tor". It may be on loopback or a private address.
+	TrustedProxy string
 }
 
 // ErrNoAuthToken is returned when the dashboard would listen beyond this
@@ -130,6 +134,9 @@ func StartUIServerWithOptions(opts ServerOptions, dashboardFS fs.FS) error {
 	if err := checkExposure(opts); err != nil {
 		return err
 	}
+	if err := ValidateTrustedProxy(opts.TrustedProxy); err != nil {
+		return err
+	}
 	if !IsLoopbackHost(host) && authToken == "" {
 		log.Println("WARNING: --insecure-no-auth: API endpoints are unauthenticated on " + host)
 	}
@@ -139,6 +146,10 @@ func StartUIServerWithOptions(opts ServerOptions, dashboardFS fs.FS) error {
 	}
 
 	manager := NewCrawlManager(store)
+	manager.TrustedProxy = strings.TrimSpace(opts.TrustedProxy)
+	if manager.TrustedProxy != "" {
+		log.Printf("Trusted proxy for dashboard crawls: %s\n", redactURL(manager.TrustedProxy))
+	}
 	manager.ResumeUISchedules(store) // dashboard schedules survive restarts
 
 	upd := newUpdater(opts.Version)

@@ -306,6 +306,7 @@ func uiCmd() *cobra.Command {
 		insecureNoAuth bool
 		pprof          bool
 		allowedHosts   []string
+		trustedProxy   string
 	)
 
 	cmd := &cobra.Command{
@@ -331,6 +332,9 @@ func uiCmd() *cobra.Command {
 			if env := os.Getenv("MICELIO_ALLOWED_HOSTS"); env != "" {
 				allowedHosts = append(allowedHosts, strings.Split(env, ",")...)
 			}
+			if trustedProxy == "" {
+				trustedProxy = os.Getenv("MICELIO_TRUSTED_PROXY")
+			}
 			fmt.Fprintf(os.Stderr, "\n  Micelio %s — starting web UI on %s:%d\n\n", version, host, port)
 			return server.StartUIServerWithOptions(server.ServerOptions{
 				Port:           port,
@@ -340,6 +344,7 @@ func uiCmd() *cobra.Command {
 				InsecureNoAuth: insecureNoAuth,
 				Pprof:          pprof,
 				AllowedHosts:   allowedHosts,
+				TrustedProxy:   trustedProxy,
 			}, dashboardFS())
 		},
 	}
@@ -349,6 +354,7 @@ func uiCmd() *cobra.Command {
 	cmd.Flags().StringVar(&authToken, "auth-token", "", "Bearer token for API authentication (or MICELIO_AUTH_TOKEN env, which keeps it out of the process list)")
 	cmd.Flags().BoolVar(&insecureNoAuth, "insecure-no-auth", false, "Allow a non-loopback --host without a token (only behind a proxy that authenticates)")
 	cmd.Flags().StringArrayVar(&allowedHosts, "allowed-host", nil, "Host name a reverse proxy or tunnel serves the dashboard on, or an exact origin like http://localhost:5175 (repeatable, or MICELIO_ALLOWED_HOSTS comma-separated): passes the Host check and counts as the dashboard's own origin on the port it names (80/443 if none)")
+	cmd.Flags().StringVar(&trustedProxy, "trusted-proxy", "", "The only proxy dashboard crawls may use (http://, https://, socks5:// URL or 'tor'; or MICELIO_TRUSTED_PROXY, e.g. in ~/.micelio/micelio.env). It may be on this computer or the local network; crawl configs naming any other proxy are refused")
 	cmd.Flags().BoolVar(&pprof, "pprof", false, "Serve /debug/pprof/ on a non-loopback --host too (always on for loopback; needs the token when one is set)")
 	return cmd
 }

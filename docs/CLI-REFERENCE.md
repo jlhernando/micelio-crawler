@@ -116,7 +116,7 @@ failures.
 | `--compare-device <id>` | none | Also fetch (and with `--js` render) every page as this device and store what differs in each page's `deviceCompare`; about doubles the requests |
 | `-H, --header "Name: Value"` | | Add a custom request header; repeatable |
 | `--cookies <value>` | | Initial Cookie header |
-| `--proxy <url>` | | HTTP, HTTPS, or SOCKS5 proxy; `tor` selects Tor |
+| `--proxy <url>` | | HTTP, HTTPS, or SOCKS5 proxy; `tor` selects Tor (SOCKS5 on `127.0.0.1:9050`). The proxy may run on this computer or the local network. Each site is still checked: the proxy only gets its checked IP address (`CONNECT ip:port`), never the name, so it must accept IP targets |
 | `--no-robots` | off | Ignore robots.txt restrictions |
 | `--show-blocked-internal` | off | Include internally discovered URLs blocked by robots.txt |
 | `--adaptive-rate` | off | Adjust request rate from server feedback |
@@ -606,6 +606,7 @@ micelio ui [flags]
 | `--insecure-no-auth` | off | Allow a non-loopback `--host` without a token (only behind a proxy that authenticates) |
 | `--allowed-host <name>` | `MICELIO_ALLOWED_HOSTS` (comma-separated) | Public host name of a reverse proxy or tunnel in front of the dashboard, or an exact origin such as `http://localhost:5175`. Repeatable. It passes the `Host` check and counts as the dashboard's own origin on the port it names (the scheme's default port, 80 or 443, when it names none) |
 | `--pprof` | off | Serve `/debug/pprof/` on a non-loopback `--host` too (always on for loopback) |
+| `--trusted-proxy <url>` | `MICELIO_TRUSTED_PROXY` (also read from `~/.micelio/micelio.env`) | The only proxy dashboard crawls and schedules may use: `http://`, `https://`, `socks5://` URL or `tor`. It may run on this computer or the local network. A crawl config with any other proxy gets HTTP 400; its masked form (`http://user:••••••••@host:port`, as the API returns it) counts as the trusted proxy. Without this flag dashboard crawls cannot use a proxy |
 
 ```bash
 micelio ui                     # 127.0.0.1:3100

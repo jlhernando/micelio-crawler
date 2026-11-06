@@ -9,6 +9,10 @@ import (
 
 const defaultDNSTTL = 5 * time.Minute
 
+// lookupHost resolves host names for the crawl clients (a variable so
+// tests can answer with public-looking addresses).
+var lookupHost = net.DefaultResolver.LookupIPAddr
+
 // dnsCache is an in-memory DNS cache with TTL expiry.
 // Eliminates redundant DNS lookups for single-domain crawls.
 type dnsCache struct {
@@ -38,7 +42,7 @@ func (c *dnsCache) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr,
 	}
 	c.mu.RUnlock()
 
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	ips, err := lookupHost(ctx, host)
 	if err != nil {
 		return nil, err
 	}

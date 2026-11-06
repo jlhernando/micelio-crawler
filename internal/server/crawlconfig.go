@@ -215,6 +215,9 @@ func numberValue(v interface{}) (float64, bool) {
 func confineCrawlConfig(c *types.CrawlConfig) (warnings []string) {
 	c.OutputPath = ""
 	c.DBPath = ""
+	// The Tor control port is dialled directly (circuit rotation): only
+	// the default 127.0.0.1:9051, never an address from an API config.
+	c.TorControlPort = ""
 	keyFiles := []struct {
 		name string
 		path *string

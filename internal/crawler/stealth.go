@@ -88,10 +88,11 @@ func StealthClient(timeout time.Duration, proxy *url.URL) (*http.Client, error) 
 
 // stealthProxyDial connects to the proxy and stealthLookup resolves
 // targets for StealthClient (variables so tests can reach a loopback proxy
-// and stub DNS). Like the crawl client, the proxy itself must not be a
-// private address.
+// and stub DNS). The proxy is the local user's (--proxy, Tor, the
+// dashboard's --trusted-proxy), so it may be on loopback or a private
+// network; the targets sent to it are checked (netguard.DialThrough).
 var (
-	stealthProxyDial netguard.DialFunc = SafeDialer(30 * time.Second).DialContext
+	stealthProxyDial netguard.DialFunc = netguard.ProxyDialer(30 * time.Second).DialContext
 	stealthLookup    netguard.LookupFunc
 )
 

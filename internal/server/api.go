@@ -100,6 +100,12 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		// Only the trusted proxy (micelio ui --trusted-proxy); its masked
+		// form becomes the real URL before the other secrets are restored.
+		if err := manager.applyTrustedProxy(config); err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		if err := restoreFromCrawl(store, config); err != nil { // Recrawl sends back masked secrets
 			jsonError(w, err.Error(), http.StatusBadRequest)
 			return
@@ -195,6 +201,10 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			var orig map[string]interface{}
 			if old, err := store.GetCrawlJob(r.PathValue("id")); err == nil && old != nil {
 				orig = old.Config
+			}
+			if err := manager.applyTrustedProxy(configOverride); err != nil {
+				jsonError(w, err.Error(), http.StatusBadRequest)
+				return
 			}
 			if err := restoreConfigSecrets(configOverride, orig); err != nil {
 				jsonError(w, err.Error(), http.StatusBadRequest)

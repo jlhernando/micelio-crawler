@@ -187,7 +187,9 @@ func TestStartRefusesMaskedSeedURL(t *testing.T) {
 	rec := httptest.NewRecorder()
 	api.ServeHTTP(rec, httptest.NewRequest("POST", "/api/crawl/"+old.ID+"/restart",
 		strings.NewReader(`{"seedUrl":"https://example.invalid/","proxy":"http://x:`+secretMask+`@p:1"}`)))
-	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "proxy password") {
+	// A masked proxy that is not the trusted proxy is refused before any
+	// secret is restored.
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "--trusted-proxy") {
 		t.Errorf("restart: %d %s", rec.Code, rec.Body.String())
 	}
 }
@@ -251,6 +253,8 @@ func TestSettingsMaskWebhookURLs(t *testing.T) {
 func TestMaskedConfigRoundTripKeepsSecrets(t *testing.T) {
 	api, s, m := newTestAPI(t)
 	m.SkipSSRF = true
+	// API configs may only name the trusted proxy (--trusted-proxy).
+	m.TrustedProxy = secretConfig()["proxy"].(string)
 	// Key file paths are confined to ~/.micelio/keys and dropped otherwise,
 	// so this round trip covers the inline secrets only.
 	cfg := func() map[string]any {

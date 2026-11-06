@@ -15,7 +15,8 @@ const maxRedirects = 10
 // HTTPClient returns a client for outbound requests to addresses a user
 // typed in (webhooks, alert channels, self-hosted integrations). It:
 //   - refuses to connect to a blocked address, checked after DNS (Dialer);
-//   - uses HTTP_PROXY/HTTPS_PROXY, but checks and resolves the target
+//   - uses HTTP_PROXY/HTTPS_PROXY (reached even on a private address,
+//     since the local user set it), but checks and resolves the target
 //     itself and gives the proxy only the checked IP (ProxyTransport),
 //     because the dialer only sees the proxy's address;
 //   - checks every redirect: http(s) only, never to a blocked host.
@@ -24,8 +25,10 @@ func HTTPClient(timeout time.Duration) *http.Client {
 	dial := Dialer(30 * time.Second).DialContext
 	transport.DialContext = dial
 	return &http.Client{
-		Timeout:       timeout,
-		Transport:     NewProxyTransport(transport, http.ProxyFromEnvironment, dial, nil),
+		Timeout: timeout,
+		// The environment proxy is the local user's: reach it even on a
+		// private address (ProxyDialer); targets are still checked.
+		Transport:     NewProxyTransport(transport, http.ProxyFromEnvironment, nil, nil),
 		CheckRedirect: CheckRedirect,
 	}
 }

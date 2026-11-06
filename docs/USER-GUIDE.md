@@ -273,7 +273,10 @@ The New Crawl form groups advanced controls by purpose:
 - **Rate Limiting & Safety**: retries per URL, total crawl time, adaptive rate,
   and memory limits.
 - **HTTP & Authentication**: user-agent presets, headers, cookies, proxy, stealth
-  fingerprinting, and Tor circuit rotation.
+  fingerprinting, and Tor circuit rotation. The proxy field only takes the
+  proxy the dashboard was started with (`micelio ui --trusted-proxy <url>` or
+  `MICELIO_TRUSTED_PROXY`, `tor` for Tor); any other proxy is refused, because
+  a proxy can reach this computer and its network.
 - **JavaScript Rendering**: headless Chrome rendering, resource blocking, render
   timeout, DOM/render comparison, and page snippets.
 - **Custom Extraction**: named CSS selectors and literal or regular-expression

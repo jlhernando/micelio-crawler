@@ -58,11 +58,14 @@ func proxyBaseTransport(dial DialFunc) *http.Transport {
 // https or socks5; credentials in the URL are sent). Each target is checked
 // and resolved here and upstream only gets the checked IP (DialThrough,
 // ProxyTransport), so it cannot be steered by DNS that changes answers.
-// dialUpstream connects to upstream itself (nil: Dialer(30 s), which
-// refuses private addresses).
+// upstream must be a proxy the local user configured (CLI --proxy, Tor,
+// micelio ui --trusted-proxy): dialUpstream connects to it (nil:
+// ProxyDialer(30 s), which accepts a proxy on loopback or a private
+// network). Requests that would not use upstream go out on the guarded
+// Dialer.
 func StartProxyVia(upstream *url.URL, dialUpstream DialFunc) (*Proxy, error) {
 	if dialUpstream == nil {
-		dialUpstream = Dialer(30 * time.Second).DialContext
+		dialUpstream = ProxyDialer(30 * time.Second).DialContext
 	}
 	dial, err := DialThrough(upstream, dialUpstream, nil)
 	if err != nil {
@@ -72,7 +75,7 @@ func StartProxyVia(upstream *url.URL, dialUpstream DialFunc) (*Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	base := proxyBaseTransport(dialUpstream)
+	base := proxyBaseTransport(Dialer(30 * time.Second).DialContext)
 	p := &Proxy{ln: ln, dial: dial,
 		tr: NewProxyTransport(base, http.ProxyURL(upstream), dialUpstream, nil)}
 	p.serveOn()

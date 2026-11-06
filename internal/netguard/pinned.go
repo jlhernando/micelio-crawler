@@ -69,7 +69,8 @@ func (e *ProxyRefusedError) Error() string {
 // (host:port) through proxyURL. The host is checked and resolved here
 // (CheckedIP) and the proxy only gets the checked IP: CONNECT ip:port for
 // http/https proxies, an IP address for socks5. dialProxy connects to the
-// proxy itself (nil: Dialer(30 s), which refuses private addresses).
+// proxy itself (nil: ProxyDialer(30 s): the proxy is one the local user
+// configured, so it may be on loopback or a private network).
 // Credentials in proxyURL are sent (Proxy-Authorization, socks5 user/pass).
 // TLS to the target, if any, is the caller's job, with the original name.
 func DialThrough(proxyURL *url.URL, dialProxy DialFunc, lookup LookupFunc) (DialFunc, error) {
@@ -77,7 +78,7 @@ func DialThrough(proxyURL *url.URL, dialProxy DialFunc, lookup LookupFunc) (Dial
 		return nil, errors.New("proxy URL has no host")
 	}
 	if dialProxy == nil {
-		dialProxy = Dialer(30 * time.Second).DialContext
+		dialProxy = ProxyDialer(30 * time.Second).DialContext
 	}
 	scheme := strings.ToLower(proxyURL.Scheme)
 	proxyAddr := proxyHostPort(proxyURL)
@@ -220,7 +221,9 @@ func (d dialFuncDialer) DialContext(ctx context.Context, network, addr string) (
 // requests (ProxyRefusedError), and never falls back to the name.
 //
 // Requests with no proxy go straight out on the base transport, whose
-// dialer must refuse private addresses.
+// dialer must refuse private addresses. The proxy itself is trusted: it
+// comes from the local user (CLI --proxy, HTTP(S)_PROXY, micelio ui
+// --trusted-proxy), so it may listen on loopback or a private address.
 type ProxyTransport struct {
 	base      *http.Transport // template; Proxy is nil
 	proxy     func(*http.Request) (*url.URL, error)
@@ -232,12 +235,14 @@ type ProxyTransport struct {
 }
 
 // NewProxyTransport wraps base (its Proxy is ignored and cleared). proxy
-// picks the proxy per request (nil URL = direct). dialProxy connects to the
-// proxy (nil: Dialer(30 s)); lookup resolves targets (nil: system DNS).
+// picks the proxy per request (nil URL = direct) and must only return
+// proxies the local user configured. dialProxy connects to the proxy (nil:
+// ProxyDialer(30 s), which accepts a local proxy); lookup resolves targets
+// (nil: system DNS).
 func NewProxyTransport(base *http.Transport, proxy func(*http.Request) (*url.URL, error), dialProxy DialFunc, lookup LookupFunc) *ProxyTransport {
 	base.Proxy = nil
 	if dialProxy == nil {
-		dialProxy = Dialer(30 * time.Second).DialContext
+		dialProxy = ProxyDialer(30 * time.Second).DialContext
 	}
 	return &ProxyTransport{base: base, proxy: proxy, dialProxy: dialProxy, lookup: lookup,
 		tunnels: map[string]*http.Transport{}}

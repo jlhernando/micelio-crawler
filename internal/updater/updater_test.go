@@ -442,6 +442,23 @@ func TestRollbackNoBackup(t *testing.T) {
 	}
 }
 
+// A rollback while an install runs is refused: it could move a half-written
+// backup over the binary.
+func TestRollbackRefusedDuringInstall(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "micelio")
+	os.WriteFile(bin, []byte("CURRENT"), 0o755)
+	os.WriteFile(bin+".bak", []byte("OLD"), 0o755)
+	u := New("test/repo", "1.0.0", bin, dir)
+	u.installing = true
+	if err := u.Rollback(); err == nil || !strings.Contains(err.Error(), "in progress") {
+		t.Fatalf("err = %v, want update in progress", err)
+	}
+	if b, _ := os.ReadFile(bin); string(b) != "CURRENT" {
+		t.Fatalf("binary replaced during install: %q", b)
+	}
+}
+
 func TestInstallPreservesPermissions(t *testing.T) {
 	wantAsset := assetName(runtime.GOOS, runtime.GOARCH)
 	newContents := []byte("new binary")

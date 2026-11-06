@@ -73,44 +73,120 @@ export function similarity(a: bigint, b: bigint): number {
 // Uses greedy grouping: each group is built relative to a seed URL.
 // URLs within a group are all similar to the seed, but may not be similar to each other.
 // The reported similarity is the minimum similarity to the seed, not between all pairs.
-// Complexity: O(n^2) — suitable for up to a few thousand items. For larger sets,
-// consider bit-sampling or LSH-based approaches.
+//
+// Candidates come from bands (pigeonhole): the 64 bits are cut into
+// maxDistance + 1 bands, and two fingerprints at most maxDistance bits apart
+// must be equal in at least one band. Only items sharing a band value are
+// compared, so a 100k-page crawl no longer does ~5 billion comparisons on
+// the event loop. The groups are exactly those of the all-pairs version.
 // threshold: minimum similarity percentage (default 90% = max 6 bits different)
 export function findNearDuplicates(
   items: { url: string; fingerprint: bigint }[],
   threshold = 90,
 ): { urls: string[]; similarity: number }[] {
   const maxDistance = Math.floor(64 * (1 - threshold / 100));
-  const groups: { urls: Set<string>; similarity: number }[] = [];
-  const assigned = new Set<string>();
+  const n = items.length;
+  if (n < 2 || maxDistance < 0) return [];
 
-  for (let i = 0; i < items.length; i++) {
-    if (assigned.has(items[i].url)) continue;
+  // 64-bit fingerprints as two 32-bit halves: popcount without BigInt
+  const hi = new Uint32Array(n);
+  const lo = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    const f = BigInt.asUintN(64, items[i].fingerprint);
+    hi[i] = Number(f >> 32n);
+    lo[i] = Number(f & 0xffffffffn);
+  }
+  const distance = (a: number, b: number) => popcount32(hi[a] ^ hi[b]) + popcount32(lo[a] ^ lo[b]);
 
-    const group = new Set<string>();
-    let minSimilarity = 100;
-
-    for (let j = i + 1; j < items.length; j++) {
-      if (assigned.has(items[j].url)) continue;
-
-      const dist = hammingDistance(items[i].fingerprint, items[j].fingerprint);
-      if (dist <= maxDistance) {
-        if (group.size === 0) {
-          group.add(items[i].url);
-        }
-        group.add(items[j].url);
-        const sim = Math.round(((64 - dist) / 64) * 100);
-        if (sim < minSimilarity) minSimilarity = sim;
+  // Bands narrower than 4 bits filter nothing: compare all pairs then
+  const bandCount = maxDistance + 1;
+  const buckets: Map<number, number[]>[] = [];
+  const bandOf: number[][] = [];
+  if (bandCount <= 16) {
+    for (let b = 0; b < bandCount; b++) {
+      const start = Math.floor((b * 64) / bandCount);
+      const end = Math.floor(((b + 1) * 64) / bandCount);
+      const mask = (1n << BigInt(end - start)) - 1n;
+      const map = new Map<number, number[]>();
+      const values: number[] = new Array(n);
+      for (let i = 0; i < n; i++) {
+        const v = Number((BigInt.asUintN(64, items[i].fingerprint) >> BigInt(start)) & mask);
+        values[i] = v;
+        const list = map.get(v);
+        if (list) list.push(i); else map.set(v, [i]);
       }
+      buckets.push(map);
+      bandOf.push(values);
+    }
+  }
+
+  // "Grouped" is tracked per URL (as before), via a numeric id per URL
+  const urlIds = new Map<string, number>();
+  const urlId = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    let id = urlIds.get(items[i].url);
+    if (id === undefined) { id = urlIds.size; urlIds.set(items[i].url, id); }
+    urlId[i] = id;
+  }
+  const assigned = new Uint8Array(urlIds.size);
+  const seenFor = new Int32Array(n).fill(-1);
+  const groups: { urls: Set<string>; similarity: number }[] = [];
+
+  for (let i = 0; i < n; i++) {
+    if (assigned[urlId[i]]) continue;
+
+    // Later items (j > i) within maxDistance, found through the bands
+    const matches: { j: number; dist: number }[] = [];
+    const consider = (j: number) => {
+      if (assigned[urlId[j]]) return;
+      const dist = distance(i, j);
+      if (dist <= maxDistance) matches.push({ j, dist });
+    };
+    if (buckets.length === 0) {
+      for (let j = i + 1; j < n; j++) consider(j);
+    } else {
+      for (let b = 0; b < buckets.length; b++) {
+        const list = buckets[b].get(bandOf[b][i])!;
+        // Drop entries that can never be a candidate again (already passed
+        // or grouped), so a crowded bucket is not walked again and again
+        let keep = 0;
+        for (let k = 0; k < list.length; k++) {
+          const j = list[k];
+          if (j <= i || assigned[urlId[j]]) continue;
+          list[keep++] = j;
+          if (seenFor[j] !== i) {
+            seenFor[j] = i;
+            consider(j);
+          }
+        }
+        list.length = keep;
+      }
+      matches.sort((a, b) => a.j - b.j);
+    }
+    if (matches.length === 0) continue;
+
+    const group = new Set<string>([items[i].url]);
+    let minSimilarity = 100;
+    for (const { j, dist } of matches) {
+      group.add(items[j].url);
+      const sim = Math.round(((64 - dist) / 64) * 100);
+      if (sim < minSimilarity) minSimilarity = sim;
     }
 
     if (group.size >= 2) {
       for (const url of group) {
-        assigned.add(url);
+        assigned[urlIds.get(url)!] = 1;
       }
       groups.push({ urls: group, similarity: minSimilarity });
     }
   }
 
   return groups.map((g) => ({ urls: [...g.urls], similarity: g.similarity }));
+}
+
+function popcount32(x: number): number {
+  x -= (x >>> 1) & 0x55555555;
+  x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
+  x = (x + (x >>> 4)) & 0x0f0f0f0f;
+  return Math.imul(x, 0x01010101) >>> 24;
 }

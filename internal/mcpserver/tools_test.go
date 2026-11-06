@@ -73,7 +73,7 @@ func TestCrawlToolsOnlyWithAllowCrawl(t *testing.T) {
 		t.Errorf("crawl_start annotations = %+v", start)
 	}
 	stop := tools["crawl_stop"].Annotations
-	if stop == nil || stop.DestructiveHint == nil || *stop.DestructiveHint {
+	if stop == nil || stop.DestructiveHint == nil || !*stop.DestructiveHint {
 		t.Errorf("crawl_stop annotations = %+v", stop)
 	}
 	if wait := tools["crawl_wait"].Annotations; wait == nil || !wait.ReadOnlyHint {

@@ -11,7 +11,7 @@
 
 import { BetaAnalyticsDataClient } from '@google-analytics/data';
 import type { Ga4Data } from './types.js';
-import { formatDateYmd } from './utils.js';
+import { reportDateRange } from './utils.js';
 
 const MAX_RETRIES = 5;
 
@@ -55,19 +55,11 @@ export async function fetchGa4Data(options: Ga4FetchOptions): Promise<Map<string
   const client = new BetaAnalyticsDataClient(clientOptions);
 
   // Calculate date range
-  const endDate = new Date();
-  endDate.setDate(endDate.getDate() - 1); // GA4 data has ~1 day lag
-  const startDate = new Date(endDate);
-  startDate.setDate(startDate.getDate() - days);
+  // GA4 data has ~1 day lag; the range is inclusive, so exactly `days` days.
+  const { startDate: startStr, endDate: endStr } = reportDateRange(days, 1);
 
-  const startStr = formatDateYmd(startDate);
-  const endStr = formatDateYmd(endDate);
-
-  // Build path-to-URL mapping for matching
-  const pathToUrl = buildPathMap(urls);
-
-  // Fetch data with pagination
-  const results = new Map<string, Ga4Data>();
+  // Matches GA4 pagePath rows to crawled URLs
+  const matcher = new Ga4PathMatcher(urls);
   let offset = 0;
   const pageSize = 100000; // GA4 API max
   let hasMore = true;
@@ -109,13 +101,7 @@ export async function fetchGa4Data(options: Ga4FetchOptions): Promise<Map<string
           avgSessionDuration: Math.round((Number(metrics[6]?.value) || 0) * 10) / 10,
         };
 
-        // Match pagePath to full URLs
-        const matchedUrls = pathToUrl.get(normalizePath(pagePath));
-        if (matchedUrls) {
-          for (const url of matchedUrls) {
-            results.set(url, data);
-          }
-        }
+        matcher.add(pagePath, data);
       }
 
       hasMore = rows.length === pageSize;
@@ -125,8 +111,17 @@ export async function fetchGa4Data(options: Ga4FetchOptions): Promise<Map<string
       const err = error as { code?: number; message?: string; details?: string };
       const code = err?.code;
 
-      if (code === 7 || code === 8) {
-        // PERMISSION_DENIED or RESOURCE_EXHAUSTED
+      if (code === 7) {
+        // PERMISSION_DENIED: waiting does not help, the credentials must change
+        throw new Error(
+          `GA4 permission denied for property "${propertyId}". ` +
+          'The account needs read access to this property and the analytics.readonly scope ' +
+          '(the "micelio gsc-auth" token only has the Search Console scope): use --ga4-key-file with a service account added to the property.'
+        );
+      }
+
+      if (code === 8) {
+        // RESOURCE_EXHAUSTED: quota, retry with back-off
         retryCount++;
         if (retryCount > MAX_RETRIES) {
           throw new Error(
@@ -151,49 +146,80 @@ export async function fetchGa4Data(options: Ga4FetchOptions): Promise<Map<string
     }
   }
 
-  return results;
+  return matcher.results();
 }
 
 /**
- * Build a map from normalized page paths to full URLs.
- * Multiple URLs can map to the same path (e.g., with/without trailing slash).
+ * Matches GA4 pagePath rows to crawled URLs.
+ *
+ * URL paths are case-sensitive: /Product and /product are two pages, and
+ * GA4 can report both. A row goes to the crawled URLs with exactly its path
+ * (decoded, trailing slash ignored). Only a row that matches no crawled path
+ * exactly may fall back to a case-insensitive match, and only when that is
+ * unambiguous: one crawled path and one GA4 row share the folded path, and
+ * that crawled path got no exact row.
  */
-function buildPathMap(urls: string[]): Map<string, string[]> {
-  const pathMap = new Map<string, string[]>();
+export class Ga4PathMatcher {
+  private byPath = new Map<string, string[]>();
+  private byFolded = new Map<string, Set<string>>();
+  private exact = new Map<string, Ga4Data>();
+  private fallback = new Map<string, Ga4Data[]>();
 
-  for (const url of urls) {
-    try {
-      const parsed = new URL(url);
-      const path = normalizePath(parsed.pathname);
-      const existing = pathMap.get(path) || [];
-      existing.push(url);
-      pathMap.set(path, existing);
-    } catch {
-      // Skip invalid URLs
+  constructor(urls: string[]) {
+    for (const url of urls) {
+      try {
+        const path = pathKey(new URL(url).pathname);
+        const list = this.byPath.get(path);
+        if (list) list.push(url); else this.byPath.set(path, [url]);
+        const folded = path.toLowerCase();
+        if (!this.byFolded.has(folded)) this.byFolded.set(folded, new Set());
+        this.byFolded.get(folded)!.add(path);
+      } catch {
+        // Skip invalid URLs
+      }
     }
   }
 
-  return pathMap;
+  add(pagePath: string, data: Ga4Data): void {
+    const path = pathKey(pagePath);
+    if (this.byPath.has(path)) {
+      this.exact.set(path, data);
+      return;
+    }
+    const folded = path.toLowerCase();
+    const rows = this.fallback.get(folded);
+    if (rows) rows.push(data); else this.fallback.set(folded, [data]);
+  }
+
+  /** Map of crawled URL -> GA4 metrics. */
+  results(): Map<string, Ga4Data> {
+    const perPath = new Map(this.exact);
+    for (const [folded, rows] of this.fallback) {
+      const paths = this.byFolded.get(folded);
+      if (rows.length !== 1 || !paths || paths.size !== 1) continue;
+      const [path] = paths;
+      if (!perPath.has(path)) perPath.set(path, rows[0]);
+    }
+    const out = new Map<string, Ga4Data>();
+    for (const [path, data] of perPath) {
+      for (const url of this.byPath.get(path) ?? []) out.set(url, data);
+    }
+    return out;
+  }
 }
 
-/**
- * Normalize a URL path for matching:
- * - Decode percent-encoding
- * - Remove trailing slash (except root "/")
- * - Lowercase
- */
-function normalizePath(path: string): string {
-  let normalized = path;
+/** Path key for matching: decoded, trailing slash removed (except "/"), case kept. */
+function pathKey(path: string): string {
+  let key = path;
   try {
-    normalized = decodeURIComponent(normalized);
+    key = decodeURIComponent(key);
   } catch {
     // Keep as-is if decoding fails
   }
-  normalized = normalized.toLowerCase();
-  if (normalized.length > 1 && normalized.endsWith('/')) {
-    normalized = normalized.slice(0, -1);
+  if (key.length > 1 && key.endsWith('/')) {
+    key = key.slice(0, -1);
   }
-  return normalized;
+  return key;
 }
 
 /**

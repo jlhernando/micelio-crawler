@@ -355,6 +355,9 @@
       const ec = (job.errorCount as number) || 0;
       completed = pc - ec;
       failed = ec;
+      // A crawl just started from Setup: let the sidebar list it now
+      // instead of on its next poll.
+      window.dispatchEvent(new Event('crawl-state-change'));
     }
     startedAt = new Date(job.startedAt as string).getTime();
     if (status !== 'completed') {

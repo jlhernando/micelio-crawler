@@ -110,14 +110,21 @@ func ensureDashboard(ctx context.Context, base, token string, autostart bool) er
 		}
 		select {
 		case <-ctx.Done():
-			proc.Kill()
+			stopChild(proc)
 			return ctx.Err()
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
 	// A dashboard that never answered is of no use: do not leave it running.
-	proc.Kill()
+	stopChild(proc)
 	return fmt.Errorf("started \"micelio ui --host %s --port %s\" but it did not answer within 20 s; see %s", host, port, logPath)
+}
+
+// stopChild kills a dashboard that failed to start and reaps it, so failed
+// autostarts (retried on later tool calls) leave no zombie processes.
+func stopChild(proc *os.Process) {
+	proc.Kill()
+	proc.Wait()
 }
 
 // dashboardAddr returns the host and port "micelio ui" must listen on to

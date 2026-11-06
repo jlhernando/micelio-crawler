@@ -39,11 +39,27 @@ const FIELD_RANGES: [number, number][] = [
 function parseField(field: string, min: number, max: number, isDow = false): CronField {
   const values = new Set<number>();
   let isWildcard = false;
+  // Day-of-week accepts 7 as another name for Sunday (0)
+  const maxInput = isDow ? 7 : max;
+
+  // A whole-token number within the field's bounds ("1junk" or "100" in
+  // the minute field are errors, not 1 or a silently clipped range)
+  const num = (token: string, whole: string): number => {
+    if (!/^\d+$/.test(token)) {
+      throw new Error(`Invalid value "${whole}" (must be ${min}-${max})`);
+    }
+    const n = parseInt(token, 10);
+    if (n < min || n > maxInput) {
+      throw new Error(`Invalid value "${whole}" (must be ${min}-${max})`);
+    }
+    return n;
+  };
+  const add = (n: number) => values.add(isDow && n === 7 ? 0 : n);
 
   for (const part of field.split(',')) {
     const trimmed = part.trim();
 
-    // Handle step: */5 or 1-10/2
+    // Handle step: */5, 1-10/2 or 5/15 (from 5 to the end)
     const stepMatch = trimmed.match(/^(.+)\/(\d+)$/);
     if (stepMatch) {
       const [, range, stepStr] = stepMatch;
@@ -58,20 +74,25 @@ function parseField(field: string, min: number, max: number, isDow = false): Cro
       if (range === '*') {
         isWildcard = true;
       } else {
-        const rangeMatch = range.match(/^(\d+)-(\d+)$/);
+        const rangeMatch = range.match(/^([^-]+)-([^-]+)$/);
         if (rangeMatch) {
-          start = parseInt(rangeMatch[1], 10);
-          end = parseInt(rangeMatch[2], 10);
+          start = num(rangeMatch[1], trimmed);
+          end = num(rangeMatch[2], trimmed);
+          if (start > end) {
+            throw new Error(`Invalid range: ${trimmed} (start > end)`);
+          }
         } else {
-          start = parseInt(range, 10);
+          start = num(range, trimmed);
           end = max;
         }
       }
 
-      for (let i = start; i <= end; i += step) {
-        if (i >= min && i <= max) values.add(i);
-      }
+      for (let i = start; i <= end; i += step) add(i);
       continue;
+    }
+
+    if (trimmed.includes('/')) {
+      throw new Error(`Invalid step expression "${trimmed}"`);
     }
 
     // Handle wildcard: *
@@ -84,32 +105,19 @@ function parseField(field: string, min: number, max: number, isDow = false): Cro
     }
 
     // Handle range: 1-5
-    const rangeMatch = trimmed.match(/^(\d+)-(\d+)$/);
+    const rangeMatch = trimmed.match(/^([^-]+)-([^-]+)$/);
     if (rangeMatch) {
-      const start = parseInt(rangeMatch[1], 10);
-      const end = parseInt(rangeMatch[2], 10);
+      const start = num(rangeMatch[1], trimmed);
+      const end = num(rangeMatch[2], trimmed);
       if (start > end) {
         throw new Error(`Invalid range: ${trimmed} (start > end)`);
       }
-      for (let i = start; i <= end; i++) {
-        // For day-of-week, normalize 7 to 0 (both mean Sunday)
-        const normalized = (isDow && i === 7) ? 0 : i;
-        if (normalized >= min && normalized <= max) values.add(normalized);
-      }
+      for (let i = start; i <= end; i++) add(i);
       continue;
     }
 
     // Handle single value
-    let num = parseInt(trimmed, 10);
-    if (isNaN(num)) {
-      throw new Error(`Invalid value "${trimmed}" (must be ${min}-${max})`);
-    }
-    // For day-of-week, normalize 7 to 0 (both mean Sunday)
-    if (isDow && num === 7) num = 0;
-    if (num < min || num > max) {
-      throw new Error(`Invalid value "${trimmed}" (must be ${min}-${max})`);
-    }
-    values.add(num);
+    add(num(trimmed, trimmed));
   }
 
   if (values.size === 0) {

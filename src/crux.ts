@@ -53,6 +53,24 @@ interface CruxApiResponse {
 
 const CRUX_API_URL = 'https://chromeuxreport.googleapis.com/v1/records:queryRecord';
 
+/** Retries of one URL after an HTTP 429. */
+const MAX_429_RETRIES = 2;
+const DEFAULT_429_WAIT_MS = 60_000;
+
+/** Wait asked by a Retry-After header (seconds or HTTP date), capped at 60 s. */
+export function retryAfterMs(header: string | null, now = Date.now()): number {
+  if (header === null || header.trim() === '') return DEFAULT_429_WAIT_MS;
+  const trimmed = header.trim();
+  let ms: number;
+  if (/^\d+$/.test(trimmed)) ms = Number(trimmed) * 1000;
+  else {
+    const at = Date.parse(trimmed);
+    if (Number.isNaN(at)) return DEFAULT_429_WAIT_MS;
+    ms = at - now;
+  }
+  return Math.min(Math.max(ms, 0), DEFAULT_429_WAIT_MS);
+}
+
 /**
  * Fetch CrUX data for a batch of URLs.
  * Handles rate limiting with a sliding window (150 req/min).
@@ -103,7 +121,21 @@ export async function fetchCruxData(options: CruxOptions): Promise<Map<string, C
       });
 
       if (response.status === 404) {
-        // No CrUX data for this URL (not enough traffic)
+        // No CrUX data for this URL (not enough traffic). Release the body
+        // so the connection goes back to the pool now, not at GC time.
+        await response.body?.cancel().catch(() => {});
+        return;
+      }
+
+      if (response.status === 429) {
+        await response.body?.cancel().catch(() => {});
+        if (retries < MAX_429_RETRIES) {
+          const waitMs = retryAfterMs(response.headers.get('retry-after'));
+          process.stderr.write(`CrUX rate limit hit, waiting ${Math.round(waitMs / 1000)}s...\n`);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          return fetchSingle(url, retries + 1);
+        }
+        process.stderr.write(`CrUX warning: rate limited, no data for ${url} after ${MAX_429_RETRIES} retries\n`);
         return;
       }
 

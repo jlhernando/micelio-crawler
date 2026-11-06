@@ -2,6 +2,19 @@ import { describe, it, expect } from 'vitest';
 import { analyzeUrlStructure, buildUrlStructureStats } from './url-structure.js';
 import type { PageData, UrlStructureData } from './types.js';
 
+describe('query parameters named like Object.prototype members', () => {
+  it('are recorded and counted', () => {
+    const us = analyzeUrlStructure('https://a.test/p?constructor=1&toString=2&__proto__=3&hasOwnProperty=4&constructor=9');
+    expect(Object.keys(us.queryParams)).toEqual(['constructor', 'toString', '__proto__', 'hasOwnProperty']);
+    expect(us.queryParams.constructor).toBe('1');
+    expect(us.parameterCount).toBe(4);
+    expect(Object.getPrototypeOf(us.queryParams)).toBe(Object.prototype);
+    const stats = buildUrlStructureStats([{ urlStructure: us } as PageData])!;
+    expect(stats.topParameters.map((p) => p.parameter).sort()).toEqual(['__proto__', 'constructor', 'hasOwnProperty', 'toString']);
+    expect(stats.urlsWithParams).toBe(1);
+  });
+});
+
 describe('analyzeUrlStructure', () => {
   it('decomposes a simple HTTPS URL', () => {
     const result = analyzeUrlStructure('https://example.com/blog/my-post');

@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -53,6 +54,27 @@ func TestCrawlWaitNotDoneWhileAnalysing(t *testing.T) {
 		t.Errorf("after analysis: done=%v phase=%v", st["done"], st["phase"])
 	}
 	callOK(t, cs, "crawl_summary", map[string]any{"id": "c1"}, nil)
+}
+
+// The 4 KB summary limit holds even with a huge seed URL and bulky stats.
+func TestFitSummaryAlwaysFits(t *testing.T) {
+	out := crawlSummaryOut{ID: "c1", SeedURL: "https://ex.com/" + strings.Repeat("a", 20000), Untrusted: summaryNote,
+		StatusCodes: map[string]int{}, Indexability: summaryIndexability{Reasons: map[string]int{}}}
+	for i := range 200 {
+		out.StatusCodes["2"+strings.Repeat("0", i%5)+string(rune('a'+i%26))+strings.Repeat("x", i)] = i
+		out.Indexability.Reasons[strings.Repeat("r", i)] = i
+	}
+	for range 10 {
+		out.Issues = append(out.Issues, summaryIssue{ID: strings.Repeat("i", 300), Label: strings.Repeat("l", 300), Samples: []string{"a", "b", "c"}})
+	}
+	fitSummary(&out)
+	b, _ := json.Marshal(out)
+	if len(b) > maxSummaryBytes {
+		t.Fatalf("summary is %d bytes, limit %d", len(b), maxSummaryBytes)
+	}
+	if !strings.HasPrefix(out.SeedURL, "https://ex.com/") {
+		t.Fatalf("seed URL lost its start: %.40q", out.SeedURL)
+	}
 }
 
 // Sample URLs share one short time budget: a dashboard that keeps loading

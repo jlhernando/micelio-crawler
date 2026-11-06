@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -218,8 +219,15 @@ func (m *CrawlManager) newUISchedule(store *UiStore, req scheduleRequest) (*sche
 		}
 		cfg.Webhook = &webhook.Options{URL: req.Webhook}
 	}
+	// scheduler.New saves its state: check for a running duplicate first,
+	// so a refused request does not overwrite the active schedule's config.
+	if m.IsSchedulerActive(scheduler.ID(cfg)) {
+		return nil, errScheduleExists
+	}
 	return scheduler.New(cfg)
 }
+
+var errScheduleExists = errors.New("a schedule with this URL, cron and name already exists")
 
 // ResumeUISchedules restarts dashboard schedules saved before a restart.
 func (m *CrawlManager) ResumeUISchedules(store *UiStore) {
@@ -264,13 +272,17 @@ func registerScheduleRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlMa
 			return
 		}
 		s, err := manager.newUISchedule(store, req)
+		if errors.Is(err, errScheduleExists) {
+			jsonError(w, err.Error(), http.StatusConflict)
+			return
+		}
 		if err != nil {
 			jsonError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		state := s.GetState()
 		if manager.IsSchedulerActive(state.ID) {
-			jsonError(w, "a schedule with this URL, cron and name already exists", http.StatusConflict)
+			jsonError(w, errScheduleExists.Error(), http.StatusConflict)
 			return
 		}
 		go s.Run()

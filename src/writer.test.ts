@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { ResultWriter } from './writer.js';
+import { ResultWriter, csvDynamicColumns } from './writer.js';
 import type { PageData } from './types.js';
 
 const page = (url: string, extra = ''): PageData => ({ url, title: extra } as unknown as PageData);
@@ -55,6 +55,44 @@ describe('ResultWriter', () => {
       for (let i = 0; i < 50; i++) await writer.write({ ...full, url: `https://a.test/${i}` });
       await writer.close();
       expect(readFileSync(out, 'utf8').trim().split('\n')).toHaveLength(51);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('CSV keeps custom columns when an error page is written first', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'micelio-writer-'));
+    try {
+      const out = join(dir, 'out.csv');
+      const config = {
+        customExtractions: [{ name: 'price', type: 'css' as const, selector: '.p' }],
+        customSearches: [{ name: 'promo', pattern: 'promo', isRegex: false }],
+        snippetPaths: ['checks.mjs'],
+      };
+      const writer = new ResultWriter(out, 'csv', csvDynamicColumns(config));
+      const base = {
+        finalUrl: 'https://a.test/', statusCode: 200, redirectChain: [],
+        headings: { h1: [], h2: [] }, internalLinks: [], externalLinks: [], images: [], hreflang: [],
+        structuredData: [], openGraph: {}, twitterCard: {}, anchors: [], security: {}, segments: [],
+      };
+      // Concurrent crawls finish in any order: the error page can come first
+      await writer.write({ ...base, url: 'https://a.test/broken', statusCode: 500, customExtractions: {}, customSearches: {}, snippetResults: {} } as unknown as PageData);
+      await writer.write({
+        ...base, url: 'https://a.test/ok',
+        customExtractions: { price: ['9.99'] }, customSearches: { promo: true },
+        snippetResults: { checks: { a: 1 } },
+      } as unknown as PageData);
+      await writer.write({ ...base, url: 'https://a.test/ok2', customExtractions: {}, customSearches: {}, snippetResults: { checks: { b: 2 } } } as unknown as PageData);
+      await writer.close();
+      const [header, , ok, ok2] = readFileSync(out, 'utf8').trim().split('\n');
+      const cols = header.split(',');
+      expect(cols).toEqual(expect.arrayContaining(['extract_price', 'search_promo', 'snippet_checks']));
+      const cell = (line: string, col: string) => line.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/)[cols.indexOf(col)];
+      expect(cell(ok, 'extract_price')).toBe('9.99');
+      expect(cell(ok, 'search_promo')).toBe('true');
+      expect(cell(ok, 'snippet_checks')).toBe('"{""a"":1}"');
+      // A snippet key the first rows never had is not lost either
+      expect(cell(ok2, 'snippet_checks')).toBe('"{""b"":2}"');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -53,6 +53,16 @@ describe('UiCrawlManager', () => {
     engine.calls[0].finish();
   });
 
+  it('list mode passes the dashboard urlList to the crawl', async () => {
+    const jobs = { a: { id: 'a', status: 'pending', dbPath: join(dir, 'a.db'), config: {} } };
+    const mgr = new UiCrawlManager(fakeStore(jobs));
+    await mgr.startCrawl('a', { mode: 'list', urlList: 'https://a.test/1\r\n https://a.test/2 \n\nhttps://a.test/1' });
+    await vi.waitFor(() => expect(engine.calls).toHaveLength(1));
+    expect(engine.calls[0].config.mode).toBe('list');
+    expect(engine.calls[0].config.urls).toEqual(['https://a.test/1', 'https://a.test/2']);
+    engine.calls[0].finish();
+  });
+
   it('pause and resume reach the crawl engine', async () => {
     const jobs = { a: { id: 'a', status: 'pending', dbPath: join(dir, 'a.db'), config: {} } };
     const mgr = new UiCrawlManager(fakeStore(jobs));

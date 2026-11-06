@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeUrl, normalizeUrlForComparison, isPrivateUrl, formatError, formatDateYmd } from './utils.js';
+import { normalizeUrl, normalizeUrlForComparison, isPrivateUrl, formatError, formatDateYmd, reportDateRange } from './utils.js';
 
 describe('normalizeUrl', () => {
   it('strips hash fragments', () => {
@@ -64,6 +64,13 @@ describe('normalizeUrlForComparison', () => {
 
   it('strips trailing slash', () => {
     expect(normalizeUrlForComparison('https://example.com/page/')).toBe('example.com/page');
+  });
+
+  it('keeps a non-default port (another origin), drops the default one', () => {
+    expect(normalizeUrlForComparison('https://example.com:8443/page'))
+      .not.toBe(normalizeUrlForComparison('https://example.com/page'));
+    expect(normalizeUrlForComparison('https://example.com:443/page')).toBe('example.com/page');
+    expect(normalizeUrlForComparison('http://example.com:80/page')).toBe('example.com/page');
   });
 
   it('preserves root path as /', () => {
@@ -188,5 +195,22 @@ describe('formatDateYmd', () => {
   it('converts non-UTC dates to UTC before formatting', () => {
     // A date in UTC+5 at 00:30 is still previous day in UTC
     expect(formatDateYmd(new Date('2024-01-01T00:30:00+05:00'))).toBe('2023-12-31');
+  });
+});
+
+describe('reportDateRange', () => {
+  const now = new Date(Date.UTC(2026, 10, 6, 15, 0, 0)); // 2026-11-06 15:00 UTC
+
+  it('covers exactly the requested days, inclusive', () => {
+    expect(reportDateRange(28, 3, now)).toEqual({ startDate: '2026-10-07', endDate: '2026-11-03' });
+    expect(reportDateRange(90, 1, now)).toEqual({ startDate: '2026-08-08', endDate: '2026-11-05' });
+    const r = reportDateRange(28, 3, now);
+    const days = (Date.parse(r.endDate) - Date.parse(r.startDate)) / 86_400_000 + 1;
+    expect(days).toBe(28);
+  });
+
+  it('is one day at minimum and crosses month and year ends', () => {
+    expect(reportDateRange(0, 1, now)).toEqual({ startDate: '2026-11-05', endDate: '2026-11-05' });
+    expect(reportDateRange(3, 3, new Date(Date.UTC(2027, 0, 2)))).toEqual({ startDate: '2026-12-28', endDate: '2026-12-30' });
   });
 });

@@ -613,6 +613,34 @@ func TestMergeDedupesGhostPaths(t *testing.T) {
 	}
 }
 
+// Only indexable, self-canonical pages without bot traffic are ghosts.
+func TestMergeGhostsOnlyIndexable(t *testing.T) {
+	pages := []CrawlPageInfo{
+		{URL: "https://example.com/ok", StatusCode: 200, Indexable: true},
+		{URL: "https://example.com/self", StatusCode: 200, Indexable: true, Canonical: "https://example.com/self"},
+		{URL: "https://example.com/moved", StatusCode: 301, IsRedirect: true},
+		{URL: "https://example.com/gone", StatusCode: 404},
+		{URL: "https://example.com/down", StatusCode: 500},
+		{URL: "https://example.com/hidden", StatusCode: 200, HasNoindex: true},
+		{URL: "https://example.com/dup", StatusCode: 200, Indexable: true, Canonical: "https://example.com/ok"},
+	}
+	noLogs := func(fn func(URLStat) error) error { return nil }
+	res, err := MergeLogWithCrawlStream(noLogs, pages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Segments[SegUncrawled] != 2 || len(res.GhostPages) != 2 {
+		t.Fatalf("ghosts = %d (%d listed), want 2: %+v", res.Segments[SegUncrawled], len(res.GhostPages), res.GhostPages)
+	}
+	summary, err := StreamMergeEmit(noLogs, pages, func(MergedPage) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.GhostCount != 2 {
+		t.Fatalf("StreamMergeEmit ghosts = %d, want 2", summary.GhostCount)
+	}
+}
+
 // --- Waste Detection ---
 
 func TestClassifyWaste(t *testing.T) {

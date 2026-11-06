@@ -18,7 +18,7 @@ const maxSchemaValidationRaw = 512 * 1024
 
 // validatePageSchema validates the page's structured data. JSON-LD is read
 // from the original <script> blocks rather than StructuredData.Raw, because Raw
-// is truncated to jsonldMaxRaw and would fail to parse. Microdata entries come
+// is cut to jsonldMaxRaw (large properties dropped). Microdata entries come
 // from the already-extracted StructuredData.
 func validatePageSchema(doc *goquery.Document, sd []types.StructuredDataEntry) []types.SchemaValidationEntry {
 	var input []types.StructuredDataEntry

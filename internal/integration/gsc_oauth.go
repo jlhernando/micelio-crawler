@@ -23,7 +23,11 @@ const (
 	oauthTimeout     = 5 * time.Minute
 )
 
-var gscOAuthScopes = []string{"https://www.googleapis.com/auth/webmasters.readonly"}
+// oauthHTTPClient exchanges and refreshes OAuth tokens. A stalled token
+// endpoint must not hang gsc-auth or post-crawl enrichment.
+var oauthHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+var gscOAuthScopes =[]string{"https://www.googleapis.com/auth/webmasters.readonly"}
 
 // OAuthToken represents a stored OAuth2 token.
 type OAuthToken struct {
@@ -264,7 +268,7 @@ func exchangeOAuthCode(clientID, clientSecret, code string) (*OAuthToken, error)
 		"grant_type":    {"authorization_code"},
 	}
 
-	resp, err := http.Post("https://oauth2.googleapis.com/token", "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
+	resp, err := oauthHTTPClient.Post(googleTokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +363,7 @@ func refreshOAuthToken(clientID, clientSecret, refreshToken string) (*OAuthToken
 		"grant_type":    {"refresh_token"},
 	}
 
-	resp, err := http.Post("https://oauth2.googleapis.com/token", "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
+	resp, err := oauthHTTPClient.Post(googleTokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, err
 	}

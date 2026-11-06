@@ -28,3 +28,43 @@ describe('fetchPlausibleData path dedup', () => {
     expect(Date.now() - start).toBeLessThan(5000);
   }, 20_000);
 });
+
+const row = (path: string, visitors: number) => ({ dimensions: [path], metrics: [visitors, 1, 1, 0, 0, 0, 0] });
+
+describe('fetchPlausibleData matching', () => {
+  it('keeps /Docs and /docs apart (Plausible paths are case-sensitive)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      results: [row('/Docs', 7), row('/docs', 3)],
+    }), { status: 200 })));
+    const data = await fetchPlausibleData({
+      siteId: 'a.test', apiKey: 'k', days: 30,
+      urls: ['https://a.test/Docs', 'https://a.test/docs/'],
+    });
+    expect(data.get('https://a.test/Docs')?.visitors).toBe(7);
+    expect(data.get('https://a.test/docs/')?.visitors).toBe(3);
+  });
+});
+
+describe('fetchPlausibleData timeout', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('a request that never answers is aborted and retried, then fails', async () => {
+    const fetchMock = vi.fn((_url: string, init: { signal: AbortSignal }) => new Promise<Response>((_, reject) => {
+      init.signal.addEventListener('abort', () => reject(init.signal.reason));
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    // Only the retry back-off is faked; the request deadline stays real (5 ms)
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    let error: unknown = null;
+    let done = false;
+    fetchPlausibleData({ siteId: 'a.test', apiKey: 'k', days: 30, urls: ['https://a.test/a'], timeoutMs: 5 })
+      .catch((err) => { error = err; })
+      .finally(() => { done = true; });
+    while (!done) {
+      await new Promise((r) => setImmediate(r));
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(String(error)).toMatch(/Plausible API request failed: .*timeout/i);
+  }, 10_000);
+});

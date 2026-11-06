@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -601,9 +602,7 @@ func extractStructuredData(doc *goquery.Document) []types.StructuredDataEntry {
 			}
 		}
 		sdType := extractJSONLDType(raw)
-		if len(raw) > jsonldMaxRaw {
-			raw = raw[:jsonldMaxRaw]
-		}
+		raw = boundJSONLD(raw, sdType)
 		entries = append(entries, types.StructuredDataEntry{
 			Type:   sdType,
 			Format: types.FormatJSONLD,
@@ -776,10 +775,7 @@ func extractJSONLDGraphItems(raw string) []types.StructuredDataEntry {
 		if err != nil {
 			continue
 		}
-		r := string(itemJSON)
-		if len(r) > jsonldMaxRaw {
-			r = r[:jsonldMaxRaw]
-		}
+		r := boundJSONLD(string(itemJSON), sdType)
 		entries = append(entries, types.StructuredDataEntry{
 			Type:   sdType,
 			Format: types.FormatJSONLD,
@@ -787,6 +783,68 @@ func extractJSONLDGraphItems(raw string) []types.StructuredDataEntry {
 		})
 	}
 	return entries
+}
+
+// jsonldKeepFields are the properties downstream analysis reads from Raw
+// (type, freshness, E-E-A-T): boundJSONLD drops them last.
+var jsonldKeepFields = map[string]bool{
+	"@context": true, "@type": true, "@id": true, "name": true, "headline": true,
+	"datePublished": true, "dateModified": true, "dateCreated": true, "uploadDate": true,
+	"author": true, "publisher": true, "reviewedBy": true,
+}
+
+// boundJSONLD keeps Raw at most jsonldMaxRaw bytes and still valid JSON.
+// A cut byte prefix would not parse, so freshness and E-E-A-T would lose
+// dates and authors placed before a long description. For an object the
+// largest properties go first, the ones analysis reads last; anything else
+// keeps only its @type.
+func boundJSONLD(raw, sdType string) string {
+	if len(raw) <= jsonldMaxRaw {
+		return raw
+	}
+	var obj map[string]json.RawMessage
+	if len(raw) <= jsonldMaxGraphBytes && json.Unmarshal([]byte(raw), &obj) == nil && obj != nil {
+		keys := make([]string, 0, len(obj))
+		size := 1 // "{" and "}" minus the comma the first property does not have
+		for k, v := range obj {
+			keys = append(keys, k)
+			qk, _ := json.Marshal(k)
+			size += len(qk) + 1 + len(v) + 1 // "key":value,
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			if ki, kj := jsonldKeepFields[keys[i]], jsonldKeepFields[keys[j]]; ki != kj {
+				return kj // droppable first
+			}
+			if li, lj := len(obj[keys[i]]), len(obj[keys[j]]); li != lj {
+				return li > lj
+			}
+			return keys[i] < keys[j]
+		})
+		for _, k := range keys {
+			if size <= jsonldMaxRaw {
+				break
+			}
+			qk, _ := json.Marshal(k)
+			size -= len(qk) + 1 + len(obj[k]) + 1
+			delete(obj, k)
+		}
+		if b, err := json.Marshal(obj); err == nil && len(b) <= jsonldMaxRaw {
+			return string(b)
+		}
+	}
+	if !json.Valid([]byte(raw)) {
+		// Broken JSON stays a (rune-safe) prefix: there is nothing to keep valid.
+		n := jsonldMaxRaw
+		for n > 0 && !utf8.RuneStart(raw[n]) {
+			n--
+		}
+		return raw[:n]
+	}
+	if sdType == "Unknown" || sdType == "" {
+		return "{}"
+	}
+	b, _ := json.Marshal(map[string]string{"@type": sdType})
+	return string(b)
 }
 
 // jsonldItemType extracts the @type from a parsed JSON-LD item.

@@ -14,6 +14,7 @@
  */
 
 import type { PageData, LinkIntelligenceData, LinkPosition, LinkSuggestion, SemanticLinkAnalysis, CrawlStats } from './types.js';
+import { buildPageUrlResolver } from './utils.js';
 
 // ── Shared Graph Helpers ─────────────────────────────────
 
@@ -386,11 +387,14 @@ export function generateLinkSuggestions(
   const n = pages.length;
   if (n === 0) return [];
 
-  // Build existing link set for fast lookup
+  // Build existing link set for fast lookup. Links are resolved to page URLs
+  // first: a link to /target/ or to an old URL redirecting to /target is
+  // already a link to /target and must not be suggested again.
+  const urlResolver = buildPageUrlResolver(pages);
   const existingLinks = new Set<string>();
   for (const page of pages) {
     for (const link of page.internalLinks) {
-      existingLinks.add(`${page.url}|${link}`);
+      existingLinks.add(`${page.url}|${urlResolver.get(link) ?? link}`);
     }
   }
 
@@ -668,6 +672,11 @@ export function computeClosenessCentrality(
   }
 
   const rawCloseness = new Float64Array(n);
+  // Sampled mode: distances from the sampled sources to every page they
+  // reach, so every page gets a score (incoming closeness), not only the
+  // 500 sources. Unsampled pages would otherwise all read as 0.
+  const inDistSum = useSampling ? new Float64Array(n) : null;
+  const inReached = useSampling ? new Int32Array(n) : null;
 
   for (const s of sourceNodes) {
     // BFS from node s
@@ -686,12 +695,26 @@ export function computeClosenessCentrality(
           totalDist += dist[w];
           reachable++;
           queue.push(w);
+          if (inDistSum) {
+            inDistSum[w] += dist[w];
+            inReached![w]++;
+          }
         }
       }
     }
 
     // Simplified closeness: reachable / totalDist
-    rawCloseness[s] = reachable > 0 && totalDist > 0 ? reachable / totalDist : 0;
+    if (!inDistSum) rawCloseness[s] = reachable > 0 && totalDist > 0 ? reachable / totalDist : 0;
+  }
+
+  if (inDistSum) {
+    // 1 / average distance from the sampled sources towards each page (the
+    // full computation's scale), weighted by the share of sources that reach
+    // it so a page reached by one source at distance 1 does not top the list
+    for (let i = 0; i < n; i++) {
+      const r = inReached![i];
+      rawCloseness[i] = r > 0 ? (r / sourceNodes.length) * (r / inDistSum[i]) : 0;
+    }
   }
 
   // Normalize to 0-10 scale
@@ -723,6 +746,8 @@ export function analyzeSemanticLinkDistance(
   let totalSim = 0;
   const weakLinks: { source: string; target: string; similarity: number }[] = [];
   const strongLinks: { source: string; target: string; similarity: number }[] = [];
+  // Embeddings are keyed by page URL: resolve each link to it first
+  const urlResolver = buildPageUrlResolver(pages);
 
   for (const page of pages) {
     const srcVec = embeddings.get(page.url);
@@ -730,7 +755,8 @@ export function analyzeSemanticLinkDistance(
 
     // Deduplicate targets within a page
     const seenTargets = new Set<string>();
-    for (const link of page.internalLinks) {
+    for (const rawLink of page.internalLinks) {
+      const link = urlResolver.get(rawLink) ?? rawLink;
       if (seenTargets.has(link)) continue;
       seenTargets.add(link);
 
@@ -795,24 +821,10 @@ export function computeLinkIntelligence(
   // BUG-1 fix: Count unique source pages, not anchor instances
   const deduplicatedInlinks = new Map<string, Set<string>>(); // target -> Set<source>
   const inlinkPositions = new Map<string, Record<LinkPosition, number>>();
-  // Build a URL resolution map: raw link URL -> canonical page URL
-  // Handles trailing-slash redirects (e.g., /about/ -> /about)
-  const urlResolver = new Map<string, string>();
-  for (const page of pages) {
-    urlResolver.set(page.url, page.url);
-    if (page.finalUrl && page.finalUrl !== page.url) {
-      urlResolver.set(page.finalUrl, page.url);
-    }
-    // Also map trailing-slash variants
-    const altUrl = page.url.endsWith('/') && page.url.length > 1
-      ? page.url.slice(0, -1) : page.url + '/';
-    if (!urlResolver.has(altUrl)) urlResolver.set(altUrl, page.url);
-    if (page.finalUrl) {
-      const altFinal = page.finalUrl.endsWith('/') && page.finalUrl.length > 1
-        ? page.finalUrl.slice(0, -1) : page.finalUrl + '/';
-      if (!urlResolver.has(altFinal)) urlResolver.set(altFinal, page.url);
-    }
-  }
+  // URL resolution map: raw link URL -> page URL. Handles redirects and
+  // trailing-slash variants (/about/ -> /about); a crawled page always owns
+  // its own URL, so a redirect to it never takes its inlinks.
+  const urlResolver = buildPageUrlResolver(pages);
 
   for (const page of pages) {
     // Track which targets we've already counted from this source page

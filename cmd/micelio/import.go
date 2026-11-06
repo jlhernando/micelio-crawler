@@ -52,7 +52,7 @@ next time the dashboard starts.`,
 				base := strings.TrimRight(serverURL, "/")
 				switch state, err := probeDashboard(base); state {
 				case dashVerified:
-					return uploadImport(base, authToken, path, linkIntelligence)
+					return uploadImport(cmd.Context(), base, authToken, path, linkIntelligence)
 				case dashUnverified:
 					// Never send the crawl (or the token) to a program that
 					// only sits on the dashboard's port.
@@ -76,7 +76,11 @@ next time the dashboard starts.`,
 	return cmd
 }
 
-func uploadImport(base, token, path string, linkIntelligence bool) error {
+// importAnswerTimeout bounds the wait for the dashboard's answer after the
+// upload (swapped in tests).
+var importAnswerTimeout = 5 * time.Minute
+
+func uploadImport(ctx context.Context, base, token, path string, linkIntelligence bool) error {
 	// Same rule as `micelio mcp`: the token travels only over https or to
 	// this computer, never in clear text over the network.
 	if token != "" {
@@ -93,7 +97,7 @@ func uploadImport(base, token, path string, linkIntelligence bool) error {
 	if linkIntelligence {
 		q.Set("linkIntelligence", "1")
 	}
-	req, err := http.NewRequest(http.MethodPost, base+"/api/crawls/import?"+q.Encode(), f)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/crawls/import?"+q.Encode(), f)
 	if err != nil {
 		return err
 	}
@@ -107,6 +111,17 @@ func uploadImport(base, token, path string, linkIntelligence bool) error {
 	client, err := dashboardClient(base, 0)
 	if err != nil {
 		return err
+	}
+	// No overall timeout (a big upload takes long), but the dashboard must
+	// answer once it has the file: it only validates it, then imports in
+	// the background.
+	switch tr := client.Transport.(type) {
+	case nil:
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.ResponseHeaderTimeout = importAnswerTimeout
+		client.Transport = t
+	case *http.Transport:
+		tr.ResponseHeaderTimeout = importAnswerTimeout
 	}
 	resp, err := client.Do(req)
 	if err != nil {

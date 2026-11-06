@@ -15,7 +15,7 @@ import type { RenderDiff } from './types.js';
  * Compare pre-render and post-render HTML for SEO-critical differences.
  * Returns list of field-level differences.
  */
-export function compareRender(rawHtml: string, renderedHtml: string): RenderDiff[] {
+export function compareRender(rawHtml: string, renderedHtml: string, pageUrl?: string): RenderDiff[] {
   const diffs: RenderDiff[] = [];
 
   const raw = cheerio.load(rawHtml);
@@ -57,20 +57,18 @@ export function compareRender(rawHtml: string, renderedHtml: string): RenderDiff
   }
 
   // 6. Internal links count
-  // Use simplified heuristic: relative paths (/...) or paths without a protocol scheme
+  // With the page URL: links resolved against it and kept when same-origin
+  // (so /a and https://site/a are one link). Without it: a syntax heuristic.
+  const internalKey = internalLinkKey(pageUrl);
   const rawLinks = new Set<string>();
   raw('a[href]').each((_, el) => {
-    const href = raw(el).attr('href');
-    if (href && isLikelyInternalHref(href)) {
-      rawLinks.add(href);
-    }
+    const key = internalKey(raw(el).attr('href'));
+    if (key) rawLinks.add(key);
   });
   const renderedLinks = new Set<string>();
   rendered('a[href]').each((_, el) => {
-    const href = rendered(el).attr('href');
-    if (href && isLikelyInternalHref(href)) {
-      renderedLinks.add(href);
-    }
+    const key = internalKey(rendered(el).attr('href'));
+    if (key) renderedLinks.add(key);
   });
   if (rawLinks.size !== renderedLinks.size) {
     diffs.push({
@@ -125,11 +123,39 @@ export function compareRender(rawHtml: string, renderedHtml: string): RenderDiff
 }
 
 /**
+ * Key of an internal link, or null for external / non-HTTP / fragment-only
+ * links. With the page URL the href is resolved and compared by origin;
+ * the fragment is dropped so /a#x and /a are one link.
+ */
+function internalLinkKey(pageUrl: string | undefined): (href: string | undefined) => string | null {
+  let base: URL | null = null;
+  try {
+    if (pageUrl) base = new URL(pageUrl);
+  } catch { /* fall back to the heuristic */ }
+  return (rawHref) => {
+    const href = rawHref?.trim();
+    if (!href) return null;
+    if (!base) return isLikelyInternalHref(href) ? href : null;
+    if (href.startsWith('#')) return null;
+    try {
+      const u = new URL(href, base);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+      if (u.origin !== base.origin) return null;
+      u.hash = '';
+      return u.href;
+    } catch {
+      return null;
+    }
+  };
+}
+
+/**
  * Detect hrefs that are likely internal (relative paths, not special protocols).
  * Excludes mailto:, tel:, javascript:, data:, #hash-only, and absolute external URLs.
  */
 function isLikelyInternalHref(href: string): boolean {
-  if (href.startsWith('/') && !href.startsWith('//')) return true; // absolute path
+  if (href.startsWith('//')) return false; // protocol-relative: another host
+  if (href.startsWith('/')) return true; // absolute path
   if (href.startsWith('#')) return false; // fragment-only
   if (href.includes(':')) return false; // has protocol (http:, mailto:, tel:, javascript:, data:)
   return true; // relative path (e.g., "about", "../page")

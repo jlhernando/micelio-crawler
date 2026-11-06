@@ -22,6 +22,19 @@ export type ProgressCallback = (crawlId: string, data: {
   data: Record<string, unknown>;
 }) => void;
 
+/**
+ * URLs of a list-mode crawl config: the `urls` array and/or the dashboard's
+ * `urlList` text (one URL per line). Trimmed, blank lines and duplicates out.
+ */
+export function listModeUrls(config: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  if (Array.isArray(config.urls)) {
+    for (const u of config.urls) if (typeof u === 'string') out.push(u);
+  }
+  if (typeof config.urlList === 'string') out.push(...config.urlList.split(/\r?\n/));
+  return [...new Set(out.map((u) => u.trim()).filter(Boolean))];
+}
+
 /** Output file of a job, next to its crawl DB (fallback for jobs without one). */
 export function outputPathFor(dbPath: string, ext: 'jsonl' | 'csv'): string {
   return dbPath ? dbPath.replace(/\.db$/, '') + '.' + ext : 'output.' + ext;
@@ -264,7 +277,7 @@ export class UiCrawlManager {
 
     return {
       seedUrl: str(config.seedUrl),
-      urls: [],
+      urls: config.mode === 'list' ? listModeUrls(config) : [],
       sitemapUrls: Array.isArray(config.sitemapUrls) ? config.sitemapUrls : [],
       mode: (config.mode as CrawlConfig['mode']) || 'spider',
       maxDepth: num(config.depth, 3),

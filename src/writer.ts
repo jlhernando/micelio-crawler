@@ -1,7 +1,7 @@
 import { createWriteStream, type WriteStream } from 'node:fs';
 import { format } from 'fast-csv';
 import type { PageData } from './types.js';
-import { normalizeUrlForComparison } from './utils.js';
+import { normalizeUrlForComparison, snippetName } from './utils.js';
 import { csvSafeRecord } from './sanitize.js';
 
 export class ResultWriter {
@@ -12,7 +12,11 @@ export class ResultWriter {
   private error: Error | null = null;
   private errorWaiters = new Set<(err: Error) => void>();
 
-  constructor(outputPath: string, outputFormat: 'jsonl' | 'csv') {
+  /** Custom CSV columns every row carries (see csvDynamicColumns). */
+  private dynamicColumns: readonly string[];
+
+  constructor(outputPath: string, outputFormat: 'jsonl' | 'csv', dynamicColumns: readonly string[] = []) {
+    this.dynamicColumns = dynamicColumns;
     this.outputFormat = outputFormat;
     this.stream = createWriteStream(outputPath, { flags: 'w' });
     // Listen from the start: an 'error' with no listener (bad path, disk
@@ -80,7 +84,7 @@ export class ResultWriter {
   }
 
   private flattenForCsv(page: PageData): Record<string, string | number | boolean> {
-    return flattenPageForCsv(page);
+    return flattenPageForCsv(page, this.dynamicColumns);
   }
 }
 
@@ -132,27 +136,64 @@ function flattenCustomSearches(data: Record<string, boolean>): Record<string, bo
 function flattenSnippetResults(data: Record<string, unknown>): Record<string, string> {
   const flat: Record<string, string> = {};
   for (const [name, value] of Object.entries(data)) {
-    if (typeof value === 'object' && value !== null) {
-      for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-        flat[`snippet_${name}_${key}`] = String(val ?? '');
-      }
-    } else {
-      flat[`snippet_${name}`] = String(value ?? '');
-    }
+    // One column per snippet: an object result is stored as JSON, since its
+    // keys can differ from page to page and CSV columns are fixed
+    flat[`snippet_${name}`] = typeof value === 'object' && value !== null
+      ? JSON.stringify(value)
+      : String(value ?? '');
   }
   return flat;
+}
+
+/** Columns from custom extractions, searches and snippets of one page. */
+function dynamicColumnsOf(page: PageData): Record<string, string | boolean> {
+  return {
+    ...flattenCustomExtractions(page.customExtractions || {}),
+    ...flattenCustomSearches(page.customSearches || {}),
+    ...flattenSnippetResults(page.snippetResults || {}),
+  };
+}
+
+/**
+ * Every custom column a CSV of this crawl needs, in a stable order: those of
+ * the configured extractions, searches and snippets, then any other found in
+ * `pages`. The CSV header is taken from the first row, so each row must carry
+ * all of them, or a value in a column the first row lacked (an error page
+ * written first has none) is silently dropped.
+ */
+export function csvDynamicColumns(
+  config: { customExtractions?: { name: string }[]; customSearches?: { name: string }[]; snippetPaths?: string[] },
+  pages: readonly PageData[] = [],
+): string[] {
+  const columns = new Set<string>();
+  for (const rule of config.customExtractions ?? []) columns.add(`extract_${rule.name}`);
+  for (const rule of config.customSearches ?? []) columns.add(`search_${rule.name}`);
+  if ((config.snippetPaths ?? []).length > 0) {
+    for (const path of config.snippetPaths!) columns.add(`snippet_${snippetName(path)}`);
+    columns.add('snippet_error'); // all snippets failed (browser could not start)
+  }
+  for (const page of pages) {
+    for (const key of Object.keys(dynamicColumnsOf(page))) columns.add(key);
+  }
+  return [...columns];
 }
 
 /**
  * Flatten a PageData into a flat CSV-ready record. Exported for use by the
  * export API. String cells that a spreadsheet would run as a formula
  * (=, +, -, @, tab, CR) are prefixed with an apostrophe; numbers stay numbers.
+ * `dynamicColumns` (from csvDynamicColumns) are always present, empty when
+ * the page has no value.
  */
-export function flattenPageForCsv(page: PageData): Record<string, string | number | boolean> {
-  return csvSafeRecord(flattenPageRaw(page));
+export function flattenPageForCsv(page: PageData, dynamicColumns: readonly string[] = []): Record<string, string | number | boolean> {
+  return csvSafeRecord(flattenPageRaw(page, dynamicColumns));
 }
 
-function flattenPageRaw(page: PageData): Record<string, string | number | boolean> {
+function flattenPageRaw(page: PageData, dynamicColumns: readonly string[] = []): Record<string, string | number | boolean> {
+  const own = dynamicColumnsOf(page);
+  const dynamic: Record<string, string | boolean> = {};
+  for (const key of dynamicColumns) dynamic[key] = own[key] ?? '';
+  for (const [key, value] of Object.entries(own)) if (!Object.hasOwn(dynamic, key)) dynamic[key] = value;
   return {
     url: page.url,
     final_url: page.finalUrl,
@@ -206,9 +247,7 @@ function flattenPageRaw(page: PageData): Record<string, string | number | boolea
     has_hsts: page.security.hasHsts,
     has_x_frame_options: page.security.hasXFrameOptions,
     has_csp: page.security.hasCsp,
-    ...flattenCustomExtractions(page.customExtractions),
-    ...flattenCustomSearches(page.customSearches),
-    ...flattenSnippetResults(page.snippetResults),
+    ...dynamic,
     psi_performance: page.pagespeed?.performanceScore ?? '',
     psi_lcp: page.pagespeed?.lcp ?? '',
     psi_fid: page.pagespeed?.fid ?? '',

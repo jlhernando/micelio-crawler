@@ -162,7 +162,7 @@ func StreamMergeEmit(
 		if _, matched := matchedCrawlPaths[ghostPath]; matched {
 			continue
 		}
-		if _, dup := emittedGhosts[ghostPath]; dup {
+		if _, dup := emittedGhosts[ghostPath]; dup || !isGhostCandidate(cp) {
 			continue
 		}
 		emittedGhosts[ghostPath] = struct{}{}
@@ -328,7 +328,7 @@ func MergeLogWithCrawlStream(
 		if _, matched := matchedCrawlPaths[ghostPath]; matched {
 			continue
 		}
-		if _, dup := emittedGhosts[ghostPath]; dup {
+		if _, dup := emittedGhosts[ghostPath]; dup || !isGhostCandidate(cp) {
 			continue
 		}
 		emittedGhosts[ghostPath] = struct{}{}
@@ -354,6 +354,17 @@ func MergeLogWithCrawlStream(
 	result.TotalPages = totalLogURLs + result.Segments[SegUncrawled]
 	result.TopMergedPages = topMerged
 	return result, nil
+}
+
+// isGhostCandidate reports whether a crawl page with no log traffic belongs in
+// SegUncrawled ("indexable but never visited by bots"). Redirects, errors,
+// noindex, non-indexable and canonicalised pages are not ghosts: bots have no
+// reason to visit them, so counting them would inflate the Ghost Pages KPI.
+func isGhostCandidate(cp *CrawlPageInfo) bool {
+	if cp.IsRedirect || cp.StatusCode >= 300 || cp.HasNoindex || !cp.Indexable {
+		return false
+	}
+	return cp.Canonical == "" || extractPath(cp.Canonical) == extractPath(cp.URL)
 }
 
 // classifySegment returns the segment plus a one-line human reason explaining

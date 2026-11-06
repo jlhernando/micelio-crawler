@@ -1,6 +1,7 @@
 package extract
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -65,6 +66,32 @@ func TestJSONLDLargeAuthorNotInlined(t *testing.T) {
 	}
 }
 
+// A long Article keeps valid Raw JSON with its dates and author, so
+// freshness and E-E-A-T still read them (a byte prefix did not parse).
+func TestJSONLDLargeArticleStaysValid(t *testing.T) {
+	art := `{"@context":"https://schema.org","@type":"Article","headline":"H",` +
+		`"datePublished":"2026-01-02","dateModified":"2026-02-03","author":{"@type":"Person","name":"Ana"},` +
+		`"articleBody":"` + strings.Repeat("é", 8000) + `","description":"` + strings.Repeat("d", 3000) + `"}`
+	for _, script := range []string{art, `{"@graph":[` + art + `]}`} {
+		got := structured(jsonldPage(script))
+		if len(got) != 1 || got[0].Type != "Article" {
+			t.Fatalf("entries: %+v", got)
+		}
+		raw := got[0].Raw
+		if len(raw) > jsonldMaxRaw || !json.Valid([]byte(raw)) {
+			t.Fatalf("raw %d bytes, valid=%v", len(raw), json.Valid([]byte(raw)))
+		}
+		for _, want := range []string{`"datePublished":"2026-01-02"`, `"dateModified"`, `"Ana"`, `"description"`} {
+			if !strings.Contains(raw, want) {
+				t.Errorf("raw lost %s: %.200s", want, raw)
+			}
+		}
+		if strings.Contains(raw, "articleBody") {
+			t.Errorf("largest field kept: %.100s", raw)
+		}
+	}
+}
+
 // Scripts past the per-script or per-page graph budget give one entry
 // with their top-level @type, read without building the document.
 func TestJSONLDOversizedScriptTypeOnly(t *testing.T) {
@@ -74,7 +101,7 @@ func TestJSONLDOversizedScriptTypeOnly(t *testing.T) {
 		t.Fatalf("test script only %d bytes", len(huge))
 	}
 	got := structured(jsonldPage(huge))
-	if len(got) != 1 || got[0].Type != "WebSite" || len(got[0].Raw) != jsonldMaxRaw {
+	if len(got) != 1 || got[0].Type != "WebSite" || len(got[0].Raw) > jsonldMaxRaw || !json.Valid([]byte(got[0].Raw)) {
 		t.Fatalf("got %d entries, first %+v", len(got), got[0].Type)
 	}
 	if extractJSONLDType(`{"@type":"A"`) != "Unknown" {

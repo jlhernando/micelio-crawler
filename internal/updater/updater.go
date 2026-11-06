@@ -213,13 +213,30 @@ func (u *Updater) Install(ctx context.Context) (*Status, error) {
 		u.current = strings.TrimPrefix(st.Latest, "v")
 		u.cached = &updated
 	}
-	out := *u.cached
+	out := *st
+	if u.cached != nil {
+		out = *u.cached
+	}
 	u.mu.Unlock()
 	return &out, nil
 }
 
 // Rollback restores the previous binary from the .bak file.
 func (u *Updater) Rollback() error {
+	// Same guard as Install: a rollback during an install could move a
+	// half-written backup over the binary or consume the only backup.
+	u.mu.Lock()
+	if u.installing {
+		u.mu.Unlock()
+		return errors.New("update already in progress")
+	}
+	u.installing = true
+	u.mu.Unlock()
+	defer func() {
+		u.mu.Lock()
+		u.installing = false
+		u.mu.Unlock()
+	}()
 	bakPath := u.binaryPath + ".bak"
 	if _, err := os.Stat(bakPath); err != nil {
 		return errors.New("no backup file found — nothing to roll back to")

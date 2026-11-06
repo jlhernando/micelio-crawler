@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -410,11 +411,39 @@ func (r *Renderer) RunSnippet(ctx context.Context, pageURL, userAgent, jsCode st
 	if err := chromedp.Do(timeoutCtx, actions...); err != nil {
 		return nil, fmt.Errorf("run snippet: %w", err)
 	}
-	result, err := chromedp.Run(timeoutCtx, chromedp.Evaluate[any](jsCode))
+	result, err := chromedp.Run(timeoutCtx, chromedp.Evaluate[any](snippetExpression(jsCode), chromedp.EvalAwaitPromise))
 	if err != nil {
 		return nil, fmt.Errorf("run snippet: %w", err)
 	}
 	return result, nil
+}
+
+// legacySnippetRe finds the `export default` of a snippet written for the
+// TypeScript crawler (an async function of a Playwright page).
+var legacySnippetRe = regexp.MustCompile(`(?m)^\s*export\s+default\s+`)
+
+// snippetExpression turns a snippet into a browser expression. A raw
+// expression is used as is (a Promise it returns is awaited). A TypeScript
+// crawler snippet (`export default async (page) => ...`, like the ones in
+// snippets/) runs with a small page stand-in: evaluate, waitForTimeout and
+// url work; anything else (page.on, page.goto) throws a clear error.
+func snippetExpression(code string) string {
+	loc := legacySnippetRe.FindStringIndex(code)
+	if loc == nil {
+		return code
+	}
+	return `(async () => {
+const __micelioSnippet = ` + code[loc[1]:] + `
+;
+const page = new Proxy({
+  evaluate: async (fn, ...args) => typeof fn === 'function' ? fn(...args) : (0, eval)(fn),
+  waitForTimeout: (ms) => new Promise((r) => setTimeout(r, ms)),
+  url: () => location.href,
+}, {
+  get: (t, k) => k in t ? t[k] : () => { throw new Error('page.' + String(k) + ' is not available to snippets in the Go crawler'); },
+});
+return await __micelioSnippet(page);
+})()`
 }
 
 // hideOverlaysJS removes cookie and consent banners before a screenshot.

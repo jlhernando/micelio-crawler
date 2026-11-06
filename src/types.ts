@@ -134,6 +134,8 @@ export interface PageData {
   images: ImageData[];
   depth: number;
   crawledAt: string;
+  /** Last-Modified response header as an ISO date, when valid and not in the future */
+  lastModified?: string;
   error?: string;
   // Phase 2: Enhanced SEO fields
   hreflang: HreflangEntry[];

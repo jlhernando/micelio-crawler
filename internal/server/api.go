@@ -38,7 +38,20 @@ const (
 var validSortFields = map[string]bool{
 	"url": true, "statusCode": true, "responseTimeMs": true, "title": true,
 	"wordCount": true, "depth": true, "inlinks": true, "pageRank": true,
-	"htmlBytes": true, "totalBytes": true,
+	"htmlBytes": true, "totalBytes": true, "bodySize": true,
+}
+
+// rlockReady read-locks r when its pages are fully loaded and reports
+// whether it did; on false r is not locked. Results cached by quick stats
+// load pages in the background, and exports or diffs of a half-loaded crawl
+// would silently be empty or partial.
+func rlockReady(r *CrawlResults) bool {
+	r.mu.RLock()
+	if !r.PagesReady {
+		r.mu.RUnlock()
+		return false
+	}
+	return true
 }
 
 // ValidSettings defines the allowed setting keys and their types.
@@ -143,6 +156,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			return
 		}
 		job = redactedJob(job)
+		manager.withLiveCounts([]*CrawlJob{job})
 		// A crawl is marked completed before its analysis runs: "analyzing"
 		// says its results are not available yet (crawls and imports).
 		analyzing := job.Status == "completed" && manager.IsAnalyzing(id)
@@ -639,6 +653,11 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, "results not available", http.StatusNotFound)
 			return
 		}
+		if !rlockReady(results) {
+			jsonError(w, "pages still loading, try again in a moment", http.StatusServiceUnavailable)
+			return
+		}
+		defer results.mu.RUnlock()
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=crawl-%s.csv", r.PathValue("id")))
 		csvWriter := csvsafe.NewWriter(w)
@@ -686,7 +705,10 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, "results not available", http.StatusNotFound)
 			return
 		}
-		results.mu.RLock()
+		if !rlockReady(results) {
+			jsonError(w, "pages still loading, try again in a moment", http.StatusServiceUnavailable)
+			return
+		}
 		defer results.mu.RUnlock()
 		q := r.URL.Query()
 		view := results.pageView(pageQueryFromValues(q))
@@ -751,7 +773,9 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		jsonOK(w, map[string]interface{}{"crawls": redactedJobs(jobs), "total": len(jobs)})
+		out := redactedJobs(jobs)
+		manager.withLiveCounts(out) // DB count lags up to 10 pages
+		jsonOK(w, map[string]interface{}{"crawls": out, "total": len(jobs)})
 	})
 
 	mux.HandleFunc("POST /api/crawl/diff", func(w http.ResponseWriter, r *http.Request) {
@@ -775,6 +799,20 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		if newResults == nil {
 			jsonError(w, "new crawl results not available", http.StatusNotFound)
 			return
+		}
+		// Both crawls fully loaded, and read-locked while compared (the
+		// same crawl twice is locked once: nested RLocks can deadlock).
+		if !rlockReady(oldResults) {
+			jsonError(w, "old crawl pages still loading, try again in a moment", http.StatusServiceUnavailable)
+			return
+		}
+		defer oldResults.mu.RUnlock()
+		if newResults != oldResults {
+			if !rlockReady(newResults) {
+				jsonError(w, "new crawl pages still loading, try again in a moment", http.StatusServiceUnavailable)
+				return
+			}
+			defer newResults.mu.RUnlock()
 		}
 
 		// Check if full comparison is requested

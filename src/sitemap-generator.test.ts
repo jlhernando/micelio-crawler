@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { generateSitemap, generateMultiSitemap } from './sitemap-generator.js';
+import { lastModifiedField } from './extractor.js';
 import type { PageData } from './types.js';
 
 function makePage(overrides: Partial<PageData> & { url: string; finalUrl: string }): PageData {
@@ -29,16 +30,35 @@ describe('generateSitemap', () => {
     expect(result.xml).toContain('</urlset>');
   });
 
-  it('includes lastmod from crawledAt date', () => {
+  it('takes lastmod from Last-Modified, never from the crawl time', () => {
     const pages = [
       makePage({
         url: 'https://example.com/',
         finalUrl: 'https://example.com/',
         crawledAt: '2024-06-15T14:30:00Z',
+        lastModified: '2023-01-02T08:00:00.000Z',
       }),
+      makePage({ url: 'https://example.com/b', finalUrl: 'https://example.com/b', crawledAt: '2024-06-15T14:30:00Z' }),
     ];
     const result = generateSitemap(pages);
-    expect(result.xml).toContain('<lastmod>2024-06-15</lastmod>');
+    expect(result.xml).toContain('<lastmod>2023-01-02</lastmod>');
+    expect(result.xml).not.toContain('2024-06-15');
+  });
+
+  it('Last-Modified headers are kept only when valid and not in the future', () => {
+    const now = Date.parse('2026-01-01T00:00:00Z');
+    expect(lastModifiedField('Wed, 21 Oct 2015 07:28:00 GMT', now)).toEqual({ lastModified: '2015-10-21T07:28:00.000Z' });
+    expect(lastModifiedField('garbage', now)).toEqual({});
+    expect(lastModifiedField('Fri, 01 Jan 2027 00:00:00 GMT', now)).toEqual({});
+    expect(lastModifiedField(undefined, now)).toEqual({});
+  });
+
+  it('falls back to the source sitemap lastmod', () => {
+    const pages = [makePage({
+      url: 'https://example.com/', finalUrl: 'https://example.com/',
+      sitemapData: { inSitemap: true, sitemapLastmod: '2022-05-06' },
+    })];
+    expect(generateSitemap(pages).xml).toContain('<lastmod>2022-05-06</lastmod>');
   });
 
   it('filters non-200 pages', () => {
@@ -128,9 +148,9 @@ describe('generateSitemap', () => {
     expect(result.xml).toContain('https://example.com/new');
   });
 
-  it('omits lastmod when crawledAt is missing', () => {
+  it('omits lastmod when the modification date is unknown', () => {
     const pages = [
-      makePage({ url: 'https://example.com/', finalUrl: 'https://example.com/', crawledAt: '' }),
+      makePage({ url: 'https://example.com/', finalUrl: 'https://example.com/', lastModified: 'not a date' }),
     ];
     const result = generateSitemap(pages);
     expect(result.xml).not.toContain('<lastmod>');

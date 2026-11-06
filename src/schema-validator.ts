@@ -131,6 +131,44 @@ const TYPE_SPECS: Record<string, TypeSpec> = {
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$/;
 
 /**
+ * Text of a JSON-LD value that should be a string (a @type, a URL).
+ * Crawled JSON is untrusted: String() on an object can throw (a "toString"
+ * key that is not a function), so only primitives are converted.
+ */
+function textOf(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return '';
+}
+
+/** @type as a list of names: a string or an array of strings. */
+function typeNames(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(textOf).filter(Boolean);
+  const t = textOf(value);
+  return t ? [t] : [];
+}
+
+/** True when a JSON-LD @context points at schema.org (string, array or @vocab object). */
+function contextIsSchemaOrg(context: unknown): boolean {
+  if (typeof context === 'string') return context.toLowerCase().includes('schema.org');
+  if (Array.isArray(context)) return context.some(contextIsSchemaOrg);
+  if (context && typeof context === 'object') {
+    return contextIsSchemaOrg((context as Record<string, unknown>)['@vocab']);
+  }
+  return false;
+}
+
+/** Warning for a missing or non-schema.org @context, or null when it is fine. */
+function contextIssue(context: unknown): SchemaIssue | null {
+  if (!context) return { severity: 'warning', message: 'Missing @context (should be "https://schema.org")' };
+  if (!contextIsSchemaOrg(context)) {
+    const shown = typeof context === 'string' ? context : (JSON.stringify(context) ?? '').slice(0, 100);
+    return { severity: 'warning', message: `@context "${shown}" does not reference schema.org` };
+  }
+  return null;
+}
+
+/**
  * Check if a value is present and non-empty.
  */
 function hasValue(obj: Record<string, unknown>, key: string): boolean {
@@ -150,8 +188,7 @@ function validateOffers(offers: unknown, issues: SchemaIssue[]): void {
   for (const offer of offerList) {
     if (typeof offer !== 'object' || offer === null) continue;
     const o = offer as Record<string, unknown>;
-    const type = String(o['@type'] || 'Offer');
-    if (type === 'AggregateOffer') {
+    if (typeNames(o['@type']).includes('AggregateOffer')) {
       if (!hasValue(o, 'lowPrice') && !hasValue(o, 'highPrice')) {
         issues.push({ severity: 'warning', message: 'AggregateOffer missing lowPrice or highPrice', path: 'offers' });
       }
@@ -187,7 +224,7 @@ function validateFAQ(data: Record<string, unknown>, issues: SchemaIssue[]): void
   for (let i = 0; i < questions.length; i++) {
     const q = questions[i] as Record<string, unknown>;
     if (!q || typeof q !== 'object') continue;
-    const qType = String(q['@type'] || '');
+    const qType = typeNames(q['@type']).join(', ');
     if (qType !== 'Question') {
       issues.push({ severity: 'warning', message: `mainEntity[${i}] should be @type Question, got "${qType}"`, path: `mainEntity[${i}].@type` });
     }
@@ -281,7 +318,7 @@ function validateReview(data: Record<string, unknown>, issues: SchemaIssue[]): v
  * Returns an array because @graph containers produce one result per item.
  */
 function validateJsonLd(raw: string): SchemaValidationResult[] {
-  let parsed: Record<string, unknown>;
+  let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
@@ -294,76 +331,97 @@ function validateJsonLd(raw: string): SchemaValidationResult[] {
     }];
   }
 
-  // Handle @graph arrays — return individual results per item for granular reporting
-  if (Array.isArray(parsed['@graph'])) {
-    if (parsed['@graph'].length === 0) {
-      return [{
-        type: 'Graph',
-        format: 'json-ld',
-        issues: [{ severity: 'warning', message: '@graph array is empty' }],
-        richResultEligible: false,
-        richResultType: null,
-      }];
-    }
+  // A top-level array is valid JSON-LD: each element is a node of its own
+  if (Array.isArray(parsed)) {
+    if (parsed.length === 0) return [notANode('JSON-LD array is empty')];
     const results: SchemaValidationResult[] = [];
-    for (const item of parsed['@graph']) {
-      if (typeof item === 'object' && item !== null) {
-        // Graph children inherit @context from parent, so skip that check
-        const subResult = validateJsonLdObject(item as Record<string, unknown>, true);
-        results.push(subResult);
-      } else {
-        results.push({
-          type: 'Unknown',
-          format: 'json-ld',
-          issues: [{ severity: 'warning', message: 'Non-object item in @graph array' }],
-          richResultEligible: false,
-          richResultType: null,
-        });
-      }
+    for (const item of parsed) {
+      results.push(...(isNode(item) ? validateJsonLdNode(item, undefined) : [notANode('Non-object item in JSON-LD array')]));
     }
     return results;
   }
+  // Valid JSON that is not an object (null, a string, a number)
+  if (!isNode(parsed)) return [notANode('JSON-LD is not an object')];
 
-  return [validateJsonLdObject(parsed, false)];
+  return validateJsonLdNode(parsed, undefined);
+}
+
+function isNode(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function notANode(message: string): SchemaValidationResult {
+  return {
+    type: 'Unknown',
+    format: 'json-ld',
+    issues: [{ severity: 'warning', message }],
+    richResultEligible: false,
+    richResultType: null,
+  };
+}
+
+/**
+ * Validate a JSON-LD object, or each child of its @graph.
+ * @param inherited - see validateJsonLdObject
+ */
+function validateJsonLdNode(data: Record<string, unknown>, inherited: SchemaIssue | null | undefined): SchemaValidationResult[] {
+  // Handle @graph arrays — return individual results per item for granular reporting
+  const graph = data['@graph'];
+  if (!Array.isArray(graph)) return [validateJsonLdObject(data, inherited)];
+
+  if (graph.length === 0) {
+    return [{
+      type: 'Graph',
+      format: 'json-ld',
+      issues: [{ severity: 'warning', message: '@graph array is empty' }],
+      richResultEligible: false,
+      richResultType: null,
+    }];
+  }
+  // Children inherit the container's @context: check it here so each child
+  // gets the verdict a standalone object would get.
+  const containerContext = data['@context'] !== undefined || inherited === undefined
+    ? contextIssue(data['@context'])
+    : inherited;
+  const results: SchemaValidationResult[] = [];
+  for (const item of graph) {
+    results.push(isNode(item)
+      ? validateJsonLdObject(item, containerContext)
+      : notANode('Non-object item in @graph array'));
+  }
+  return results;
 }
 
 /**
  * Validate a single JSON-LD object (not a @graph container).
- * @param isGraphChild - if true, skip @context check (inherited from parent)
+ * @param inherited - @context verdict of the enclosing @graph container
+ *   (null: it references schema.org). Undefined for a top-level object,
+ *   which must carry its own @context. A node's own @context always wins.
  */
-function validateJsonLdObject(data: Record<string, unknown>, isGraphChild: boolean = false): SchemaValidationResult {
+function validateJsonLdObject(data: Record<string, unknown>, inherited?: SchemaIssue | null): SchemaValidationResult {
   const issues: SchemaIssue[] = [];
-  const type = String(data['@type'] || 'Unknown');
 
-  // Check @context (skip for @graph children which inherit from parent)
-  if (!isGraphChild) {
-    const context = data['@context'];
-    if (!context) {
-      issues.push({ severity: 'warning', message: 'Missing @context (should be "https://schema.org")' });
-    } else {
-      const ctxStr = String(context).toLowerCase();
-      if (!ctxStr.includes('schema.org')) {
-        issues.push({ severity: 'warning', message: `@context "${context}" does not reference schema.org` });
-      }
-    }
-  }
+  const ctxIssue = data['@context'] !== undefined || inherited === undefined
+    ? contextIssue(data['@context'])
+    : inherited;
+  if (ctxIssue) issues.push(ctxIssue);
 
-  // Check @type
-  if (!data['@type']) {
-    issues.push({ severity: 'error', message: 'Missing @type' });
+  // Check @type: a string or an array of strings (e.g. ["Product", "ItemPage"])
+  const types = typeNames(data['@type']);
+  if (types.length === 0) {
+    issues.push({ severity: 'error', message: data['@type'] ? '@type must be a string or an array of strings' : 'Missing @type' });
     return { type: 'Unknown', format: 'json-ld', issues, richResultEligible: false, richResultType: null };
   }
+  const type = types[0];
 
-  // Handle array @type (e.g. ["Product", "ItemPage"])
-  const types = Array.isArray(data['@type']) ? data['@type'].map(String) : [type];
-
-  let richResultEligible = true;
+  // Without a schema.org @context the type names mean nothing to Google
+  let richResultEligible = ctxIssue === null;
   let richResultType: string | null = null;
 
   // Find the best matching spec
   let spec: TypeSpec | undefined;
   for (const t of types) {
-    if (TYPE_SPECS[t]) {
+    if (Object.hasOwn(TYPE_SPECS, t)) {
       spec = TYPE_SPECS[t];
       break;
     }
@@ -398,9 +456,13 @@ function validateJsonLdObject(data: Record<string, unknown>, isGraphChild: boole
   }
 
   // Type-specific deep validation
-  const primaryType = types.find(t => TYPE_SPECS[t]) || type;
+  const primaryType = types.find(t => Object.hasOwn(TYPE_SPECS, t)) || type;
   switch (primaryType) {
     case 'Product':
+      // Google product snippets need at least one of offers, review or aggregateRating
+      if (!hasValue(data, 'offers') && !hasValue(data, 'review') && !hasValue(data, 'aggregateRating')) {
+        issues.push({ severity: 'error', message: 'Product needs at least one of "offers", "review" or "aggregateRating"', path: 'offers' });
+      }
       validateOffers(data.offers, issues);
       break;
     case 'FAQPage':
@@ -485,11 +547,22 @@ export function validateStructuredData(entries: StructuredDataEntry[]): SchemaVa
 
   for (const entry of entries) {
     if (entry.format === 'json-ld') {
-      results.push(...validateJsonLd(entry.raw));
+      // One odd block must never cost the page its whole extraction
+      try {
+        results.push(...validateJsonLd(entry.raw));
+      } catch {
+        results.push({
+          type: 'Unknown',
+          format: 'json-ld',
+          issues: [{ severity: 'error', message: 'JSON-LD could not be validated' }],
+          richResultEligible: false,
+          richResultType: null,
+        });
+      }
     } else if (entry.format === 'microdata') {
       // Microdata: basic validation (we only have the type, not full properties)
       const type = entry.type;
-      const spec = TYPE_SPECS[type];
+      const spec = Object.hasOwn(TYPE_SPECS, type) ? TYPE_SPECS[type] : undefined;
       const issues: SchemaIssue[] = [];
       if (!spec) {
         // Unknown type — not an error, just can't validate

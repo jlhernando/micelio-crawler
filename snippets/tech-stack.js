@@ -4,7 +4,8 @@
  * Detects frontend frameworks, CMS, CDNs, and other technologies
  * by inspecting DOM, scripts, meta tags, and HTTP headers.
  *
- * Usage: micelio spider https://example.com --snippet snippets/tech-stack.js
+ * Usage: micelio crawl https://example.com --js --snippet snippets/tech-stack.js
+ *        (TypeScript crawler: npx tsx src/cli.ts spider https://example.com --snippet snippets/tech-stack.js)
  */
 export default async (page) => {
   return await page.evaluate(() => {

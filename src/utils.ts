@@ -7,6 +7,37 @@ export function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Name a snippet file's results are stored under (path without extension, separators as _). */
+export function snippetName(snippetPath: string): string {
+  return snippetPath.replace(/\.(js|mjs|cjs)$/, '').replace(/[/\\]/g, '_');
+}
+
+/**
+ * Map every form of a crawled page's URL (its URL, its final URL after
+ * redirects, and the trailing-slash variants of both) to the page's own URL.
+ *
+ * Every page owns its own URL first; aliases only fill keys no page owns.
+ * So a page that redirects to D never takes D away from the crawled page D,
+ * whatever order the pages arrived in (concurrent crawls finish in any order).
+ */
+export function buildPageUrlResolver(pages: readonly { url: string; finalUrl?: string }[]): Map<string, string> {
+  const resolver = new Map<string, string>();
+  for (const page of pages) resolver.set(page.url, page.url);
+  const alias = (form: string | undefined, owner: string) => {
+    if (form && !resolver.has(form)) resolver.set(form, owner);
+  };
+  // Weaker forms later: final URLs, then slash variants of own URLs, then
+  // slash variants of final URLs
+  for (const page of pages) alias(page.finalUrl, page.url);
+  for (const page of pages) alias(slashVariant(page.url), page.url);
+  for (const page of pages) if (page.finalUrl) alias(slashVariant(page.finalUrl), page.url);
+  return resolver;
+}
+
+function slashVariant(url: string): string {
+  return url.endsWith('/') && url.length > 1 ? url.slice(0, -1) : url + '/';
+}
+
 /**
  * JSON safe to place inside an HTML <script> element: `<`, `>` and `&` become
  * <, > and &, so no end tag (any case), comment opener or
@@ -57,6 +88,19 @@ export function formatDateYmd(date: Date): string {
 }
 
 /**
+ * Inclusive report date range of exactly `days` days that ends `lagDays`
+ * before today (UTC), for APIs whose endDate is inclusive (GA4, Search
+ * Console). Subtracting `days` from the end date gives days + 1 days.
+ */
+export function reportDateRange(days: number, lagDays: number, now: Date = new Date()): { startDate: string; endDate: string } {
+  const span = Math.max(1, Math.floor(days));
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - lagDays));
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - (span - 1));
+  return { startDate: formatDateYmd(start), endDate: formatDateYmd(end) };
+}
+
+/**
  * Normalize a URL for consistent comparison: strip hash, trailing slash,
  * normalize default ports, and sort query parameters.
  */
@@ -98,7 +142,9 @@ export function normalizeUrl(url: string): string | null {
 export function normalizeUrlForComparison(url: string): string {
   try {
     const parsed = new URL(url);
-    const host = parsed.hostname.replace(/^www\./, '');
+    // A non-default port is another origin (example.com:8443 is not
+    // example.com); URL.port is already '' for the scheme's default port
+    const host = parsed.hostname.replace(/^www\./, '') + (parsed.port ? ':' + parsed.port : '');
     const path = parsed.pathname.replace(/\/$/, '') || '/';
     if (parsed.search) {
       const params = new URLSearchParams(parsed.search);

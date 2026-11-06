@@ -4,7 +4,7 @@ import { computePageRank } from './pagerank.js';
 import { findNearDuplicates } from './simhash.js';
 import { buildSegmentStats, type Segment } from './segmentation.js';
 import { buildUrlStructureStats } from './url-structure.js';
-import { normalizeUrlForComparison } from './utils.js';
+import { normalizeUrlForComparison, buildPageUrlResolver } from './utils.js';
 import { buildTemplateStats } from './template-detector.js';
 import { safeConsole, termSafe } from './sanitize.js';
 
@@ -38,17 +38,9 @@ export function generateReport(
   // Track inlinks for orphan page detection (with trailing-slash normalization)
   const inlinkCount = new Map<string, number>();
   const allUrls = new Set<string>();
-  // Build URL resolver: maps both /path and /path/ to the canonical page URL
-  const urlResolver = new Map<string, string>();
-  for (const page of pages) {
-    urlResolver.set(page.url, page.url);
-    urlResolver.set(page.finalUrl, page.url);
-    // Map trailing-slash variants to the same page
-    const withSlash = page.url.endsWith('/') ? page.url : page.url + '/';
-    const withoutSlash = page.url.endsWith('/') ? page.url.slice(0, -1) : page.url;
-    if (!urlResolver.has(withSlash)) urlResolver.set(withSlash, page.url);
-    if (!urlResolver.has(withoutSlash)) urlResolver.set(withoutSlash, page.url);
-  }
+  // URL resolver: maps a page's URL, final URL and /path vs /path/ to the
+  // page URL; a crawled page always owns its own URL (redirects never steal it)
+  const urlResolver = buildPageUrlResolver(pages);
 
   // Phase 2 accumulators
   const hreflangIssues: { url: string; issue: string }[] = [];
@@ -720,11 +712,16 @@ function buildCanonicalStats(pages: PageData[]): CrawlStats['canonicalStats'] {
   // Build lookup maps
   const pageByUrl = new Map<string, PageData>();
   const pageByNormUrl = new Map<string, PageData>();
+  // Two passes: every page owns its own URL; a redirect's final URL only
+  // fills a key no page owns, so a canonical to D finds page D itself
   for (const page of pages) {
     pageByUrl.set(page.url, page);
-    pageByUrl.set(page.finalUrl, page);
     pageByNormUrl.set(norm(page.url), page);
-    pageByNormUrl.set(norm(page.finalUrl), page);
+  }
+  for (const page of pages) {
+    if (!pageByUrl.has(page.finalUrl)) pageByUrl.set(page.finalUrl, page);
+    const normFinal = norm(page.finalUrl);
+    if (!pageByNormUrl.has(normFinal)) pageByNormUrl.set(normFinal, page);
   }
 
   let totalWithCanonical = 0;

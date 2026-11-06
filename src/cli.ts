@@ -8,7 +8,7 @@ import { mergeConfig } from './config.js';
 import { crawl } from './orchestrator.js';
 import { generateReport, printReport } from './reporter.js';
 import { generateHtmlReport } from './html-report.js';
-import { ResultWriter } from './writer.js';
+import { ResultWriter, csvDynamicColumns } from './writer.js';
 import { parseExtractionRule, parseSearchRule } from './custom-extract.js';
 import { formatError } from './utils.js';
 import { diffCrawls, parseUrlMap, DIFF_FIELDS } from './diff.js';
@@ -1196,7 +1196,7 @@ async function runCrawl(config: ReturnType<typeof mergeConfig>): Promise<void> {
     // Re-write output if analytics enrichment was applied (data was merged post-crawl)
     const hasAnalyticsEnrichment = pages.some(p => p.gscData || p.ga4Data || p.cruxData || p.plausibleData);
     if (hasAnalyticsEnrichment) {
-      const rewriter = new ResultWriter(config.outputPath, config.outputFormat);
+      const rewriter = new ResultWriter(config.outputPath, config.outputFormat, csvDynamicColumns(config, pages));
       for (const page of pages) await rewriter.write(page);
       await rewriter.close();
     }
@@ -1312,10 +1312,12 @@ function applyGscToPages(
   gscRaw: Map<string, import('./types.js').GscData>,
   crawledUrls: string[],
 ): number {
-  const merged = mergeGscData(crawledUrls, gscRaw);
+  // GSC reports the URL Google indexed: for a redirected page that is the
+  // final URL, so try it when the requested URL has no row
+  const merged = mergeGscData([...crawledUrls, ...pages.map(p => p.finalUrl).filter(Boolean)], gscRaw);
   let matchCount = 0;
   for (const page of pages) {
-    const gsc = merged.get(page.url);
+    const gsc = merged.get(page.url) ?? (page.finalUrl ? merged.get(page.finalUrl) : undefined);
     if (gsc) {
       page.gscData = gsc;
       matchCount++;
@@ -1337,7 +1339,8 @@ async function mergeGscIntoPages(pages: import('./types.js').PageData[], config:
       const bqResults = await fetchGscFromBigQuery({
         dataset: config.gscBqDataset,
         days: config.gscDays,
-        urls: crawledUrls,
+        // Final URLs too: BigQuery matches exact URLs, GSC stores the indexed one
+        urls: [...new Set([...crawledUrls, ...pages.map(p => p.finalUrl).filter(Boolean)])],
         keyFile: config.gscKeyFile || undefined,
       });
 

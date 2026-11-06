@@ -148,4 +148,65 @@ describe('findNearDuplicates', () => {
     const groups = findNearDuplicates(items, 90);
     expect(groups).toEqual([]);
   });
+
+  // Deterministic 64-bit values (xorshift) so failures reproduce
+  function rng(seed: bigint) {
+    let s = seed;
+    return () => {
+      s ^= (s << 13n) & 0xffffffffffffffffn;
+      s ^= s >> 7n;
+      s ^= (s << 17n) & 0xffffffffffffffffn;
+      return s;
+    };
+  }
+
+  function allPairs(items: { url: string; fingerprint: bigint }[], threshold: number) {
+    const maxDistance = Math.floor(64 * (1 - threshold / 100));
+    const groups: { urls: string[]; similarity: number }[] = [];
+    const assigned = new Set<string>();
+    for (let i = 0; i < items.length; i++) {
+      if (assigned.has(items[i].url)) continue;
+      const group = new Set<string>();
+      let min = 100;
+      for (let j = i + 1; j < items.length; j++) {
+        if (assigned.has(items[j].url)) continue;
+        const d = hammingDistance(items[i].fingerprint, items[j].fingerprint);
+        if (d <= maxDistance) {
+          if (group.size === 0) group.add(items[i].url);
+          group.add(items[j].url);
+          min = Math.min(min, Math.round(((64 - d) / 64) * 100));
+        }
+      }
+      if (group.size >= 2) { group.forEach((u) => assigned.add(u)); groups.push({ urls: [...group], similarity: min }); }
+    }
+    return groups;
+  }
+
+  it('gives the same groups as comparing all pairs', () => {
+    const next = rng(0x9e3779b97f4a7c15n);
+    const items: { url: string; fingerprint: bigint }[] = [];
+    for (let c = 0; c < 60; c++) {
+      const base = next();
+      // Near copies: flip a few random bits of the cluster base
+      for (let k = 0; k < 5; k++) {
+        let f = base;
+        const flips = Number(next() % 9n);
+        for (let b = 0; b < flips; b++) f ^= 1n << (next() % 64n);
+        items.push({ url: `c${c}-${k}`, fingerprint: f });
+      }
+      items.push({ url: `r${c}`, fingerprint: next() });
+    }
+    for (const threshold of [90, 85, 95]) {
+      expect(findNearDuplicates(items, threshold)).toEqual(allPairs(items, threshold));
+    }
+  });
+
+  it('100k distinct fingerprints finish quickly', () => {
+    const next = rng(42n);
+    const items = Array.from({ length: 100_000 }, (_, i) => ({ url: `u${i}`, fingerprint: next() }));
+    const start = Date.now();
+    findNearDuplicates(items, 90);
+    // All pairs took minutes here (~5 billion BigInt comparisons)
+    expect(Date.now() - start).toBeLessThan(10_000);
+  }, 30_000);
 });

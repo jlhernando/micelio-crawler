@@ -1230,6 +1230,15 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			manager.emit(ProgressEvent{Type: "merge_progress", Data: data})
 		}
 
+		// One merge at a time: the pairs-table writer holds the store lock
+		// anyway, and each merge holds the crawl's page list in memory.
+		select {
+		case mergeSlot <- struct{}{}:
+			defer func() { <-mergeSlot }()
+		case <-r.Context().Done():
+			return
+		}
+
 		emitPhase("loading_log_stats", nil)
 		raw, err := store.LoadLogStats(logID)
 		if err != nil || raw == nil {
@@ -1351,30 +1360,24 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			"logUrls":   urlCount,
 		})
 
-		// Load all log URLs into memory so the DB lock is released before the
-		// merge begins. ~100 B/row × 5M rows ≈ 500 MB — acceptable.
+		// Stream the log URLs in batches on the URL connection: memory stays
+		// at one batch (a log with millions of unique URLs used to be
+		// loaded whole), and the store lock the writer below holds is not
+		// needed to read them.
 		usingCappedFallback := urlCount == 0
-		var logURLs []logs.URLStat
-		if usingCappedFallback {
-			logURLs = logStats.TopURLs
-		} else {
-			emitPhase("loading_urls", map[string]interface{}{"urlCount": urlCount})
-			var loadErr error
-			logURLs, loadErr = store.LoadAllLogURLStats(logID)
-			if loadErr != nil {
-				emitPhase("error", map[string]interface{}{"error": loadErr.Error()})
-				jsonError(w, "failed to load log URLs: "+loadErr.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-
 		iterator := func(fn func(logs.URLStat) error) error {
-			for i := range logURLs {
-				if err := fn(logURLs[i]); err != nil {
-					return err
+			if usingCappedFallback {
+				for i := range logStats.TopURLs {
+					if err := fn(logStats.TopURLs[i]); err != nil {
+						return err
+					}
 				}
+				return nil
 			}
-			return nil
+			return store.IterateLogURLStatsBatched(logID, mergeURLBatch, fn)
+		}
+		if !usingCappedFallback {
+			emitPhase("loading_urls", map[string]interface{}{"urlCount": urlCount})
 		}
 
 		// Pipe merged pages to a writer goroutine that does everything in a

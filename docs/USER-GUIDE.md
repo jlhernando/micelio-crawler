@@ -673,7 +673,9 @@ still uses `-o` and `--db`). A schedule's output folder must be a relative path
 inside the folder `micelio ui` runs in.
 
 Each request is also capped. Change a cap with an environment variable (also
-read from `~/.micelio/micelio.env`); the CLI does not use them:
+read from `~/.micelio/micelio.env`). The CLI uses only the import caps and
+`MICELIO_MAX_CRAWL_PAGES`, for `micelio import` when it imports into
+`~/.micelio` itself (no dashboard running, or `--local`):
 
 | Variable | Default | Caps |
 |---|---|---|
@@ -686,6 +688,14 @@ read from `~/.micelio/micelio.env`); the CLI does not use them:
 
 Concurrency (100), depth (1,000), render timeout (600 s) and link suggestions
 (100,000) have fixed caps.
+
+Connections are bounded too: request headers must arrive within 10 s, an idle
+keep-alive connection closes after 2 min, headers are capped at 64 KB, and a
+request body or response that makes no progress for 2 min is cut (uploads and
+exports of any length work while bytes keep moving). The live-update WebSocket
+accepts 64 browser tabs at once and closes a client that sends a message over
+4 KB. One log×crawl merge runs at a time (others wait); it reads the log URLs
+50,000 at a time instead of loading them all.
 
 **Upgrading from an older version.** Move key files into `~/.micelio/keys` and
 snippets into `~/.micelio/snippets`, then select them again in Settings or New

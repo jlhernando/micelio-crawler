@@ -562,21 +562,43 @@ func splitLinkHeader(h string) []string {
 
 const jsonldMaxRaw = 5120 // 5KB — sufficient for schema type identification and key properties
 
+// Limits against hostile JSON-LD. Crawled HTML is attacker-controlled and
+// up to 10 MB: parsing a huge @graph into maps, indexing it and re-encoding
+// every item could cost hundreds of MB per page across many workers.
+const (
+	// jsonldMaxGraphBytes: larger scripts are not expanded per @graph
+	// item; they still give one entry with their top-level @type.
+	jsonldMaxGraphBytes = 1 << 20
+	// jsonldMaxGraphPageBytes caps the JSON-LD bytes expanded per page.
+	jsonldMaxGraphPageBytes = 2 << 20
+	// jsonldMaxGraphItems caps the @graph items read from one script.
+	jsonldMaxGraphItems = 500
+	// maxStructuredEntries caps the structured-data entries of one page.
+	maxStructuredEntries = 1000
+)
+
 func extractStructuredData(doc *goquery.Document) []types.StructuredDataEntry {
 	var entries []types.StructuredDataEntry
+	graphBudget := jsonldMaxGraphPageBytes
 
 	// JSON-LD
-	doc.Find(`script[type="application/ld+json"]`).Each(func(_ int, s *goquery.Selection) {
+	doc.Find(`script[type="application/ld+json"]`).EachWithBreak(func(_ int, s *goquery.Selection) bool {
+		if len(entries) >= maxStructuredEntries {
+			return false
+		}
 		raw := strings.TrimSpace(s.Text())
 		if raw == "" {
-			return
+			return true
 		}
 		// Expand @graph arrays into individual entries so downstream
 		// consumers (AIReadiness, EEAT, schema stats) see each type
 		// with its own item-level Raw JSON.
-		if items := extractJSONLDGraphItems(raw); len(items) > 0 {
-			entries = append(entries, items...)
-			return
+		if len(raw) <= jsonldMaxGraphBytes && len(raw) <= graphBudget {
+			graphBudget -= len(raw)
+			if items := extractJSONLDGraphItems(raw); len(items) > 0 {
+				entries = append(entries, items[:min(len(items), maxStructuredEntries-len(entries))]...)
+				return true
+			}
 		}
 		sdType := extractJSONLDType(raw)
 		if len(raw) > jsonldMaxRaw {
@@ -587,17 +609,21 @@ func extractStructuredData(doc *goquery.Document) []types.StructuredDataEntry {
 			Format: types.FormatJSONLD,
 			Raw:    raw,
 		})
+		return true
 	})
 
 	// Microdata — only top-level itemscope elements (skip nested ones)
-	doc.Find("[itemscope]").Each(func(_ int, s *goquery.Selection) {
+	doc.Find("[itemscope]").EachWithBreak(func(_ int, s *goquery.Selection) bool {
+		if len(entries) >= maxStructuredEntries {
+			return false
+		}
 		// Skip nested itemscope elements
 		if s.ParentsFiltered("[itemscope]").Length() > 0 {
-			return
+			return true
 		}
 		itemtype, _ := s.Attr("itemtype")
 		if itemtype == "" {
-			return
+			return true
 		}
 		// Extract schema.org type from URL
 		sdType := itemtype
@@ -610,43 +636,64 @@ func extractStructuredData(doc *goquery.Document) []types.StructuredDataEntry {
 			Format: types.FormatMicrodata,
 			Raw:    itemtype,
 		})
+		return true
 	})
 
 	return entries
 }
 
-// extractJSONLDType extracts @type from JSON-LD using proper JSON parsing.
+// extractJSONLDType extracts @type from JSON-LD: the top-level object's, or
+// the first array element's. It streams the tokens instead of building the
+// whole document as maps, so a huge script costs no more than its bytes.
 func extractJSONLDType(raw string) string {
-	var parsed interface{}
-	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+	if !json.Valid([]byte(raw)) {
 		return "Unknown"
 	}
-	var obj map[string]interface{}
-	switch v := parsed.(type) {
-	case map[string]interface{}:
-		obj = v
-	case []interface{}:
-		if len(v) > 0 {
-			if m, ok := v[0].(map[string]interface{}); ok {
-				obj = m
-			}
+	dec := json.NewDecoder(strings.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil {
+		return "Unknown"
+	}
+	if d, ok := tok.(json.Delim); ok && d == '[' {
+		if !dec.More() {
+			return "Unknown"
+		}
+		if tok, err = dec.Token(); err != nil {
+			return "Unknown"
 		}
 	}
-	if obj == nil {
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
 		return "Unknown"
 	}
-	t, ok := obj["@type"]
-	if !ok {
-		return "Unknown"
+	sdType := "Unknown"
+	for dec.More() {
+		kt, err := dec.Token()
+		if err != nil {
+			return "Unknown"
+		}
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return "Unknown"
+		}
+		if key, _ := kt.(string); key == "@type" {
+			// The last @type wins, as with json.Unmarshal.
+			sdType = jsonldTypeValue(v)
+		}
 	}
-	switch v := t.(type) {
-	case string:
-		return v
-	case []interface{}:
-		if len(v) > 0 {
-			if s, ok := v[0].(string); ok {
-				return s
-			}
+	return sdType
+}
+
+// jsonldTypeValue reads a @type value: a string or the first string of an
+// array; "Unknown" otherwise.
+func jsonldTypeValue(v json.RawMessage) string {
+	var s string
+	if json.Unmarshal(v, &s) == nil {
+		return s
+	}
+	var arr []json.RawMessage
+	if json.Unmarshal(v, &arr) == nil && len(arr) > 0 {
+		if json.Unmarshal(arr[0], &s) == nil {
+			return s
 		}
 	}
 	return "Unknown"
@@ -656,7 +703,10 @@ func extractJSONLDType(raw string) string {
 // items, each with its own type and item-level Raw JSON. For entries that use @id
 // author references, the referenced Person/Organization is inlined so downstream
 // consumers (EEAT) can find the author name.
-// Returns nil if the JSON-LD does not contain a @graph key.
+// Returns nil if the JSON-LD does not contain a @graph key. At most
+// jsonldMaxGraphItems items are read, and only authors no larger than
+// jsonldMaxRaw are inlined (a large one copied into every item would
+// multiply memory).
 func extractJSONLDGraphItems(raw string) []types.StructuredDataEntry {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
@@ -666,17 +716,37 @@ func extractJSONLDGraphItems(raw string) []types.StructuredDataEntry {
 	if !ok {
 		return nil
 	}
+	dec := json.NewDecoder(strings.NewReader(string(graphRaw)))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('[') {
+		return nil
+	}
 	var items []map[string]json.RawMessage
-	if err := json.Unmarshal(graphRaw, &items); err != nil || len(items) == 0 {
+	var itemRaws []json.RawMessage
+	for dec.More() && len(items) < jsonldMaxGraphItems {
+		var elem json.RawMessage
+		if err := dec.Decode(&elem); err != nil {
+			return nil
+		}
+		var item map[string]json.RawMessage
+		if err := json.Unmarshal(elem, &item); err != nil {
+			return nil // not an object: not a usable @graph
+		}
+		if item == nil {
+			continue // null
+		}
+		items = append(items, item)
+		itemRaws = append(itemRaws, elem)
+	}
+	if len(items) == 0 {
 		return nil
 	}
 	// Build @id index for reference resolution.
-	idIndex := make(map[string]map[string]json.RawMessage)
-	for _, item := range items {
+	idIndex := make(map[string]json.RawMessage)
+	for i, item := range items {
 		if idRaw, ok := item["@id"]; ok {
 			var id string
 			if json.Unmarshal(idRaw, &id) == nil && id != "" {
-				idIndex[id] = item
+				idIndex[id] = itemRaws[i]
 			}
 		}
 	}
@@ -694,10 +764,8 @@ func extractJSONLDGraphItems(raw string) []types.StructuredDataEntry {
 					if idRaw, hasID := ref["@id"]; hasID {
 						var id string
 						if json.Unmarshal(idRaw, &id) == nil {
-							if resolved, found := idIndex[id]; found {
-								if b, err := json.Marshal(resolved); err == nil {
-									item["author"] = json.RawMessage(b)
-								}
+							if resolved, found := idIndex[id]; found && len(resolved) <= jsonldMaxRaw {
+								item["author"] = resolved
 							}
 						}
 					}

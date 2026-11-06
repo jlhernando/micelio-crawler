@@ -1271,37 +1271,85 @@ func (s *UiStore) QueryTopLogURLs(jobID string, limit int) ([]logs.URLStat, erro
 	return out, err
 }
 
-// LoadAllLogURLStats reads ALL URL stats for a job into memory and returns them.
-// ~100 bytes/row × 5M rows ≈ 500 MB — acceptable for a merge operation that
-// needs random-access patterns and eliminates lock contention with the writer.
-func (s *UiStore) LoadAllLogURLStats(jobID string) ([]logs.URLStat, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []logs.URLStat
-	resultFn := func(stmt *sqlite.Stmt) error {
-		u := logs.URLStat{
-			Path:      stmt.ColumnText(0),
-			Hits:      stmt.ColumnInt64(1),
-			BotHits:   stmt.ColumnInt64(2),
-			HumanHits: stmt.ColumnInt64(3),
-			Status:    int(stmt.ColumnInt64(5)),
-			Bytes:     stmt.ColumnInt64(6),
-		}
-		if stmt.ColumnType(4) != sqlite.TypeNull {
-			u.TopBot = stmt.ColumnText(4)
-		}
-		out = append(out, u)
-		return nil
+// mergeURLBatch is how many log URL rows the merge holds at once.
+const mergeURLBatch = 50_000
+
+// mergeSlot lets one log×crawl merge run at a time; others wait.
+var mergeSlot = make(chan struct{}, 1)
+
+// IterateLogURLStatsBatched streams a job's URL rows through fn in batches
+// of batch rows. Unlike IterateLogURLStats it holds no lock while fn runs
+// and reads on the URL connection (urlConn), so fn may use the store (the
+// merge writes its pairs table through s.conn meanwhile) and memory stays
+// at one batch however many URLs the log has.
+func (s *UiStore) IterateLogURLStatsBatched(jobID string, batch int, fn func(logs.URLStat) error) error {
+	if batch <= 0 {
+		batch = mergeURLBatch
 	}
-	query := fmt.Sprintf(`SELECT path, hits, bot_hits, human_hits, top_bot, status, bytes FROM %s`, logURLTable(jobID))
-	err := sqlitex.Execute(s.conn, query, &sqlitex.ExecOptions{ResultFunc: resultFn})
+	table := logURLTable(jobID)
+	s.urlMu.Lock()
+	perJob := false
+	err := sqlitex.Execute(s.urlConn, `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`,
+		&sqlitex.ExecOptions{Args: []interface{}{table}, ResultFunc: func(*sqlite.Stmt) error { perJob = true; return nil }})
+	s.urlMu.Unlock()
 	if err != nil {
-		out = nil
-		err = sqlitex.Execute(s.conn,
-			`SELECT path, hits, bot_hits, human_hits, top_bot, status, bytes FROM log_url_stats WHERE job_id = ?`,
-			&sqlitex.ExecOptions{Args: []interface{}{jobID}, ResultFunc: resultFn})
+		return err
 	}
-	return out, err
+
+	// Keyset pagination: per-job tables by rowid, the legacy shared
+	// table by its (job_id, path) primary key.
+	var query string
+	if perJob {
+		query = fmt.Sprintf(`SELECT path, hits, bot_hits, human_hits, top_bot, status, bytes, rowid FROM %s
+			WHERE rowid > ? ORDER BY rowid LIMIT ?`, table)
+	} else {
+		query = `SELECT path, hits, bot_hits, human_hits, top_bot, status, bytes, path FROM log_url_stats
+			WHERE job_id = ? AND path > ? ORDER BY path LIMIT ?`
+	}
+	var lastRowID int64
+	lastPath := ""
+	rows := make([]logs.URLStat, 0, batch)
+	for {
+		rows = rows[:0]
+		resultFn := func(stmt *sqlite.Stmt) error {
+			u := logs.URLStat{
+				Path:      stmt.ColumnText(0),
+				Hits:      stmt.ColumnInt64(1),
+				BotHits:   stmt.ColumnInt64(2),
+				HumanHits: stmt.ColumnInt64(3),
+				Status:    int(stmt.ColumnInt64(5)),
+				Bytes:     stmt.ColumnInt64(6),
+			}
+			if stmt.ColumnType(4) != sqlite.TypeNull {
+				u.TopBot = stmt.ColumnText(4)
+			}
+			if perJob {
+				lastRowID = stmt.ColumnInt64(7)
+			} else {
+				lastPath = u.Path
+			}
+			rows = append(rows, u)
+			return nil
+		}
+		args := []interface{}{lastRowID, batch}
+		if !perJob {
+			args = []interface{}{jobID, lastPath, batch}
+		}
+		s.urlMu.Lock()
+		err := sqlitex.Execute(s.urlConn, query, &sqlitex.ExecOptions{Args: args, ResultFunc: resultFn})
+		s.urlMu.Unlock()
+		if err != nil {
+			return err
+		}
+		for i := range rows {
+			if err := fn(rows[i]); err != nil {
+				return err
+			}
+		}
+		if len(rows) < batch {
+			return nil
+		}
+	}
 }
 
 // ── Merged-page cache (one table per log×crawl pair) ────────────────────────

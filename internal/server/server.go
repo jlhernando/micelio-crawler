@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -34,12 +35,40 @@ const UpdaterRepo = "jlhernando/micelio-crawler"
 const wsReadTimeout = 5 * time.Minute
 const wsPingInterval = 2 * time.Minute
 
+// Connection bounds. A client that sends headers, a body or reads the
+// response slower than these limits loses its connection, so idle or
+// slow sockets cannot pile up before (or after) authentication.
+const (
+	httpReadHeaderTimeout = 10 * time.Second
+	httpIdleTimeout       = 2 * time.Minute
+	httpMaxHeaderBytes    = 64 << 10
+	writeChunk            = 256 << 10
+
+	wsReadLimit        = 4 << 10 // the dashboard never sends messages
+	wsWriteTimeout     = 10 * time.Second
+	wsHandshakeTimeout = 10 * time.Second
+	maxWSClients       = 64
+)
+
+// Progress timeouts (vars: tests shorten them).
+var (
+	// bodyIdleTimeout is the longest pause allowed between two chunks
+	// of a request body. It is a progress timeout, so multi-GB log
+	// uploads keep working as long as bytes keep arriving.
+	bodyIdleTimeout = 2 * time.Minute
+	// writeIdleTimeout is the longest a client may take to accept one
+	// writeChunk of the response. Long exports and slow handlers are
+	// fine: the clock only runs while a write is waiting on the client.
+	writeIdleTimeout = 2 * time.Minute
+)
+
 // upgrader builds the WebSocket upgrader. withGuard already refused
 // foreign origins; this keeps the WebSocket safe if it is ever mounted
 // without it.
 func (s *Server) upgrader() *websocket.Upgrader {
 	allowed := s.allowedHosts
 	return &websocket.Upgrader{
+		HandshakeTimeout: wsHandshakeTimeout,
 		CheckOrigin: func(r *http.Request) bool {
 			origin := r.Header.Get("Origin")
 			return origin == "" || originAllowed(r, origin, allowed)
@@ -60,6 +89,9 @@ type Server struct {
 	manager *CrawlManager
 	clients map[*wsClient]struct{}
 	mu      sync.RWMutex
+	// wsSlots counts open (or opening) WebSocket connections, capped
+	// at maxWSClients.
+	wsSlots atomic.Int32
 
 	allowedHosts []string // normalized --allowed-host names
 }
@@ -171,10 +203,7 @@ func StartUIServerWithOptions(opts ServerOptions, dashboardFS fs.FS) error {
 
 	setSelfURL(host, port, authToken) // the PDF report screenshots the Universe here
 
-	httpServer := &http.Server{
-		Addr:    net.JoinHostPort(host, strconv.Itoa(port)),
-		Handler: srv.buildHandler(opts, dashboardFS),
-	}
+	httpServer := newHTTPServer(net.JoinHostPort(host, strconv.Itoa(port)), srv.buildHandler(opts, dashboardFS))
 
 	// Graceful shutdown via context
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -261,14 +290,102 @@ func (s *Server) buildHandler(opts ServerOptions, dashboardFS fs.FS) http.Handle
 	// never holds it) and it would break reverse proxies.
 	h = withGuard(IsLoopbackHost(opts.Host) && authToken == "", authToken, s.allowedHosts, h)
 	h = withAuthLimit(authToken, newAuthLimiter(), h) // throttles wrong tokens before any other check
-	return s.withHeaders(h)
+	return withConnDeadlines(s.withHeaders(h))
 }
 
+// newHTTPServer sets the connection limits. ReadTimeout and WriteTimeout
+// stay zero on purpose: whole-request clocks would cut log uploads,
+// exports and the WebSocket. withConnDeadlines bounds the body and the
+// response by progress instead.
+func newHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		IdleTimeout:       httpIdleTimeout,
+		MaxHeaderBytes:    httpMaxHeaderBytes,
+	}
+}
+
+// withConnDeadlines gives every request (except the WebSocket, which
+// manages its own deadlines) a progress-based body read deadline and a
+// per-chunk write deadline.
+func withConnDeadlines(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ws" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		rc := http.NewResponseController(w)
+		if r.Body != nil && r.Body != http.NoBody {
+			_ = rc.SetReadDeadline(time.Now().Add(bodyIdleTimeout))
+			r.Body = &deadlineBody{ReadCloser: r.Body, rc: rc}
+		}
+		next.ServeHTTP(&deadlineWriter{ResponseWriter: w, rc: rc}, r)
+	})
+}
+
+// deadlineBody pushes the read deadline forward after every chunk and
+// clears it at the end of the body: net/http's background read would
+// otherwise hit the old deadline and cancel the request context of a
+// long-running handler.
+type deadlineBody struct {
+	io.ReadCloser
+	rc *http.ResponseController
+}
+
+func (b *deadlineBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil {
+		_ = b.rc.SetReadDeadline(time.Time{})
+	} else {
+		_ = b.rc.SetReadDeadline(time.Now().Add(bodyIdleTimeout))
+	}
+	return n, err
+}
+
+// deadlineWriter sets a fresh write deadline before each chunk, so a
+// client that stops reading frees the handler within writeIdleTimeout.
+type deadlineWriter struct {
+	http.ResponseWriter
+	rc *http.ResponseController
+}
+
+func (w *deadlineWriter) Write(p []byte) (int, error) {
+	total := 0
+	for len(p) > 0 {
+		n := min(len(p), writeChunk)
+		_ = w.rc.SetWriteDeadline(time.Now().Add(writeIdleTimeout))
+		m, err := w.ResponseWriter.Write(p[:n])
+		total += m
+		if err != nil {
+			return total, err
+		}
+		p = p[n:]
+	}
+	return total, nil
+}
+
+func (w *deadlineWriter) Flush() {
+	_ = w.rc.SetWriteDeadline(time.Now().Add(writeIdleTimeout))
+	_ = w.rc.Flush()
+}
+
+// Unwrap lets http.ResponseController reach the real connection.
+func (w *deadlineWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	if s.wsSlots.Add(1) > maxWSClients {
+		s.wsSlots.Add(-1)
+		http.Error(w, "too many WebSocket connections", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.wsSlots.Add(-1)
 	conn, err := s.upgrader().Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
+	conn.SetReadLimit(wsReadLimit)
 
 	client := &wsClient{conn: conn}
 
@@ -291,26 +408,45 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	// Ping ticker keeps idle connections alive and detects dead ones
-	pingTicker := time.NewTicker(wsPingInterval)
+	// Ping ticker keeps idle connections alive and detects dead ones.
+	// done ends the goroutine: Stop does not close the ticker channel.
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
+		pingTicker := time.NewTicker(wsPingInterval)
 		defer pingTicker.Stop()
-		for range pingTicker.C {
-			client.wmu.Lock()
-			err := conn.WriteMessage(websocket.PingMessage, nil)
-			client.wmu.Unlock()
-			if err != nil {
+		for {
+			select {
+			case <-done:
+				return
+			case <-pingTicker.C:
+			}
+			if client.write(websocket.PingMessage, nil) != nil {
 				return
 			}
 		}
 	}()
 
 	for {
-		if _, _, err := conn.ReadMessage(); err != nil {
+		// NextReader + discard: client frames are never buffered, and
+		// the read limit above closes the socket on oversized ones.
+		_, rd, err := conn.NextReader()
+		if err != nil {
+			break
+		}
+		if _, err := io.Copy(io.Discard, rd); err != nil {
 			break
 		}
 	}
-	pingTicker.Stop()
+}
+
+// write sends one message with a deadline, so one stalled browser cannot
+// block the broadcast to every other client.
+func (c *wsClient) write(kind int, data []byte) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+	return c.conn.WriteMessage(kind, data)
 }
 
 var clientSnapshotPool = sync.Pool{
@@ -331,10 +467,7 @@ func (s *Server) broadcast(data []byte) {
 
 	var failed []*wsClient
 	for _, client := range snapshot {
-		client.wmu.Lock()
-		err := client.conn.WriteMessage(websocket.TextMessage, data)
-		client.wmu.Unlock()
-		if err != nil {
+		if err := client.write(websocket.TextMessage, data); err != nil {
 			failed = append(failed, client)
 		}
 	}

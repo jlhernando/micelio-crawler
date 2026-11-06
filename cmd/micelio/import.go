@@ -138,9 +138,14 @@ func localImport(ctx context.Context, path string, linkIntelligence bool) error 
 	manager := server.NewCrawlManager(store)
 	defer manager.Close()
 
+	// Same size and page limits as a dashboard upload (MICELIO_MAX_IMPORT_*).
+	opts, err := server.LimitImport(path, server.ImportOptions{LinkIntelligence: linkIntelligence})
+	if err != nil {
+		return err
+	}
 	start := time.Now()
 	fmt.Fprintf(os.Stderr, "Importing %s...\n", filepath.Base(path))
-	job, err := manager.ImportCrawl(ctx, path, server.ImportOptions{LinkIntelligence: linkIntelligence})
+	job, err := manager.ImportCrawl(ctx, path, opts)
 	if err != nil {
 		return err
 	}

@@ -28,8 +28,17 @@ type webCheck struct {
 
 var webCache = struct {
 	sync.Mutex
-	m map[string]webCheck
-}{m: map[string]webCheck{}}
+	m        map[string]webCheck
+	inflight map[string]*webCall // one lookup per crawl at a time
+}{m: map[string]webCheck{}, inflight: map[string]*webCall{}}
+
+// webCall is a lookup in progress; concurrent exports of the same crawl
+// wait for it instead of spending API quota again.
+type webCall struct {
+	done chan struct{}
+	cwv  *types.CWVReport
+	cdn  *types.CDNReport
+}
 
 // fetchWebChecks is swapped in tests.
 var fetchWebChecks = func(ctx context.Context, client *http.Client, cruxKey, psiKey, seedURL string) (*types.CWVReport, *types.CDNReport) {
@@ -49,7 +58,27 @@ func webChecks(ctx context.Context, crawlID, seedURL string, store *UiStore, man
 		webCache.Unlock()
 		return c.cwv, c.cdn
 	}
+	if call, ok := webCache.inflight[crawlID]; ok {
+		webCache.Unlock()
+		select {
+		case <-call.done:
+			return call.cwv, call.cdn
+		case <-ctx.Done():
+			return nil, nil
+		}
+	}
+	call := &webCall{done: make(chan struct{})}
+	webCache.inflight[crawlID] = call
 	webCache.Unlock()
+	defer func() {
+		webCache.Lock()
+		delete(webCache.inflight, crawlID)
+		webCache.Unlock()
+		close(call.done)
+	}()
+	// The lookup is shared: one caller hanging up must not cut it short
+	// for the others waiting on it. The timeout below still bounds it.
+	ctx = context.WithoutCancel(ctx)
 
 	var cruxKey, psiKey string
 	if settings, err := store.GetSettings(); err == nil {
@@ -64,6 +93,7 @@ func webChecks(ctx context.Context, crawlID, seedURL string, store *UiStore, man
 	ctx, cancel := context.WithTimeout(ctx, 75*time.Second)
 	defer cancel()
 	cwv, cdn := fetchWebChecks(ctx, client, strings.TrimSpace(cruxKey), strings.TrimSpace(psiKey), seedURL)
+	call.cwv, call.cdn = cwv, cdn
 	if ctx.Err() != nil {
 		return cwv, cdn // cut short: do not keep a partial answer
 	}

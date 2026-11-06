@@ -51,6 +51,7 @@ type CrawlResults struct {
 	loadCancel      context.CancelFunc // cancels background page loading goroutine
 	mu              sync.RWMutex       // protects Pages during deferred analysis
 	views           pageViewCache      // /pages filter+sort results (pages_view.go)
+	wordBuckets     wordBucketCache    // legacy word-count histogram (wordcount.go)
 }
 
 // ActiveCrawl tracks a running crawl job.

@@ -1222,7 +1222,14 @@ Multiple files are merged into a single unified analysis.`,
 			fmt.Fprintf(os.Stderr, "  Human hits:    %s\n", formatCount(stats.HumanHits))
 			fmt.Fprintf(os.Stderr, "  Bot hits:      %s\n", formatCount(stats.TotalHits-stats.HumanHits))
 			fmt.Fprintf(os.Stderr, "  Total bytes:   %s\n", formatBytesHuman(stats.TotalBytes))
-			fmt.Fprintf(os.Stderr, "  Date range:    %s to %s\n", stats.DateRange[0][:10], stats.DateRange[1][:10])
+			if stats.ParseErrors > 0 {
+				fmt.Fprintf(os.Stderr, "  Parse errors:  %s lines did not match the format\n", formatCount(stats.ParseErrors))
+			}
+			if len(stats.DateRange[0]) >= 10 && len(stats.DateRange[1]) >= 10 {
+				fmt.Fprintf(os.Stderr, "  Date range:    %s to %s\n", stats.DateRange[0][:10], stats.DateRange[1][:10])
+			} else {
+				fmt.Fprintf(os.Stderr, "  Date range:    n/a (no dated log entries)\n")
+			}
 			fmt.Fprintf(os.Stderr, "  Unique bots:   %d\n", len(stats.BotHits))
 
 			// Top bots

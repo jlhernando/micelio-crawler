@@ -115,11 +115,8 @@ func (c *GscClient) FetchBatch(ctx context.Context, urls []string) (map[string]*
 	}
 
 	results := make(map[string]*types.GscData, len(urls))
-	// Build reverse map: normalized URL → original URL
-	normalizedToOriginal := make(map[string]string, len(urls))
-	for _, u := range urls {
-		normalizedToOriginal[normalizeGscURL(u)] = u
-	}
+	matcher := newGscMatcher(urls)
+	exactHit := make(map[string]bool) // a loose match never replaces an exact one
 
 	startDate := time.Now().AddDate(0, 0, -(c.days + 3)).Format("2006-01-02") // 3-day lag
 	endDate := time.Now().AddDate(0, 0, -3).Format("2006-01-02")
@@ -144,8 +141,8 @@ func (c *GscClient) FetchBatch(ctx context.Context, urls []string) (map[string]*
 		}
 
 		for _, row := range rows {
-			normalizedURL := normalizeGscURL(row.Key)
-			if originalURL, ok := normalizedToOriginal[normalizedURL]; ok {
+			if originalURL, exact, ok := matcher.match(row.Key); ok && (exact || !exactHit[originalURL]) {
+				exactHit[originalURL] = exactHit[originalURL] || exact
 				results[originalURL] = &types.GscData{
 					Impressions: int(row.Impressions),
 					Clicks:      int(row.Clicks),
@@ -173,10 +170,7 @@ func (c *GscClient) FetchAIOverviewData(ctx context.Context, urls []string) (map
 	}
 
 	results := make(map[string]*types.AIVisibilityData, len(urls))
-	normalizedToOriginal := make(map[string]string, len(urls))
-	for _, u := range urls {
-		normalizedToOriginal[normalizeGscURL(u)] = u
-	}
+	matcher := newGscMatcher(urls)
 
 	startDate := time.Now().AddDate(0, 0, -(c.days + 3)).Format("2006-01-02")
 	endDate := time.Now().AddDate(0, 0, -3).Format("2006-01-02")
@@ -221,8 +215,7 @@ func (c *GscClient) FetchAIOverviewData(ctx context.Context, urls []string) (map
 			pageURL := parts[0]
 			queryText := parts[1]
 
-			normalizedURL := normalizeGscURL(pageURL)
-			originalURL, ok := normalizedToOriginal[normalizedURL]
+			originalURL, _, ok := matcher.match(pageURL)
 			if !ok {
 				continue
 			}
@@ -383,6 +376,39 @@ func (c *GscClient) getToken(ctx context.Context) (string, error) {
 	c.cachedToken = tokenResp.AccessToken
 	c.tokenExpiry = time.Now().Add(time.Duration(tokenResp.ExpiresIn-60) * time.Second)
 	return c.cachedToken, nil
+}
+
+// gscMatcher maps GSC page URLs to crawled URLs: an exact match first, then
+// the loose normalizeGscURL key (case, trailing slash) only when one crawled
+// URL has that key. /Product and /product, or /page and /page/, crawled
+// both, each keep their own GSC row instead of overwriting each other.
+type gscMatcher struct {
+	exact map[string]bool
+	loose map[string]string // "" when several crawled URLs share the key
+}
+
+func newGscMatcher(urls []string) gscMatcher {
+	m := gscMatcher{exact: make(map[string]bool, len(urls)), loose: make(map[string]string, len(urls))}
+	for _, u := range urls {
+		m.exact[u] = true
+		k := normalizeGscURL(u)
+		if prev, dup := m.loose[k]; dup && prev != u {
+			m.loose[k] = ""
+		} else {
+			m.loose[k] = u
+		}
+	}
+	return m
+}
+
+// match returns the crawled URL for a GSC page URL and whether it matched
+// exactly.
+func (m gscMatcher) match(gscURL string) (string, bool, bool) {
+	if m.exact[gscURL] {
+		return gscURL, true, true
+	}
+	u := m.loose[normalizeGscURL(gscURL)]
+	return u, false, u != ""
 }
 
 func normalizeGscURL(rawURL string) string {

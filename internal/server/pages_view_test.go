@@ -28,6 +28,28 @@ func viewTestPages(n int) []*types.PageData {
 	return pages
 }
 
+// sort=bodySize reaches its comparator, and int sorts survive extreme values
+// (subtraction overflowed).
+func TestPageSortBodySizeAndExtremeInts(t *testing.T) {
+	pq := pageQueryFromValues(url.Values{"sort": {"bodySize"}, "order": {"desc"}})
+	if pq.sortField != "bodySize" {
+		t.Fatalf("sort=bodySize dropped: %q", pq.sortField)
+	}
+	pages := []*types.PageData{
+		{URL: "a", BodySize: 10, StatusCode: -1 << 62, Depth: 1},
+		{URL: "b", BodySize: 30, StatusCode: 1 << 62, Depth: 0},
+		{URL: "c", BodySize: 20, StatusCode: 0, Depth: 2},
+	}
+	idx := pageIndices(pages, pq)
+	if pages[idx[0]].URL != "b" || pages[idx[1]].URL != "c" || pages[idx[2]].URL != "a" {
+		t.Fatalf("bodySize desc order = %v", idx)
+	}
+	idx = pageIndices(pages, pageQueryFromValues(url.Values{"sort": {"statusCode"}}))
+	if pages[idx[0]].URL != "a" || pages[idx[1]].URL != "c" || pages[idx[2]].URL != "b" {
+		t.Fatalf("statusCode asc order with extreme values = %v", idx)
+	}
+}
+
 func TestPageViewMatchesSortedFilter(t *testing.T) {
 	pages := viewTestPages(500)
 	r := &CrawlResults{Pages: pages, PagesReady: true}

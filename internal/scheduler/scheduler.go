@@ -137,6 +137,9 @@ type Scheduler struct {
 	config   Config
 	mu       sync.Mutex
 	crawling bool
+	// saveMu serialises saveState (snapshot, write, rename): saves share
+	// one temp file and a later save must not be overtaken by an older one.
+	saveMu sync.Mutex
 }
 
 // New creates a new scheduler. Returns error if the cron expression is invalid.
@@ -171,7 +174,7 @@ func New(cfg Config) (*Scheduler, error) {
 	if err := cfg.Precheck.Validate(); err != nil {
 		return nil, err
 	}
-	id := scheduleID(cfg.URL, cfg.CronExpr+cfg.Name)
+	id := ID(cfg)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &Scheduler{
@@ -514,6 +517,8 @@ func (directRunner) Run(ctx context.Context, sc Config, ctl *RunControl) RunResu
 // ── State persistence ──
 
 func (s *Scheduler) saveState() {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
 	s.mu.Lock()
 	stateCopy := s.state
 	s.mu.Unlock()
@@ -599,6 +604,9 @@ func DeleteSchedule(id string) error {
 }
 
 // ── Helpers ──
+
+// ID is the schedule ID New gives cfg (same URL, cron and name: same ID).
+func ID(cfg Config) string { return scheduleID(cfg.URL, cfg.CronExpr+cfg.Name) }
 
 func scheduleID(siteURL, cronExpr string) string {
 	hostname := "unknown"

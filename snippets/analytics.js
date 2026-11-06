@@ -4,7 +4,8 @@
  * Detects Google Analytics (UA + GA4), GTM, Meta Pixel, LinkedIn Insight,
  * Microsoft Clarity, Hotjar, and other common analytics/tracking tools.
  *
- * Usage: micelio spider https://example.com --snippet snippets/analytics.js
+ * Usage: micelio crawl https://example.com --js --snippet snippets/analytics.js
+ *        (TypeScript crawler: npx tsx src/cli.ts spider https://example.com --snippet snippets/analytics.js)
  */
 export default async (page) => {
   return await page.evaluate(() => {

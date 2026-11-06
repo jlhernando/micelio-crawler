@@ -163,11 +163,14 @@ failures.
 ### Custom snippets
 
 `--snippet` runs your own JavaScript on each page in headless Chrome. It needs
-`--js`. Snippet files hold **raw JavaScript expressions**, not ES modules. The
-return value is stored in the crawl results under `snippetResults`, keyed by
-filename. The `snippets/` folder of the repository has ready-made examples
-(accessibility, analytics, console errors, cookie consent, performance, tech
-stack).
+`--js`. Snippet files hold **raw JavaScript expressions** (a Promise they
+return is awaited). The return value is stored in the crawl results under
+`snippetResults`, keyed by filename. The `snippets/` folder of the repository
+has ready-made examples (accessibility, analytics, cookie consent,
+performance, tech stack). They are written for the TypeScript crawler as
+`export default async (page) => ...`; the Go crawler runs that form too, with
+`page.evaluate`, `page.waitForTimeout` and `page.url` only, so
+`console-errors.js` (page events) works in the TypeScript crawler only.
 
 ```bash
 micelio crawl https://example.com --js \

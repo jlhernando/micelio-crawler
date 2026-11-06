@@ -76,6 +76,7 @@ type ActiveCrawl struct {
 	RecentErrors []CrawlError
 	Paused       bool
 	Stopping     bool          // true = stop crawling but still run analysis
+	finished     bool          // crawl loop returned: no more pauses (under CrawlManager.mu)
 	pauseCh      chan struct{} // closed when unpaused; recreated on each pause
 	pauseMu      sync.Mutex
 }
@@ -104,8 +105,11 @@ const maxCachedResults = 5
 
 // CrawlManager manages the crawl lifecycle (single active crawl model).
 type CrawlManager struct {
-	store       *UiStore
-	active      *ActiveCrawl
+	store  *UiStore
+	active *ActiveCrawl
+	// tuneMu serialises TuneCrawl (apply, config copy, save), so two tunes
+	// cannot save their configs in the opposite order of their changes.
+	tuneMu      sync.Mutex
 	results     map[string]*CrawlResults
 	schedulers  map[string]*scheduler.Scheduler
 	onProgress  ProgressCallback
@@ -285,27 +289,31 @@ func (m *CrawlManager) StartCrawl(crawlID string, config map[string]interface{})
 // PauseCrawl pauses the active crawl.
 func (m *CrawlManager) PauseCrawl(crawlID string) error {
 	m.mu.Lock()
-	if m.active == nil || m.active.ID != crawlID {
+	if m.active == nil || m.active.ID != crawlID || m.active.finished {
 		m.mu.Unlock()
 		return fmt.Errorf("no active crawl with id %s", crawlID)
 	}
-	m.active.pauseMu.Lock()
-	if m.active.pauseCh != nil {
+	active := m.active
+	active.pauseMu.Lock()
+	if active.pauseCh != nil {
 		// Already paused. A new channel would strand the workers waiting
 		// on the old one: ResumeCrawl only closes the current channel.
-		m.active.pauseMu.Unlock()
+		active.pauseMu.Unlock()
 		m.mu.Unlock()
 		return nil
 	}
-	m.active.Paused = true
-	m.active.pauseCh = make(chan struct{})
-	m.active.pauseMu.Unlock()
-	m.mu.Unlock()
-
+	active.Paused = true
+	active.pauseCh = make(chan struct{})
+	active.pauseMu.Unlock()
+	pages := active.PageCount
+	// Saved under m.mu: cancel clears m.active and completion sets finished
+	// under it first, so "paused" never lands after "cancelled"/"completed".
 	if err := m.store.UpdateCrawlJob(crawlID, map[string]interface{}{"status": "paused"}); err != nil {
 		log.Printf("store: update crawl %s status: %v", crawlID, err)
 	}
-	m.store.AddCrawlEvent(crawlID, "paused", fmt.Sprintf("%d pages", m.active.PageCount))
+	m.mu.Unlock()
+
+	m.store.AddCrawlEvent(crawlID, "paused", fmt.Sprintf("%d pages", pages))
 	m.emit(ProgressEvent{CrawlID: crawlID, Type: "paused", Data: map[string]interface{}{"crawlId": crawlID}})
 	return nil
 }
@@ -806,13 +814,16 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 	// Check if the crawl was stopped (graceful) or cancelled (hard).
 	// StopCrawl sets Stopping=true — we still run analysis on partial results.
 	// CancelCrawl clears m.active — bail out entirely.
-	m.mu.RLock()
+	m.mu.Lock()
 	stopping := m.active != nil && m.active.Stopping
 	if stopping {
 		// Time for in-flight requests to finish and pages to load back.
 		timer.parts = append(timer.parts, fmt.Sprintf("stop→crawl end %s", time.Since(m.active.stopAt).Round(time.Millisecond)))
 	}
-	m.mu.RUnlock()
+	if m.active != nil && m.active.ID == crawlID {
+		m.active.finished = true // a later pause must not mark it "paused"
+	}
+	m.mu.Unlock()
 
 	if ctx.Err() == context.Canceled && !stopping {
 		log.Printf("crawl %s cancelled by user", crawlID)

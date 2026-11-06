@@ -5,7 +5,8 @@
  * missing ARIA labels, form labels, color contrast hints,
  * keyboard navigation, and skip-to-content links.
  *
- * Usage: micelio spider https://example.com --snippet snippets/accessibility.js
+ * Usage: micelio crawl https://example.com --js --snippet snippets/accessibility.js
+ *        (TypeScript crawler: npx tsx src/cli.ts spider https://example.com --snippet snippets/accessibility.js)
  */
 export default async (page) => {
   return await page.evaluate(() => {

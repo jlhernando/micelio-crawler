@@ -401,7 +401,8 @@ func TestLogMergeEndpointStreams(t *testing.T) {
 	}
 	m.mu.Lock()
 	m.cacheResultLocked(job.ID, &CrawlResults{Stats: map[string]interface{}{}, PagesReady: true, Pages: []*types.PageData{
-		{URL: "https://ex.com/a", StatusCode: 200}, {URL: "https://ex.com/b", StatusCode: 200}, {URL: "https://ex.com/c", StatusCode: 200},
+		{URL: "https://ex.com/a", StatusCode: 200}, {URL: "https://ex.com/b", StatusCode: 200},
+		{URL: "https://ex.com/c", StatusCode: 200, Indexability: types.IndexabilityData{Indexable: true}}, // ghost: indexable, no traffic
 	}}, 3)
 	m.mu.Unlock()
 	rec := httptest.NewRecorder()

@@ -195,41 +195,44 @@ func (v *BotVerifier) verifyIP(ctx context.Context, ip, claimedBot string) *Veri
 		return result
 	}
 
-	hostname := strings.TrimSuffix(names[0], ".")
-	result.Hostname = hostname
-
-	// Step 2: Check hostname matches verification domains
-	matched := false
-	lower := strings.ToLower(hostname)
-	for _, domain := range domains {
-		if strings.HasSuffix(lower, domain) {
-			matched = true
-			break
+	// Step 2: keep the PTR names inside the bot's domains. An address may
+	// have several PTR records and the crawler's name need not be the first.
+	result.Hostname = strings.TrimSuffix(names[0], ".")
+	var candidates []string
+	for _, n := range names {
+		h := strings.TrimSuffix(n, ".")
+		lower := strings.ToLower(h)
+		for _, domain := range domains {
+			if strings.HasSuffix(lower, domain) {
+				candidates = append(candidates, h)
+				break
+			}
 		}
 	}
-	if !matched {
+	if len(candidates) == 0 {
 		result.SpoofDetected = true
 		v.cache.set(key, result, v.cacheTTL)
 		return result
 	}
+	result.Hostname = candidates[0]
 
-	// Step 3: Forward DNS confirmation
-	addrs, err := v.resolver.LookupHost(lctx, hostname)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil
+	// Step 3: Forward DNS confirmation of each candidate name
+	for _, hostname := range candidates {
+		addrs, err := v.resolver.LookupHost(lctx, hostname)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			continue
 		}
-		result.SpoofDetected = true
-		v.cache.set(key, result, v.cacheTTL)
-		return result
-	}
-
-	for _, a := range addrs {
-		if fa := net.ParseIP(a); fa != nil && fa.Equal(addr) {
-			result.Verified = true
-			result.SpoofDetected = false
-			v.cache.set(key, result, v.cacheTTL)
-			return result
+		for _, a := range addrs {
+			if fa := net.ParseIP(a); fa != nil && fa.Equal(addr) {
+				result.Hostname = hostname
+				result.Verified = true
+				result.SpoofDetected = false
+				v.cache.set(key, result, v.cacheTTL)
+				return result
+			}
 		}
 	}
 

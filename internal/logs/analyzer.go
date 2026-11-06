@@ -37,7 +37,8 @@ func AnalyzeFull(path string, formatHint Format, onProgress ProgressFunc, flushe
 	defer suppressGC()()
 	a := newAggregator()
 	a.urlFlusher = flusher
-	format, totalLines, err := ParseFileWithFormat(path, formatHint, a.add, onProgress)
+	state := &ParseState{}
+	format, totalLines, err := ParseFileWithState(path, formatHint, state, a.add, onProgress)
 	if err != nil {
 		return &AnalysisResult{Format: format}, err
 	}
@@ -47,6 +48,7 @@ func AnalyzeFull(path string, formatHint Format, onProgress ProgressFunc, flushe
 	}
 	stats := a.finalize()
 	stats.TotalLines = totalLines
+	stats.ParseErrors = state.ParseErrors
 	res := &AnalysisResult{Stats: stats, Format: format, BotIPs: a.botIPs}
 	if flusher == nil {
 		urlHits := a.urlHits // capture for closure
@@ -572,6 +574,8 @@ type FileResult struct {
 	Lines    int64
 	Format   Format
 	Error    string
+	// ParseErrors counts data lines that did not match the format.
+	ParseErrors int64
 }
 
 // MultiAnalysisResult is the combined output of AnalyzeMulti.
@@ -622,6 +626,7 @@ func AnalyzeMulti(paths []string, formatHint Format, workers int, onProgress Mul
 
 	// Per-file progress trackers (reported cumulatively across files).
 	progressMu := sync.Mutex{}
+	var callbackMu sync.Mutex
 	bytesPerFile := make([]int64, len(paths))
 	linesPerFile := make([]int64, len(paths))
 	var filesDone int
@@ -642,7 +647,11 @@ func AnalyzeMulti(paths []string, formatHint Format, workers int, onProgress Mul
 		mp.TotalLines = totalLines
 		progressMu.Unlock()
 		if onProgress != nil {
+			// One callback at a time: callers keep throttle state and
+			// per-file slices without their own locking.
+			callbackMu.Lock()
 			onProgress(mp)
+			callbackMu.Unlock()
 		}
 	}
 
@@ -683,6 +692,7 @@ func AnalyzeMulti(paths []string, formatHint Format, workers int, onProgress Mul
 			filesDone++
 			fileResults[idx].Format = format
 			fileResults[idx].Lines = lines
+			fileResults[idx].ParseErrors = state.ParseErrors
 			if err != nil {
 				fileResults[idx].Error = err.Error()
 			}
@@ -729,6 +739,7 @@ func AnalyzeMulti(paths []string, formatHint Format, workers int, onProgress Mul
 	successCount := 0
 	for _, fr := range fileResults {
 		totalLines += fr.Lines
+		stats.ParseErrors += fr.ParseErrors
 		if fr.Format != "" && fr.Format != FormatUnknown && firstFormat == FormatUnknown {
 			firstFormat = fr.Format
 		}

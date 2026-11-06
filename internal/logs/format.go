@@ -569,6 +569,9 @@ type ParseState struct {
 	// fieldIdx maps lowercase field names to their column index.
 	// Built once during header setup to avoid per-line map allocations.
 	fieldIdx map[string]int
+	// ParseErrors counts data lines the last ParseFileWithState call could
+	// not parse (set when it returns).
+	ParseErrors int64
 }
 
 // defaultParseState is the package-level fallback used by the single-file
@@ -751,11 +754,15 @@ func parseW3C(line string, s *ParseState) (*LogEntry, error) {
 	if referer == "-" {
 		referer = ""
 	}
+	path := coalesce(fields["cs-uri-stem"], fields["uri-stem"], fields["path"])
+	if q := coalesce(fields["cs-uri-query"], fields["query_string"], fields["query"]); q != "" {
+		path += "?" + q
+	}
 	return &LogEntry{
 		IP:        coalesce(fields["c-ip"], fields["client-ip"], fields["s-ip"]),
 		Timestamp: t,
 		Method:    coalesce(fields["cs-method"], fields["method"]),
-		Path:      coalesce(fields["cs-uri-stem"], fields["uri-stem"], fields["path"]),
+		Path:      path,
 		Status:    status,
 		Bytes:     bytes,
 		Referer:   referer,

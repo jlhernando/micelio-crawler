@@ -4,7 +4,9 @@
  * Captures JavaScript console errors and warnings that occur during page load.
  * Useful for finding broken scripts, missing resources, and JS errors.
  *
- * Usage: micelio spider https://example.com --snippet snippets/console-errors.js
+ * TypeScript crawler only (it listens to page events and reloads the page):
+ * Usage: npx tsx src/cli.ts spider https://example.com --snippet snippets/console-errors.js
+ * The Go crawler records JavaScript errors itself with --js (jsErrors).
  */
 export default async (page) => {
   const errors = [];

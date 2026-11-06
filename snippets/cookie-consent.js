@@ -4,7 +4,8 @@
  * Detects common cookie consent management platforms (CMPs):
  * OneTrust, Cookiebot, CookieYes, Osano, TrustArc, Quantcast, etc.
  *
- * Usage: micelio spider https://example.com --snippet snippets/cookie-consent.js
+ * Usage: micelio crawl https://example.com --js --snippet snippets/cookie-consent.js
+ *        (TypeScript crawler: npx tsx src/cli.ts spider https://example.com --snippet snippets/cookie-consent.js)
  */
 export default async (page) => {
   return await page.evaluate(() => {

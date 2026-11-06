@@ -17,6 +17,8 @@ func (m *CrawlManager) TuneCrawl(crawlID string, n crawler.Tuning) (crawler.Tuni
 	if n.MaxPages > limits().MaxCrawlPages {
 		return crawler.Tuning{}, fmt.Errorf("page limit must be at most %d", limits().MaxCrawlPages)
 	}
+	m.tuneMu.Lock()
+	defer m.tuneMu.Unlock()
 	m.mu.RLock()
 	active := m.active
 	m.mu.RUnlock()
@@ -51,6 +53,12 @@ func (m *CrawlManager) TuneCrawl(crawlID string, n crawler.Tuning) (crawler.Tuni
 
 	// Copy the config: other goroutines may be reading the old map.
 	m.mu.Lock()
+	if m.active != active {
+		// The crawl ended (or a resume reused its ID) meanwhile: the live
+		// change went to a finished crawl, do not overwrite the job config.
+		m.mu.Unlock()
+		return after, fmt.Errorf("crawl %s is no longer running", crawlID)
+	}
 	cfg := make(map[string]interface{}, len(active.Config)+4)
 	for k, v := range active.Config {
 		cfg[k] = v

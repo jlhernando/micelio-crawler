@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/micelio/micelio/internal/server"
 )
@@ -39,7 +40,7 @@ func TestUploadImportTokenTransport(t *testing.T) {
 
 	// Plain http to another computer: refused before any request.
 	for _, base := range []string{"http://192.0.2.10:3100", "http://dashboard.example:3100"} {
-		err := uploadImport(base, "TOKEN", file, false)
+		err := uploadImport(context.Background(), base, "TOKEN", file, false)
 		if err == nil || !strings.Contains(err.Error(), "refusing to send the dashboard token") {
 			t.Errorf("%s: err = %v, want refusal", base, err)
 		}
@@ -55,11 +56,39 @@ func TestUploadImportTokenTransport(t *testing.T) {
 		gotAuth = r.Header.Get("Authorization")
 		http.Redirect(w, r, elsewhere.URL+"/api/crawls/import", http.StatusTemporaryRedirect)
 	})
-	if err := uploadImport(srv.URL, "TOKEN", file, false); err == nil {
+	if err := uploadImport(context.Background(), srv.URL, "TOKEN", file, false); err == nil {
 		t.Error("a redirect answer should fail the import")
 	}
 	if gotAuth != "Bearer TOKEN" {
 		t.Errorf("loopback dashboard got Authorization %q", gotAuth)
+	}
+}
+
+// A dashboard that takes the file but never answers does not hang the
+// import, and the command's context cancels the upload.
+func TestUploadImportDoesNotHang(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "site.db")
+	os.WriteFile(file, []byte("x"), 0o600)
+	release := make(chan struct{})
+	srv := fakeDashboard(t, func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	})
+	defer close(release)
+	old := importAnswerTimeout
+	importAnswerTimeout = 200 * time.Millisecond
+	defer func() { importAnswerTimeout = old }()
+	start := time.Now()
+	if err := uploadImport(context.Background(), srv.URL, "", file, false); err == nil {
+		t.Fatal("silent dashboard: no error")
+	}
+	importAnswerTimeout = time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := uploadImport(ctx, srv.URL, "", file, false); err == nil {
+		t.Fatal("cancelled context: no error")
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("took %s", d)
 	}
 }
 
@@ -81,7 +110,7 @@ func TestImportRefusesUnverifiedDashboard(t *testing.T) {
 	if state, err := probeDashboard(impostor.URL); state != dashUnverified || !errors.Is(err, server.ErrNotDashboard) {
 		t.Fatalf("probe = %v, %v; want unverified", state, err)
 	}
-	if err := uploadImport(impostor.URL, "TOKEN", file, false); !errors.Is(err, server.ErrNotDashboard) {
+	if err := uploadImport(context.Background(), impostor.URL, "TOKEN", file, false); !errors.Is(err, server.ErrNotDashboard) {
 		t.Fatalf("upload err = %v, want ErrNotDashboard", err)
 	}
 	cmd := importCmd()

@@ -394,4 +394,25 @@ func fitSummary(out *crawlSummaryOut) {
 	if size() > maxSummaryBytes {
 		out.Hreflang = nil
 	}
+	// Still too big: a very long seed URL, or bulky fields from an imported
+	// crawl. Cut them in turn so the limit always holds.
+	if size() > maxSummaryBytes {
+		out.SeedURL = truncate(out.SeedURL, 500)
+	}
+	if size() > maxSummaryBytes {
+		out.Devices = nil
+	}
+	if size() > maxSummaryBytes {
+		out.AgentReadiness = nil
+	}
+	for size() > maxSummaryBytes && len(out.Issues) > 0 {
+		out.Issues = out.Issues[:len(out.Issues)-1]
+	}
+	if size() > maxSummaryBytes {
+		out.Indexability.Reasons = nil
+		out.StatusCodes = map[string]int{}
+	}
+	if size() > maxSummaryBytes {
+		out.SeedURL = truncate(out.SeedURL, 80)
+	}
 }

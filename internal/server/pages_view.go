@@ -114,6 +114,18 @@ func pageIndices(pages []*types.PageData, pq pageQuery) []int32 {
 	return idx
 }
 
+// intCmp compares without subtraction, which overflows on extreme values
+// (imported crawls can hold any int).
+func intCmp(x, y int) int {
+	switch {
+	case x < y:
+		return -1
+	case x > y:
+		return 1
+	}
+	return 0
+}
+
 // sortPageIndices sorts idx (indices into pages) by field. Text keys are
 // lower-cased once up front, not on every comparison.
 func sortPageIndices(pages []*types.PageData, idx []int32, field, order string) {
@@ -134,7 +146,7 @@ func sortPageIndices(pages []*types.PageData, idx []int32, field, order string) 
 	case "url":
 		cmp = func(a, b *types.PageData) int { return strings.Compare(a.URL, b.URL) }
 	case "statusCode":
-		cmp = func(a, b *types.PageData) int { return a.StatusCode - b.StatusCode }
+		cmp = func(a, b *types.PageData) int { return intCmp(a.StatusCode, b.StatusCode) }
 	case "responseTimeMs":
 		cmp = func(a, b *types.PageData) int { return num(float64(a.ResponseTimeMs), float64(b.ResponseTimeMs)) }
 	case "title":
@@ -155,11 +167,11 @@ func sortPageIndices(pages []*types.PageData, idx []int32, field, order string) 
 		})
 		return
 	case "wordCount":
-		cmp = func(a, b *types.PageData) int { return a.WordCount - b.WordCount }
+		cmp = func(a, b *types.PageData) int { return intCmp(a.WordCount, b.WordCount) }
 	case "depth":
-		cmp = func(a, b *types.PageData) int { return a.Depth - b.Depth }
+		cmp = func(a, b *types.PageData) int { return intCmp(a.Depth, b.Depth) }
 	case "inlinks":
-		cmp = func(a, b *types.PageData) int { return a.Inlinks - b.Inlinks }
+		cmp = func(a, b *types.PageData) int { return intCmp(a.Inlinks, b.Inlinks) }
 	case "pageRank":
 		cmp = func(a, b *types.PageData) int { return num(a.PageRank, b.PageRank) }
 	case "htmlBytes", "totalBytes":

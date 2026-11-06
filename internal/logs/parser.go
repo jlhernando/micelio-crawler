@@ -196,17 +196,26 @@ func ParseFileWithState(path string, formatHint Format, state *ParseState, onEnt
 		}
 	}
 
-	// Parse the sample lines we already read.
+	// Rows that do not parse are counted, not silently lost: the count
+	// reaches LogStats.ParseErrors, and a file where no row parses fails.
+	var parsed, parseErrors int64
+	state.ParseErrors = 0
+	defer func() { state.ParseErrors = parseErrors }()
+
+	// Parse the sample lines we already read. The BOM goes here too: the
+	// first record of a BOM-prefixed file is data, not only a header.
 	for _, line := range firstLines {
 		processed++
-		trimmed := strings.TrimSpace(line)
+		trimmed := stripBOM(strings.TrimSpace(line))
 		if trimmed == "" || trimmed[0] == '#' {
 			continue
 		}
 		entry, err := ParseLineWithState(trimmed, format, state)
 		if err != nil {
+			parseErrors++
 			continue
 		}
+		parsed++
 		entry.Bot = IdentifyBot(entry.UserAgent)
 		onEntry(entry)
 	}
@@ -226,8 +235,10 @@ func ParseFileWithState(path string, formatHint Format, state *ParseState, onEnt
 		}
 		entry, err := ParseLineWithState(trimmed, format, state)
 		if err != nil {
+			parseErrors++
 			continue
 		}
+		parsed++
 		entry.Bot = IdentifyBot(entry.UserAgent)
 		onEntry(entry)
 
@@ -242,6 +253,9 @@ func ParseFileWithState(path string, formatHint Format, state *ParseState, onEnt
 		return format, processed, err
 	}
 	emit()
+	if parsed == 0 && parseErrors > 0 {
+		return format, processed, parseError(fmt.Sprintf("none of the %d log lines matched the %s format — try selecting another format", parseErrors, format))
+	}
 	return format, processed, nil
 }
 

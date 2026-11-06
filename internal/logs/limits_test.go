@@ -179,6 +179,7 @@ func TestConcurrentAnalysesRestoreGC(t *testing.T) {
 
 type fakeResolver struct {
 	ptr      map[string]string   // ip -> hostname
+	ptrs     map[string][]string // ip -> several PTR names (wins over ptr)
 	fwd      map[string][]string // hostname -> ips
 	delay    time.Duration
 	block    bool // wait for ctx
@@ -214,6 +215,9 @@ func (f *fakeResolver) enter(ctx context.Context) error {
 func (f *fakeResolver) LookupAddr(ctx context.Context, ip string) ([]string, error) {
 	if err := f.enter(ctx); err != nil {
 		return nil, err
+	}
+	if hs, ok := f.ptrs[ip]; ok {
+		return hs, nil
 	}
 	if h, ok := f.ptr[ip]; ok {
 		return []string{h + "."}, nil
@@ -261,6 +265,28 @@ func TestVerifyRejectsGoogleusercontent(t *testing.T) {
 	// The cache is per bot: a real Googlebot IP is not a real Bingbot.
 	if res := v.VerifyBotIP("66.249.66.1", "Bingbot"); res.Verified {
 		t.Fatalf("Googlebot IP verified as Bingbot from cache: %+v", res)
+	}
+}
+
+// An address with several PTR records is verified when any in-domain name
+// forward-confirms, not only the first; IPv6 spellings compare by value.
+func TestVerifyMultiplePTRAndIPv6(t *testing.T) {
+	r := &fakeResolver{
+		ptrs: map[string][]string{
+			"66.249.66.9":           {"proxy.example.net.", "crawl-66-249-66-9.googlebot.com."},
+			"2001:4860:4801:10::2a": {"crawl-v6.googlebot.com."},
+		},
+		fwd: map[string][]string{
+			"crawl-66-249-66-9.googlebot.com": {"66.249.66.9"},
+			"crawl-v6.googlebot.com":          {"2001:4860:4801:0010:0000:0000:0000:002A"},
+		},
+	}
+	v := testVerifier(r, 4, 100)
+	if res := v.VerifyBotIP("66.249.66.9", "Googlebot"); !res.Verified || res.Hostname != "crawl-66-249-66-9.googlebot.com" {
+		t.Fatalf("second PTR name not checked: %+v", res)
+	}
+	if res := v.VerifyBotIP("2001:4860:4801:10::2a", "Googlebot"); !res.Verified {
+		t.Fatalf("expanded IPv6 forward record not matched: %+v", res)
 	}
 }
 

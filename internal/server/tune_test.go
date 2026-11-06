@@ -100,6 +100,23 @@ func TestExternalCheckRunsAfterResults(t *testing.T) {
 	}
 }
 
+// A crawl whose loop already returned cannot be paused: its "completed"
+// status must not be overwritten by a late "paused".
+func TestPauseRefusedAfterCrawlFinished(t *testing.T) {
+	s := newTestStore(t)
+	m := newTestManager(t, s)
+	m.mu.Lock()
+	m.active = &ActiveCrawl{ID: "c1", finished: true}
+	m.mu.Unlock()
+	defer func() { m.mu.Lock(); m.active = nil; m.mu.Unlock() }()
+	if err := m.PauseCrawl("c1"); err == nil {
+		t.Fatal("paused a finished crawl")
+	}
+	if m.active.Paused {
+		t.Fatal("finished crawl marked paused")
+	}
+}
+
 func TestTuneCrawlNeedsRunningCrawl(t *testing.T) {
 	s := newTestStore(t)
 	m := newTestManager(t, s)

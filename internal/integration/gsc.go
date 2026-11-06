@@ -61,6 +61,21 @@ func serviceAccountTokenURL(tokenURI string) (string, error) {
 	return "", fmt.Errorf("key file token_uri %q is not Google's OAuth token endpoint", tokenURI)
 }
 
+// gscLagDays is how far Search Console data trails today.
+const gscLagDays = 3
+
+// reportDateRange returns an inclusive range of exactly days days (at least
+// 1) ending lagDays before now, in UTC, as YYYY-MM-DD. Search Console and
+// GA4 treat endDate as inclusive: starting days before the end date asks for
+// days + 1 days.
+func reportDateRange(now time.Time, days, lagDays int) (start, end string) {
+	if days < 1 {
+		days = 1
+	}
+	e := now.UTC().AddDate(0, 0, -lagDays)
+	return e.AddDate(0, 0, -(days - 1)).Format("2006-01-02"), e.Format("2006-01-02")
+}
+
 // GscKeyFile represents the service account JSON key file structure.
 type GscKeyFile struct {
 	ClientEmail string `json:"client_email"`
@@ -118,8 +133,7 @@ func (c *GscClient) FetchBatch(ctx context.Context, urls []string) (map[string]*
 	matcher := newGscMatcher(urls)
 	exactHit := make(map[string]bool) // a loose match never replaces an exact one
 
-	startDate := time.Now().AddDate(0, 0, -(c.days + 3)).Format("2006-01-02") // 3-day lag
-	endDate := time.Now().AddDate(0, 0, -3).Format("2006-01-02")
+	startDate, endDate := reportDateRange(time.Now(), c.days, gscLagDays)
 
 	startRow := 0
 	for {
@@ -172,8 +186,7 @@ func (c *GscClient) FetchAIOverviewData(ctx context.Context, urls []string) (map
 	results := make(map[string]*types.AIVisibilityData, len(urls))
 	matcher := newGscMatcher(urls)
 
-	startDate := time.Now().AddDate(0, 0, -(c.days + 3)).Format("2006-01-02")
-	endDate := time.Now().AddDate(0, 0, -3).Format("2006-01-02")
+	startDate, endDate := reportDateRange(time.Now(), c.days, gscLagDays)
 
 	// Query for pages with AI_OVERVIEW search appearance
 	startRow := 0

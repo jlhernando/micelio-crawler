@@ -99,8 +99,7 @@ func (c *GA4Client) FetchBatch(ctx context.Context, urls []string) (map[string]*
 
 	results := make(map[string]*types.Ga4Data, len(urls))
 
-	startDate := time.Now().AddDate(0, 0, -c.days).Format("2006-01-02")
-	endDate := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	startDate, endDate := reportDateRange(time.Now(), c.days, 1) // ~1 day lag
 
 	offset := 0
 	for {

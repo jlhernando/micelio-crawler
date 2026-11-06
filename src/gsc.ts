@@ -12,7 +12,7 @@
 
 import { google } from 'googleapis';
 import type { GscData } from './types.js';
-import { formatDateYmd } from './utils.js';
+import { reportDateRange } from './utils.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AuthClient = any; // googleapis accepts OAuth2Client | GoogleAuth | JWT
@@ -51,13 +51,8 @@ export async function fetchGscData(options: GscFetchOptions): Promise<Map<string
   const searchconsole = google.searchconsole({ version: 'v1', auth });
 
   // Calculate date range
-  const endDate = new Date();
-  endDate.setDate(endDate.getDate() - 3); // GSC data has 3-day lag
-  const startDate = new Date(endDate);
-  startDate.setDate(startDate.getDate() - days);
-
-  const startStr = formatDateYmd(startDate);
-  const endStr = formatDateYmd(endDate);
+  // GSC data has a 3-day lag; the range is inclusive, so exactly `days` days.
+  const { startDate: startStr, endDate: endStr } = reportDateRange(days, 3);
 
   const results = new Map<string, GscData>();
 

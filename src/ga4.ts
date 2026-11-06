@@ -11,7 +11,7 @@
 
 import { BetaAnalyticsDataClient } from '@google-analytics/data';
 import type { Ga4Data } from './types.js';
-import { formatDateYmd } from './utils.js';
+import { reportDateRange } from './utils.js';
 
 const MAX_RETRIES = 5;
 
@@ -55,13 +55,8 @@ export async function fetchGa4Data(options: Ga4FetchOptions): Promise<Map<string
   const client = new BetaAnalyticsDataClient(clientOptions);
 
   // Calculate date range
-  const endDate = new Date();
-  endDate.setDate(endDate.getDate() - 1); // GA4 data has ~1 day lag
-  const startDate = new Date(endDate);
-  startDate.setDate(startDate.getDate() - days);
-
-  const startStr = formatDateYmd(startDate);
-  const endStr = formatDateYmd(endDate);
+  // GA4 data has ~1 day lag; the range is inclusive, so exactly `days` days.
+  const { startDate: startStr, endDate: endStr } = reportDateRange(days, 1);
 
   // Matches GA4 pagePath rows to crawled URLs
   const matcher = new Ga4PathMatcher(urls);

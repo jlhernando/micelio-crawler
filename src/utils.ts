@@ -88,6 +88,19 @@ export function formatDateYmd(date: Date): string {
 }
 
 /**
+ * Inclusive report date range of exactly `days` days that ends `lagDays`
+ * before today (UTC), for APIs whose endDate is inclusive (GA4, Search
+ * Console). Subtracting `days` from the end date gives days + 1 days.
+ */
+export function reportDateRange(days: number, lagDays: number, now: Date = new Date()): { startDate: string; endDate: string } {
+  const span = Math.max(1, Math.floor(days));
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - lagDays));
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - (span - 1));
+  return { startDate: formatDateYmd(start), endDate: formatDateYmd(end) };
+}
+
+/**
  * Normalize a URL for consistent comparison: strip hash, trailing slash,
  * normalize default ports, and sort query parameters.
  */

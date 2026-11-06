@@ -1885,6 +1885,8 @@ func (m *CrawlManager) runLogAnalysisMulti(jobID string, filePaths, filenames []
 	// so the large map doesn't cause scan overhead). URLs are persisted in a
 	// single bulk INSERT after parsing — ~10x faster than incremental UPSERT
 	// which was the bottleneck (99% of CPU in profiles was SQLite B-tree lookups).
+	// Memory stays bounded: distinct URLs are capped (MICELIO_MAX_LOG_URLS)
+	// and so is .gz expansion (MICELIO_MAX_LOG_DECOMPRESSED_GB).
 	parseStart := time.Now()
 	result, err := logs.AnalyzeMulti(filePaths, formatHint, workers, func(mp logs.MultiProgress) {
 		// Update the per-file slot.
@@ -2012,7 +2014,8 @@ func (m *CrawlManager) runBotVerification(jobID string) (map[string]*logs.Verifi
 		return nil, nil, fmt.Errorf("no bot IP data for job %s (data available only in current session)", jobID)
 	}
 
-	verifier := logs.NewBotVerifier()
-	stats, spoofed := verifier.VerifyBotIPs(botIPs)
+	// Shared verifier: one DNS cache and one run per job however many
+	// requests arrive; IPs checked are capped (MICELIO_MAX_VERIFY_IPS).
+	stats, spoofed := logs.SharedBotVerifier().VerifyJob(jobID, botIPs)
 	return stats, spoofed, nil
 }

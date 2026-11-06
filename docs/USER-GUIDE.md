@@ -673,9 +673,10 @@ still uses `-o` and `--db`). A schedule's output folder must be a relative path
 inside the folder `micelio ui` runs in.
 
 Each request is also capped. Change a cap with an environment variable (also
-read from `~/.micelio/micelio.env`). The CLI uses only the import caps and
-`MICELIO_MAX_CRAWL_PAGES`, for `micelio import` when it imports into
-`~/.micelio` itself (no dashboard running, or `--local`):
+read from `~/.micelio/micelio.env`). The CLI uses only the import caps,
+`MICELIO_MAX_CRAWL_PAGES` (for `micelio import` when it imports into
+`~/.micelio` itself: no dashboard running, or `--local`) and the log limits
+noted below:
 
 | Variable | Default | Caps |
 |---|---|---|
@@ -685,6 +686,12 @@ read from `~/.micelio/micelio.env`). The CLI uses only the import caps and
 | `MICELIO_MAX_LOG_PENDING` | 8 | Running plus waiting log analyses |
 | `MICELIO_MAX_IMPORT_GB` | 32 | One imported crawl file |
 | `MICELIO_MAX_IMPORT_DECOMPRESSED_GB` | 64 | A `.gz`/`.zst` JSONL import once decompressed |
+| `MICELIO_MAX_LOG_URLS` | 30,000,000 | Distinct URLs one log analysis keeps; hits on more go to an `(other URLs)` row and the results show a warning |
+| `MICELIO_MAX_LOG_DECOMPRESSED_GB` | 64 | One `.gz` log file once decompressed (the file fails past it) |
+| `MICELIO_LOG_MEMLIMIT_GB` | 4 | Soft memory limit while a log analysis runs with GC off, only when no `--memlimit`/`GOMEMLIMIT` is set |
+| `MICELIO_MAX_VERIFY_IPS` | 5,000 | Bot IPs one verification checks with DNS (shared between bots; the rest show as skipped) |
+
+The log limits also apply to `micelio logs`.
 
 Concurrency (100), depth (1,000), render timeout (600 s) and link suggestions
 (100,000) have fixed caps.

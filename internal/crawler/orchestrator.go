@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/micelio/micelio/internal/analysis"
+	"github.com/micelio/micelio/internal/gctune"
 	"github.com/micelio/micelio/internal/integration"
 	"github.com/micelio/micelio/internal/types"
 )
@@ -259,7 +260,9 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 	}
 
 	// GC checkpoint before post-crawl
-	prevGOGC := debug.SetGCPercent(50)
+	// gctune: a log analysis may run at the same time; plain save/restore
+	// could leave its GC-off setting in place for good.
+	restoreGC := gctune.Hold(50, 0)
 	debug.FreeOSMemory()
 
 	// Load disk-backed maps
@@ -276,7 +279,7 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 	runBatchIntegrations(postCtx, s.pages, s.config)
 
 	// Restore GOGC
-	debug.SetGCPercent(prevGOGC)
+	restoreGC()
 	debug.FreeOSMemory()
 
 	// Count changed/unchanged pages

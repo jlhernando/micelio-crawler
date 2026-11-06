@@ -29,6 +29,7 @@ import { testRobotsMultiAgent, KNOWN_USER_AGENTS } from './robots.js';
 import { fetchHead, type FetchOptions as HeadFetchOptions } from './fetcher.js';
 import { HeadResultWriter } from './head-writer.js';
 import { setAllowPrivateNetworks } from './net-guard.js';
+import { csvSafeCell } from './sanitize.js';
 import type { HeadResult } from './types.js';
 
 // ── Typed CLI options ────────────────────────────────────
@@ -93,6 +94,7 @@ interface CommonOptions {
   plausibleDays: string;
   plausibleHost?: string;
   maxErrors: string;
+  maxBodySize: string;
   timeout: string;
   language?: string;
   // Robots.txt
@@ -277,6 +279,7 @@ function buildCommonConfig(opts: CommonOptions): Record<string, unknown> {
     plausibleDays: Math.max(1, parseIntStrict(opts.plausibleDays, 'plausible-days')),
     plausibleHost: opts.plausibleHost || 'https://plausible.io',
     maxErrors: parseIntStrict(opts.maxErrors, 'max-errors'),
+    maxBodyBytes: Math.max(1, parseIntStrict(opts.maxBodySize ?? '10', 'max-body-size')) * 1024 * 1024,
     timeoutSeconds: parseIntStrict(opts.timeout, 'timeout'),
     language: opts.language || '',
     respectRobots: opts.robots !== false,
@@ -345,6 +348,7 @@ function addCommonOptions(cmd: Command): Command {
     .option('--plausible-days <number>', 'Plausible data lookback period in days', '30')
     .option('--plausible-host <url>', 'Plausible instance URL (default: https://plausible.io)')
     .option('--max-errors <number>', 'Stop crawl after N total errors (0 = unlimited)', '0')
+    .option('--max-body-size <mb>', 'Max HTML megabytes read per page; longer pages are truncated', '10')
     .option('--timeout <seconds>', 'Stop crawl after N seconds (0 = unlimited)', '0')
     .option('--language <code>', 'Language for n-gram stopwords (e.g., en, es, fr, de). Auto-detected if omitted')
     .option('--no-robots', 'Ignore robots.txt (crawl all URLs regardless of Disallow rules)')
@@ -655,10 +659,12 @@ addCommonOptions(
 
   // Validate webhook URL if provided
   if (opts.webhook) {
+    let protocol = '';
     try {
-      new URL(opts.webhook);
-    } catch {
-      console.error(`Error: Invalid webhook URL "${opts.webhook}"`);
+      protocol = new URL(opts.webhook).protocol;
+    } catch { /* reported below */ }
+    if (protocol !== 'http:' && protocol !== 'https:') {
+      console.error('Error: Invalid webhook URL (must be an http:// or https:// URL)');
       process.exit(1);
     }
   }
@@ -732,6 +738,7 @@ addCommonOptions(
     if (opts.cruxFormFactor) crawlArgs.push('--crux-form-factor', opts.cruxFormFactor);
   }
   if (opts.maxErrors && opts.maxErrors !== '0') crawlArgs.push('--max-errors', opts.maxErrors);
+  if (opts.maxBodySize && opts.maxBodySize !== '10') crawlArgs.push('--max-body-size', opts.maxBodySize);
   if (opts.timeout && opts.timeout !== '0') crawlArgs.push('--timeout', opts.timeout);
   const allowedDomains = (opts as SpiderOptions).allowedDomains;
   if (allowedDomains) crawlArgs.push('--allowed-domains', allowedDomains);
@@ -1245,15 +1252,15 @@ async function runCrawl(config: ReturnType<typeof mergeConfig>): Promise<void> {
             'source_url,target_url,score,semantic_similarity,target_in_degree,target_click_depth,depth_reduction,target_pagerank,reason',
             ...liStats.linkSuggestions.map(s =>
               [
-                `"${s.sourceUrl.replace(/"/g, '""')}"`,
-                `"${s.targetUrl.replace(/"/g, '""')}"`,
+                `"${String(csvSafeCell(s.sourceUrl)).replace(/"/g, '""')}"`,
+                `"${String(csvSafeCell(s.targetUrl)).replace(/"/g, '""')}"`,
                 s.score,
                 s.signals.semanticSimilarity ?? '',
                 s.signals.targetInDegree,
                 s.signals.targetClickDepth ?? '',
                 s.signals.depthReduction ?? '',
                 s.signals.targetPageRank,
-                `"${s.reason.replace(/"/g, '""')}"`,
+                `"${String(csvSafeCell(s.reason)).replace(/"/g, '""')}"`,
               ].join(',')
             ),
           ].join('\n') + '\n';

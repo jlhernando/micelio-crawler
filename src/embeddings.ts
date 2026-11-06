@@ -25,6 +25,110 @@ export interface EmbeddingStats {
   dimensions: number;
   /** Raw embedding vectors keyed by URL. Used by link suggestions for semantic scoring. */
   vectors: Map<string, number[]>;
+  /** Pages compared pairwise (at most SIMILARITY_LIMITS.maxPages). */
+  pagesCompared?: number;
+}
+
+/**
+ * Bounds for the pairwise similarity step. Crawled sites can serve thousands
+ * of near-identical pages, so every pair could pass the threshold: without
+ * these caps the pair list (and CPU time) grows with N squared.
+ */
+export const SIMILARITY_LIMITS = {
+  /** Pages compared pairwise (first N embedded pages); the rest are only embedded. */
+  maxPages: 10_000,
+  /** Most similar neighbours kept per page. */
+  topKPerPage: 10,
+  /** Pairs kept overall (memory bound before sorting and grouping). */
+  maxPairs: 100_000,
+  /** Pairs returned in similarPairs. */
+  returnedPairs: 100,
+};
+
+/** Threshold in [0, 1]; NaN or out-of-range values fall back to 0.85 / are clamped. */
+export function clampThreshold(threshold: number): number {
+  if (!Number.isFinite(threshold)) return 0.85;
+  return Math.min(1, Math.max(0, threshold));
+}
+
+/** Unit-length Float32 copy of a vector (empty when the norm is 0). */
+function normalize(v: number[]): Float32Array {
+  let norm = 0;
+  for (let i = 0; i < v.length; i++) norm += v[i] * v[i];
+  norm = Math.sqrt(norm);
+  if (norm === 0) return new Float32Array(0);
+  const out = new Float32Array(v.length);
+  for (let i = 0; i < v.length; i++) out[i] = v[i] / norm;
+  return out;
+}
+
+/**
+ * Pairs of pages whose cosine similarity is >= threshold, bounded by
+ * SIMILARITY_LIMITS: each page keeps only its topKPerPage best neighbours and
+ * the total list never exceeds maxPairs. Sorted by similarity, descending.
+ * Yields to the event loop between rows and stops when signal aborts.
+ */
+export async function findSimilarPairs(
+  urls: string[],
+  vectors: number[][],
+  threshold: number,
+  signal?: AbortSignal,
+): Promise<{ pairs: SimilarPair[]; compared: number }> {
+  const t = clampThreshold(threshold);
+  const L = SIMILARITY_LIMITS;
+  const idx: number[] = [];
+  const unit: Float32Array[] = [];
+  for (let i = 0; i < vectors.length && idx.length < L.maxPages; i++) {
+    if (vectors[i].length === 0) continue;
+    const u = normalize(vectors[i]);
+    if (u.length === 0) continue;
+    idx.push(i);
+    unit.push(u);
+  }
+  const n = unit.length;
+  // Per-page best neighbours (both directions), as small sorted arrays.
+  const best: { j: number; sim: number }[][] = Array.from({ length: n }, () => []);
+  const offer = (a: number, b: number, sim: number) => {
+    const list = best[a];
+    if (list.length === L.topKPerPage && list[list.length - 1].sim >= sim) return;
+    let k = list.length;
+    while (k > 0 && list[k - 1].sim < sim) k--;
+    list.splice(k, 0, { j: b, sim });
+    if (list.length > L.topKPerPage) list.pop();
+  };
+  for (let a = 0; a < n; a++) {
+    if (signal?.aborted) break;
+    const ua = unit[a];
+    for (let b = a + 1; b < n; b++) {
+      const ub = unit[b];
+      if (ub.length !== ua.length) continue;
+      let dot = 0;
+      for (let d = 0; d < ua.length; d++) dot += ua[d] * ub[d];
+      if (dot >= t) {
+        offer(a, b, dot);
+        offer(b, a, dot);
+      }
+    }
+    if (a % 100 === 99) await new Promise((r) => setImmediate(r));
+  }
+  const seen = new Set<string>();
+  const pairs: SimilarPair[] = [];
+  for (let a = 0; a < n && pairs.length < L.maxPairs; a++) {
+    for (const { j: b, sim } of best[a]) {
+      const lo = Math.min(a, b), hi = Math.max(a, b);
+      const key = `${lo}:${hi}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pairs.push({
+        url1: urls[idx[lo]],
+        url2: urls[idx[hi]],
+        similarity: Math.round(Math.min(1, sim) * 10000) / 10000,
+      });
+      if (pairs.length >= L.maxPairs) break;
+    }
+  }
+  pairs.sort((x, y) => y.similarity - x.similarity);
+  return { pairs, compared: n };
 }
 
 const DEFAULT_MODELS: Record<string, string> = {
@@ -186,25 +290,8 @@ export async function computeEmbeddings(
     }
   }
 
-  // Find all pairs above similarity threshold
-  const pairs: SimilarPair[] = [];
-  for (let i = 0; i < embeddings.length; i++) {
-    if (embeddings[i].length === 0) continue;
-    for (let j = i + 1; j < embeddings.length; j++) {
-      if (embeddings[j].length === 0) continue;
-      const sim = cosineSimilarity(embeddings[i], embeddings[j]);
-      if (sim >= threshold) {
-        pairs.push({
-          url1: urls[i],
-          url2: urls[j],
-          similarity: Math.round(sim * 10000) / 10000,
-        });
-      }
-    }
-  }
-
-  // Sort by similarity descending
-  pairs.sort((a, b) => b.similarity - a.similarity);
+  // Similar pairs, bounded (top-K neighbours per page, page and pair caps)
+  const { pairs, compared } = await findSimilarPairs(urls, embeddings, threshold, signal);
 
   // Group into cannibalization clusters (union-find / transitive closure)
   const groups = buildCannibalizationGroups(pairs);
@@ -219,12 +306,13 @@ export async function computeEmbeddings(
 
   return {
     pagesEmbedded: embeddings.filter((e) => e.length > 0).length,
-    similarPairs: pairs.slice(0, 100), // Cap at 100 pairs
+    similarPairs: pairs.slice(0, SIMILARITY_LIMITS.returnedPairs),
     cannibalizationGroups: groups,
     provider,
     model: resolvedModel,
     dimensions,
     vectors: vectorMap,
+    pagesCompared: compared,
   };
 }
 
@@ -277,23 +365,23 @@ function buildCannibalizationGroups(
     groupMap.get(root)!.add(url);
   }
 
+  // Average similarity per group in one pass over the pairs
+  const simSum = new Map<string, number>();
+  const simCount = new Map<string, number>();
+  for (const pair of pairs) {
+    const root = find(pair.url1);
+    simSum.set(root, (simSum.get(root) ?? 0) + pair.similarity);
+    simCount.set(root, (simCount.get(root) ?? 0) + 1);
+  }
+
   // Only return groups with 2+ pages, with avg similarity
   const groups: { urls: string[]; similarity: number }[] = [];
-  for (const [, members] of groupMap) {
+  for (const [root, members] of groupMap) {
     if (members.size < 2) continue;
-    const memberArr = Array.from(members);
-    // Compute average pairwise similarity within the group
-    let simSum = 0,
-      simCount = 0;
-    for (const pair of pairs) {
-      if (members.has(pair.url1) && members.has(pair.url2)) {
-        simSum += pair.similarity;
-        simCount++;
-      }
-    }
+    const count = simCount.get(root) ?? 0;
     groups.push({
-      urls: memberArr,
-      similarity: simCount > 0 ? Math.round((simSum / simCount) * 10000) / 10000 : 0,
+      urls: Array.from(members),
+      similarity: count > 0 ? Math.round(((simSum.get(root) ?? 0) / count) * 10000) / 10000 : 0,
     });
   }
 

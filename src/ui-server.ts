@@ -7,7 +7,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { UiStore } from './ui-store.js';
 import { UiCrawlManager } from './ui-crawl-manager.js';
 import { createApiHandler } from './ui-api.js';
-import { checkUiAccess, isLoopbackHost } from './ui-auth.js';
+import { checkUiAccess, isLoopbackHost, parseRequestUrl } from './ui-auth.js';
 import { setAllowPrivateNetworks, setTrustedProxy } from './net-guard.js';
 
 const MIME_TYPES: Record<string, string> = {
@@ -63,8 +63,13 @@ export async function startUiServer(port: number, autoOpen = true, opts: UiServe
 
   // ── HTTP Server ─────────────────────────────────────────
 
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    const url = new URL(req.url || '/', `http://${req.headers.host}`);
+  const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    const url = parseRequestUrl(req);
+    if (!url) {
+      res.writeHead(400, { 'Content-Type': 'text/plain' });
+      res.end('Bad request');
+      return;
+    }
     const path = url.pathname;
 
     // COOP/COEP headers — enable SharedArrayBuffer for graph workers
@@ -85,6 +90,16 @@ export async function startUiServer(port: number, autoOpen = true, opts: UiServe
 
     // Static file serving
     serveStatic(distDir, path, res);
+  };
+
+  // A rejected handler promise would be an unhandled rejection (process exit):
+  // answer 500 instead and keep serving.
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    handleRequest(req, res).catch((err) => {
+      process.stderr.write(`  [ui] request error: ${err instanceof Error ? err.message : String(err)}\n`);
+      if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end();
+    });
   });
 
   // ── WebSocket Server ────────────────────────────────────
@@ -93,8 +108,8 @@ export async function startUiServer(port: number, autoOpen = true, opts: UiServe
   const clients = new Set<WebSocket>();
 
   server.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url || '/', `http://${req.headers.host}`);
-    if (url.pathname === '/ws') {
+    const url = parseRequestUrl(req);
+    if (url?.pathname === '/ws') {
       if (checkUiAccess(req, { authToken }, 'ws')) {
         socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
         socket.destroy();

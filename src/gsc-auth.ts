@@ -12,12 +12,18 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 // Micelio's OAuth2 client credentials (public — safe to embed in CLI tools)
 // Users must still consent via Google's OAuth screen.
 const CLIENT_ID = ''; // Will be set via env or config
 const CLIENT_SECRET = '';
-const REDIRECT_URI = 'http://localhost:9549/oauth2callback';
+const CALLBACK_PORT = 9549;
+const CALLBACK_PATH = '/oauth2callback';
+const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
+/** The callback listener only accepts connections from this machine. */
+const CALLBACK_HOST = '127.0.0.1';
+const CALLBACK_TIMEOUT_MS = 300_000;
 const SCOPES = ['https://www.googleapis.com/auth/webmasters.readonly'];
 
 const CONFIG_DIR = join(homedir(), '.micelio');
@@ -84,6 +90,96 @@ export function getServiceAccountClient(keyFilePath: string) {
   return auth;
 }
 
+function randomToken(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+/** PKCE S256 pair (RFC 7636): the verifier stays here, the challenge goes to Google. */
+export function createPkcePair(): { verifier: string; challenge: string } {
+  const verifier = randomToken();
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  return { verifier, challenge };
+}
+
+function sameSecret(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
+export interface WaitForCodeOptions {
+  /** Value sent as `state` in the authorization URL; the callback must echo it. */
+  state: string;
+  port?: number;
+  host?: string;
+  timeoutMs?: number;
+  onListening?: (port: number) => void;
+}
+
+/**
+ * Serve the OAuth callback on loopback only and resolve with the code from
+ * the first request to /oauth2callback that carries the expected state.
+ * Requests with a wrong or missing state (another page racing a code in, or
+ * aborting the flow with error=) get a 400 and are ignored; the flow goes on.
+ */
+export function waitForOAuthCode(opts: WaitForCodeOptions): Promise<string> {
+  const port = opts.port ?? CALLBACK_PORT;
+  const host = opts.host ?? CALLBACK_HOST;
+  const timeoutMs = opts.timeoutMs ?? CALLBACK_TIMEOUT_MS;
+  return new Promise<string>((resolve, reject) => {
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (err: Error | null, code?: string) => {
+      if (timer) clearTimeout(timer);
+      server.close();
+      server.closeAllConnections?.();
+      if (err) reject(err);
+      else resolve(code as string);
+    };
+    const server = createServer((req, res) => {
+      let url: URL;
+      try {
+        url = new URL(req.url || '/', `http://${CALLBACK_HOST}`);
+      } catch {
+        res.writeHead(400).end();
+        return;
+      }
+      if (req.method !== 'GET' || url.pathname !== CALLBACK_PATH) {
+        res.writeHead(404).end();
+        return;
+      }
+      const gotState = url.searchParams.get('state') || '';
+      if (!sameSecret(gotState, opts.state)) {
+        res.writeHead(400, { 'Content-Type': 'text/html' });
+        res.end('<h1>Invalid authorization response</h1><p>State mismatch. Start again from the terminal.</p>');
+        return;
+      }
+      const error = url.searchParams.get('error');
+      if (error) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<h1>Authorization failed</h1><p>You can close this window.</p>');
+        finish(new Error(`OAuth error: ${error.slice(0, 100).replace(/[^\w.-]/g, '?')}`));
+        return;
+      }
+      const authCode = url.searchParams.get('code');
+      if (!authCode) {
+        res.writeHead(400).end();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end('<h1>Authorization successful!</h1><p>You can close this window and return to the terminal.</p>');
+      finish(null, authCode);
+    });
+    server.on('error', (err) => finish(err));
+    server.listen(port, host, () => {
+      const addr = server.address();
+      opts.onListening?.(typeof addr === 'object' && addr ? addr.port : port);
+    });
+    timer = setTimeout(() => {
+      finish(new Error(`OAuth flow timed out after ${Math.round(timeoutMs / 1000)} seconds`));
+    }, timeoutMs);
+  });
+}
+
 /**
  * Run the interactive OAuth2 flow. Opens a local server, prints the auth URL,
  * waits for the callback, and stores the token.
@@ -111,61 +207,37 @@ export async function runOAuthFlow(clientId?: string, clientSecret?: string): Pr
 
   const oauth2Client = new google.auth.OAuth2(cid, csec, REDIRECT_URI);
 
+  // state ties the callback to this run (login CSRF); PKCE ties the code to
+  // this process, so a code minted for another session cannot be exchanged.
+  const state = randomToken();
+  const pkce = createPkcePair();
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: SCOPES,
     prompt: 'consent',
+    state,
+    code_challenge: pkce.challenge,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    code_challenge_method: 'S256' as any,
   });
 
   console.log('\nOpen this URL in your browser to authorize Micelio:\n');
   console.log(`  ${authUrl}\n`);
   console.log('Waiting for authorization...\n');
 
-  // Start local server to receive the OAuth callback
-  const code = await new Promise<string>((resolve, reject) => {
-    const server = createServer((req, res) => {
-      const url = new URL(req.url || '', `http://localhost:9549`);
-      const authCode = url.searchParams.get('code');
-      const error = url.searchParams.get('error');
-
-      if (error) {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end('<h1>Authorization failed</h1><p>You can close this window.</p>');
-        server.close();
-        reject(new Error(`OAuth error: ${error}`));
-        return;
-      }
-
-      if (authCode) {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end('<h1>Authorization successful!</h1><p>You can close this window and return to the terminal.</p>');
-        server.close();
-        resolve(authCode);
-        return;
-      }
-
-      // Default response for non-callback paths (favicon.ico, etc.)
-      res.writeHead(404);
-      res.end();
-    });
-
-    server.listen(9549, () => {
+  const code = await waitForOAuthCode({
+    state,
+    onListening: () => {
       // Try to open the URL automatically
       const platform = process.platform;
       if (platform === 'darwin') execFile('open', [authUrl]);
       else if (platform === 'linux') execFile('xdg-open', [authUrl]);
       else if (platform === 'win32') execFile('start', [authUrl]);
-    });
-
-    // Timeout after 5 minutes
-    setTimeout(() => {
-      server.close();
-      reject(new Error('OAuth flow timed out after 5 minutes'));
-    }, 300_000);
+    },
   });
 
   // Exchange the code for tokens
-  const { tokens } = await oauth2Client.getToken(code);
+  const { tokens } = await oauth2Client.getToken({ code, codeVerifier: pkce.verifier });
 
   // Store the token with restrictive permissions (0o600 = owner read/write only)
   mkdirSync(CONFIG_DIR, { recursive: true });

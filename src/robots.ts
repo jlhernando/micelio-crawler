@@ -4,6 +4,25 @@ import * as cheerio from 'cheerio';
 import type { SitemapEntry, SitemapType, NewsSitemapEntry, VideoSitemapEntry, ImageSitemapEntry } from './types.js';
 import { normalizeUrl } from './utils.js';
 import { guardedDispatcher, urlBlockReason } from './net-guard.js';
+import { MAX_ROBOTS_BYTES, MAX_SITEMAP_BYTES, readBodyCapped } from './body-limit.js';
+
+/** Sitemap limits. Per file: the sitemaps.org protocol (50 MB, 50,000 URLs). */
+export const SITEMAP_LIMITS = {
+  /** Bytes read per sitemap file (uncompressed). Larger files are skipped. */
+  maxBytesPerFile: MAX_SITEMAP_BYTES,
+  /** <url> entries kept per sitemap file. */
+  maxUrlsPerFile: 50_000,
+  /** Sitemap files fetched in one crawl (indexes and nested ones included). */
+  maxFiles: 1_000,
+  /** Bytes downloaded across all sitemap files. */
+  maxTotalBytes: 500 * 1024 * 1024,
+  /** Entries kept across all sitemap files. */
+  maxTotalEntries: 1_000_000,
+  /** Nesting: index -> sitemap is depth 1; deeper levels are ignored (Go crawler: 3). */
+  maxDepth: 3,
+  /** Per-request deadline (headers + body). */
+  timeoutMs: 60_000,
+};
 
 interface Robot {
   isAllowed(url: string, ua?: string): boolean | undefined;
@@ -30,9 +49,11 @@ export class RobotsChecker {
       const { statusCode, body } = await request(robotsUrl, {
         headers: { 'User-Agent': userAgent },
         dispatcher: guardedDispatcher(),
+        signal: AbortSignal.timeout(30_000),
       });
       if (statusCode === 200) {
-        const text = await body.text();
+        // Cap like Google (500 KiB): rules after the cap are ignored.
+        const { text } = await readBodyCapped(body, MAX_ROBOTS_BYTES);
         this.robots = (robotsParser as unknown as (url: string, txt: string) => Robot)(robotsUrl, text);
         this.sitemapUrls = this.extractSitemapUrls(text);
       } else {
@@ -73,11 +94,37 @@ export class RobotsChecker {
     const warnings: string[] = [];
     const visited = new Set<string>();
 
+    const L = SITEMAP_LIMITS;
+    let filesFetched = 0;
+    let totalBytes = 0;
+    let budgetNoted = false;
+    const noteBudget = (msg: string) => {
+      if (!budgetNoted) errors.push(msg);
+      budgetNoted = true;
+    };
+
     const VALID_CHANGEFREQ = new Set(['always', 'hourly', 'daily', 'weekly', 'monthly', 'yearly', 'never']);
 
-    const parseSitemap = async (sitemapUrl: string): Promise<void> => {
+    const parseSitemap = async (sitemapUrl: string, depth = 0): Promise<void> => {
       if (visited.has(sitemapUrl)) return;
+      if (depth > L.maxDepth) {
+        errors.push(`Sitemap ${sitemapUrl} skipped: nested more than ${L.maxDepth} levels deep`);
+        return;
+      }
+      if (filesFetched >= L.maxFiles) {
+        noteBudget(`Sitemap limit reached: only the first ${L.maxFiles} sitemap files were read`);
+        return;
+      }
+      if (totalBytes >= L.maxTotalBytes) {
+        noteBudget(`Sitemap limit reached: ${Math.round(L.maxTotalBytes / 1048576)} MB downloaded, remaining sitemaps skipped`);
+        return;
+      }
+      if (entries.length >= L.maxTotalEntries) {
+        noteBudget(`Sitemap limit reached: ${L.maxTotalEntries} URLs kept, remaining sitemaps skipped`);
+        return;
+      }
       visited.add(sitemapUrl);
+      filesFetched++;
 
       try {
         // Follow redirects manually for sitemap fetching
@@ -94,6 +141,7 @@ export class RobotsChecker {
           const resp = await request(currentSitemapUrl, {
             headers: { 'User-Agent': userAgent },
             dispatcher: guardedDispatcher(),
+            signal: AbortSignal.timeout(L.timeoutMs),
           });
           sitemapStatusCode = resp.statusCode;
           if (sitemapStatusCode >= 300 && sitemapStatusCode < 400) {
@@ -106,7 +154,16 @@ export class RobotsChecker {
             }
           }
           if (sitemapStatusCode === 200) {
-            sitemapText = await resp.body.text();
+            const cap = Math.min(L.maxBytesPerFile, L.maxTotalBytes - totalBytes);
+            const body = await readBodyCapped(resp.body, cap);
+            totalBytes += body.bytes;
+            if (body.truncated) {
+              errors.push(cap < L.maxBytesPerFile
+                ? `Sitemap ${sitemapUrl} skipped: total sitemap download limit (${Math.round(L.maxTotalBytes / 1048576)} MB) reached`
+                : `Sitemap ${sitemapUrl} exceeds 50MB size limit (not parsed)`);
+              return;
+            }
+            sitemapText = body.text;
           } else {
             await resp.body.dump();
           }
@@ -118,11 +175,6 @@ export class RobotsChecker {
         }
 
         const text = sitemapText;
-
-        // Validate size limit: 50MB
-        if (Buffer.byteLength(text, 'utf-8') > 50 * 1024 * 1024) {
-          errors.push(`Sitemap ${sitemapUrl} exceeds 50MB size limit`);
-        }
 
         const $ = cheerio.load(text, { xmlMode: true });
 
@@ -140,14 +192,19 @@ export class RobotsChecker {
         // Check for sitemap index
         const nestedSitemaps = $('sitemap > loc').map((_, el) => $(el).text().trim()).get();
         for (const nested of nestedSitemaps) {
-          await parseSitemap(nested);
+          await parseSitemap(nested, depth + 1);
         }
 
         // Count URLs for limit validation
-        const urlElements = $('url');
-        if (urlElements.length > 50000) {
-          errors.push(`Sitemap ${sitemapUrl} exceeds 50,000 URL limit (${urlElements.length} URLs)`);
+        const allUrlElements = $('url');
+        if (allUrlElements.length > L.maxUrlsPerFile) {
+          errors.push(`Sitemap ${sitemapUrl} exceeds 50,000 URL limit (${allUrlElements.length} URLs, only the first ${L.maxUrlsPerFile} kept)`);
         }
+        const room = Math.max(0, Math.min(L.maxUrlsPerFile, L.maxTotalEntries - entries.length));
+        if (room < Math.min(allUrlElements.length, L.maxUrlsPerFile)) {
+          noteBudget(`Sitemap limit reached: ${L.maxTotalEntries} URLs kept, remaining sitemap URLs skipped`);
+        }
+        const urlElements = allUrlElements.slice(0, room);
 
         // Detect sitemap extension namespaces from root element attributes
         const attrValues = Object.values(rootAttrs).join(' ');
@@ -376,7 +433,7 @@ export async function testRobotsMultiAgent(
     });
     statusCode = resp.statusCode;
     if (statusCode === 200) {
-      robotsTxt = await resp.body.text();
+      robotsTxt = (await readBodyCapped(resp.body, MAX_ROBOTS_BYTES)).text;
     } else {
       await resp.body.dump();
     }

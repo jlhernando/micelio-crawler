@@ -268,6 +268,7 @@ export async function crawl(
     cookies: config.cookies,
     dispatcher: proxyDispatcher,
     credentialHosts,
+    maxBodyBytes: config.maxBodyBytes,
   };
 
   // Phase 3: Extraction options

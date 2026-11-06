@@ -6,6 +6,7 @@ import { buildSegmentStats, type Segment } from './segmentation.js';
 import { buildUrlStructureStats } from './url-structure.js';
 import { normalizeUrlForComparison } from './utils.js';
 import { buildTemplateStats } from './template-detector.js';
+import { safeConsole, termSafe } from './sanitize.js';
 
 export function generateReport(
   pages: PageData[],
@@ -1286,6 +1287,9 @@ function buildPlausibleStats(pages: PageData[], days: number): CrawlStats['plaus
 }
 
 export function printReport(stats: CrawlStats): void {
+  // Crawled values (schema types, titles, URLs, query keys) are printed below:
+  // every line goes through the terminal sanitizer.
+  const console = safeConsole;
   const line = '─'.repeat(60);
 
   console.log(`\n${line}`);
@@ -2058,7 +2062,7 @@ export function printReport(stats: CrawlStats): void {
     if (typeEntries.length > 0) {
       console.log(`\n  Schema types found:`);
       for (const [type, count] of typeEntries.slice(0, 15)) {
-        console.log(`    ${count}x ${type}`);
+        console.log(`    ${count}x ${termSafe(type)}`);
       }
     }
 
@@ -2067,7 +2071,7 @@ export function printReport(stats: CrawlStats): void {
     if (richEntries.length > 0) {
       console.log(`\n  Rich result eligible:`);
       for (const [type, count] of richEntries) {
-        console.log(`    ${type}: ${count} page(s)`);
+        console.log(`    ${termSafe(type)}: ${count} page(s)`);
       }
     } else {
       console.log(`\n  Rich result eligible: 0 pages`);
@@ -2077,7 +2081,7 @@ export function printReport(stats: CrawlStats): void {
     if (sv.topIssues.length > 0) {
       console.log(`\n  Top validation issues:`);
       for (const issue of sv.topIssues.slice(0, 10)) {
-        console.log(`    ${issue.count}x — ${issue.message}`);
+        console.log(`    ${issue.count}x — ${termSafe(issue.message)}`);
       }
     }
   }
@@ -2206,9 +2210,9 @@ export function printReport(stats: CrawlStats): void {
     if (rc.criticalDiffs.length > 0) {
       console.log(`\n  Critical rendering differences:`);
       for (const d of rc.criticalDiffs.slice(0, 10)) {
-        console.log(`    [${d.field}] ${d.url}`);
-        console.log(`      Original: ${d.original || '(empty)'}`);
-        console.log(`      Rendered: ${d.rendered || '(empty)'}`);
+        console.log(`    [${termSafe(d.field)}] ${termSafe(d.url)}`);
+        console.log(`      Original: ${termSafe(d.original) || '(empty)'}`);
+        console.log(`      Rendered: ${termSafe(d.rendered) || '(empty)'}`);
       }
       if (rc.criticalDiffs.length > 10) {
         console.log(`    ... and ${rc.criticalDiffs.length - 10} more`);
@@ -2506,7 +2510,7 @@ export function printReport(stats: CrawlStats): void {
     if (us.topParameters.length > 0) {
       console.log('\n  Top Query Parameters:');
       for (const { parameter, count } of us.topParameters.slice(0, 10)) {
-        console.log(`    ${parameter}: ${count} URLs`);
+        console.log(`    ${termSafe(parameter)}: ${count} URLs`);
       }
     }
 

@@ -23,6 +23,33 @@ export function jsonForScript(value: unknown): string {
 }
 
 /**
+ * URL safe to write to logs. Credentials can live in the userinfo, the path
+ * (Slack/Discord webhook tokens) and the query (signed URLs, API keys).
+ * - 'origin': scheme + host only, path replaced by "/..." when not empty
+ *   (for webhook targets, where the path itself is the secret).
+ * - 'path' (default): userinfo removed, path kept, every query value masked.
+ * Not a URL: "[invalid URL]".
+ */
+export function redactUrl(raw: string, mode: 'origin' | 'path' = 'path'): string {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return '[invalid URL]';
+  }
+  const origin = `${u.protocol}//${u.host}`;
+  if (mode === 'origin') {
+    return u.pathname !== '/' || u.search || u.hash ? `${origin}/...` : origin;
+  }
+  let out = origin + u.pathname;
+  if (u.search) {
+    const keys = [...new Set([...u.searchParams.keys()])];
+    out += '?' + keys.map((k) => `${encodeURIComponent(k)}=***`).join('&');
+  }
+  return out;
+}
+
+/**
  * Format a Date as YYYY-MM-DD string for API queries.
  */
 export function formatDateYmd(date: Date): string {

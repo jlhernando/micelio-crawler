@@ -340,21 +340,46 @@ function extractHreflang($: cheerio.CheerioAPI, pageUrl: string): HreflangEntry[
   return entries;
 }
 
+/** JSON-LD limits per page (characters of the script text). */
+export const JSONLD_LIMITS = {
+  /** Raw text kept for validation and export (50 KB covers virtually all blocks). */
+  maxRawStored: 51_200,
+  /** Larger blocks are not parsed and are reported as type "TooLarge". */
+  maxParseChars: 1024 * 1024,
+  /** Total JSON-LD text parsed per page. */
+  maxParseCharsPerPage: 4 * 1024 * 1024,
+  /** Blocks read per page; the rest are ignored. */
+  maxBlocks: 100,
+  /** Length of the stored @type string. */
+  maxTypeChars: 200,
+};
+
 // 2.3 Structured Data extraction (JSON-LD + Microdata)
 function extractStructuredData($: cheerio.CheerioAPI): StructuredDataEntry[] {
   const entries: StructuredDataEntry[] = [];
 
   // JSON-LD — store full raw for validation, display truncation happens in CSV/display
-  const JSONLD_MAX_RAW = 51200; // 50KB — covers virtually all JSON-LD blocks
+  // Crawled HTML is untrusted: size, count and type length are capped *before*
+  // JSON.parse so one hostile page cannot force huge allocations.
+  let parsedBytes = 0;
+  let blocks = 0;
   $('script[type="application/ld+json"]').each((_, el) => {
+    if (blocks >= JSONLD_LIMITS.maxBlocks) return false; // stop iterating
     const raw = $(el).html()?.trim();
     if (!raw) return;
+    blocks++;
+    const stored = raw.slice(0, JSONLD_LIMITS.maxRawStored);
+    if (raw.length > JSONLD_LIMITS.maxParseChars || parsedBytes + raw.length > JSONLD_LIMITS.maxParseCharsPerPage) {
+      entries.push({ type: 'TooLarge', format: 'json-ld', raw: stored });
+      return;
+    }
+    parsedBytes += raw.length;
     try {
       const parsed = JSON.parse(raw);
-      const type = parsed['@type'] || (Array.isArray(parsed['@graph']) ? 'Graph' : 'Unknown');
-      entries.push({ type: String(type), format: 'json-ld', raw: raw.slice(0, JSONLD_MAX_RAW) });
+      const type = parsed?.['@type'] || (Array.isArray(parsed?.['@graph']) ? 'Graph' : 'Unknown');
+      entries.push({ type: String(type).slice(0, JSONLD_LIMITS.maxTypeChars), format: 'json-ld', raw: stored });
     } catch {
-      entries.push({ type: 'ParseError', format: 'json-ld', raw: raw.slice(0, JSONLD_MAX_RAW) });
+      entries.push({ type: 'ParseError', format: 'json-ld', raw: stored });
     }
   });
 

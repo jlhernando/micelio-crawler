@@ -83,6 +83,8 @@ export interface CrawlConfig {
   plausibleHost: string;
   // Conditional termination
   maxErrors: number;
+  /** Max HTML bytes read per page; longer bodies are truncated (default 10 MB). */
+  maxBodyBytes?: number;
   timeoutSeconds: number;
   // Multi-subdomain crawling
   allowedDomains: string[];

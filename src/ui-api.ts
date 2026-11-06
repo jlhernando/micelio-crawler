@@ -6,6 +6,7 @@ import { diffPages, DIFF_FIELDS } from './diff.js';
 import type { PageData } from './types.js';
 import { format as csvFormat } from 'fast-csv';
 import { flattenPageForCsv } from './writer.js';
+import { parseRequestUrl } from './ui-auth.js';
 import { assertPublicUrl, isTrustedProxy, trustedProxy } from './net-guard.js';
 import { formatError } from './utils.js';
 
@@ -186,7 +187,12 @@ export function applyEnvFallbacks(settings: Record<string, unknown>): Record<str
 
 export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
-    const url = new URL(req.url || '/', `http://${req.headers.host}`);
+    const url = parseRequestUrl(req);
+    if (!url) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { code: 'BAD_REQUEST', message: 'Malformed request URL' } }));
+      return true;
+    }
     const path = url.pathname;
     const method = req.method || 'GET';
 

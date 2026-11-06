@@ -432,7 +432,7 @@ footer{margin-top:32px;padding-top:16px;border-top:1px solid var(--border);color
 <script>
 const diff = {{.DiffJSON}};
 
-function esc(s) { const d=document.createElement('div'); d.textContent=String(s||''); return d.innerHTML; }
+function esc(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
 
 // Changed
 const changedRows = (diff.changedUrls||[]).slice(0,500).flatMap(u =>

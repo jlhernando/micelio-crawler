@@ -372,7 +372,9 @@ const pages = {{.PagesJSON}};
 const stats = {{.StatsJSON}};
 
 function statusClass(c){return c>=200&&c<300?'status-2xx':c>=300&&c<400?'status-3xx':c>=400&&c<500?'status-4xx':'status-5xx'}
-function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+// esc escapes crawled text for HTML text AND quoted attributes (title="..."):
+// a hostile hreflang code or URL must not close the attribute.
+function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c])}
 function fmt(v,d){return v!=null?v.toFixed(d!=null?d:2):'-'}
 function pct(n,t){return t?(n/t*100).toFixed(1)+'%':'0%'}
 function pctN(n,t){return t?parseFloat((n/t*100).toFixed(1)):0}

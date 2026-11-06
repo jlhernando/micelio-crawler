@@ -16,6 +16,7 @@ import (
 	"github.com/micelio/micelio/internal/integration"
 	"github.com/micelio/micelio/internal/netguard"
 	"github.com/micelio/micelio/internal/storage"
+	"github.com/micelio/micelio/internal/termsafe"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -778,7 +779,7 @@ func (s *crawlSession) seedSitemapMode(ctx context.Context) error {
 		})
 		if err != nil {
 			lastErr = err
-			fmt.Fprintf(os.Stderr, "  [sitemap] %s: %v\n", sm, err)
+			fmt.Fprintf(os.Stderr, "  [sitemap] %s: %s\n", termsafe.String(sm), termsafe.String(err.Error()))
 			continue
 		}
 		fetched++

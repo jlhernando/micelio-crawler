@@ -4,7 +4,6 @@ package storage
 import (
 	"bufio"
 	"compress/gzip"
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/micelio/micelio/internal/csvsafe"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -86,7 +86,7 @@ type ResultWriter struct {
 	compressor io.WriteCloser
 	file       *os.File
 	buf        *bufio.Writer
-	csv        *csv.Writer
+	csv        *csvsafe.Writer
 	format     string
 	compress   string
 	count      int
@@ -132,7 +132,7 @@ func NewResultWriter(path string, format string) (*ResultWriter, error) {
 	w.buf = bufio.NewWriterSize(target, 64*1024)
 
 	if format == "csv" {
-		w.csv = csv.NewWriter(w.buf)
+		w.csv = csvsafe.NewWriter(w.buf)
 		// Write header row
 		if err := w.csv.Write(csvHeaders()); err != nil {
 			if w.compressor != nil {
@@ -243,7 +243,7 @@ func (w *ResultWriter) RewriteAll(pages []*types.PageData) error {
 	w.count = 0
 
 	if w.format == "csv" {
-		w.csv = csv.NewWriter(w.buf)
+		w.csv = csvsafe.NewWriter(w.buf)
 		if err := w.csv.Write(csvHeaders()); err != nil {
 			return err
 		}

@@ -1,7 +1,6 @@
 package report
 
 import (
-	"encoding/csv"
 	"fmt"
 	"io"
 	"net/url"
@@ -9,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/micelio/micelio/internal/csvsafe"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -606,7 +606,7 @@ func placeOnMatrix(tickets []Ticket) {
 // (Summary, Issue Type, Priority, Story Points, Labels, Description).
 func BacklogCSV(w io.Writer, seedURL string, stats *types.CrawlStats, pages []*types.PageData, opts PDFOptions) error {
 	d := BuildPDFData(seedURL, stats, pages, opts)
-	cw := csv.NewWriter(w)
+	cw := csvsafe.NewWriter(w)
 	cw.Write([]string{"Issue key", "Summary", "Issue Type", "Priority", "Story Points", "Component", "Labels", "Description"})
 	jira := map[string]string{"P0": "Highest", "P1": "High", "P2": "Medium", "P3": "Low"}
 	for _, t := range append(append([]Ticket{}, d.Tickets...), d.GEO...) {

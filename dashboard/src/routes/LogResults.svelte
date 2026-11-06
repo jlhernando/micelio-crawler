@@ -1,6 +1,7 @@
 <script lang="ts">
   import { formatBytes, formatCompact, formatDate, pct } from '../lib/format';
   import { statusBadgeClass } from '../lib/status';
+  import { toCSV } from '../lib/csv';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount, untrack } from 'svelte';
   import { api } from '../lib/api';
@@ -733,7 +734,7 @@
 
   // Export CSV
   function downloadCSV(filename: string, headers: string[], rows: (string | number)[][]) {
-    const csv = [headers.join(','), ...rows.map(r => r.map(c => typeof c === 'string' && c.includes(',') ? `"${c}"` : c).join(','))].join('\n');
+    const csv = toCSV(headers, rows);
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);

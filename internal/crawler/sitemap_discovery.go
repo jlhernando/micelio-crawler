@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/micelio/micelio/internal/termsafe"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -124,7 +125,7 @@ func discoverSitemaps(ctx context.Context, seedURL string, robotsSitemaps []stri
 			break
 		}
 		if err := fetchSitemap(ctx, smURL, client, userAgent, pace, 0, keep); err != nil {
-			fmt.Fprintf(os.Stderr, "  [sitemap-discovery] %s: %v\n", smURL, err)
+			fmt.Fprintf(os.Stderr, "  [sitemap-discovery] %s: %s\n", termsafe.String(smURL), termsafe.String(err.Error()))
 		}
 	}
 	return nil
@@ -216,7 +217,7 @@ func fetchSitemap(ctx context.Context, sitemapURL string, client *http.Client, u
 				break
 			}
 			if err := fetchSitemap(ctx, loc, client, userAgent, pace, depth+1, emit); err != nil {
-				fmt.Fprintf(os.Stderr, "  [sitemap-discovery] %s: %v\n", loc, err)
+				fmt.Fprintf(os.Stderr, "  [sitemap-discovery] %s: %s\n", termsafe.String(loc), termsafe.String(err.Error()))
 			}
 		}
 		return nil

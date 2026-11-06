@@ -2,7 +2,6 @@ package server
 
 import (
 	"compress/gzip"
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/micelio/micelio/internal/analysis"
 	"github.com/micelio/micelio/internal/crawler"
+	"github.com/micelio/micelio/internal/csvsafe"
 	"github.com/micelio/micelio/internal/logs"
 	"github.com/micelio/micelio/internal/report"
 	"github.com/micelio/micelio/internal/scheduler"
@@ -639,7 +639,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		}
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=crawl-%s.csv", r.PathValue("id")))
-		csvWriter := csv.NewWriter(w)
+		csvWriter := csvsafe.NewWriter(w)
 		csvWriter.Write([]string{"url", "statusCode", "title", "metaDescription", "h1", "wordCount", "depth", "internalLinks", "externalLinks", "inlinks", "canonical", "indexable"})
 		for _, p := range results.Pages {
 			title := ""
@@ -694,7 +694,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		}
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=crawl-%s-filtered-%d.csv", r.PathValue("id"), len(filtered)))
-		csvWriter := csv.NewWriter(w)
+		csvWriter := csvsafe.NewWriter(w)
 		csvWriter.Write([]string{"url", "statusCode", "title", "metaDescription", "h1", "wordCount", "depth", "internalLinks", "externalLinks", "inlinks", "canonical", "indexable"})
 		for _, p := range filtered {
 			title := ""

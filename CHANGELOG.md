@@ -4,10 +4,24 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+## [1.14.1] - 2026-11-06
+
+Dashboard and reliability fixes: the Monitor and sidebar show live, complete numbers, list crawls work from the dashboard, and about fifty smaller bugs are gone.
+
 ### Fixed
 
 - **Monitor errors panel** lists 4xx/5xx pages as well as network errors, and a Monitor opened or reloaded mid-crawl shows the errors seen so far (the server keeps the latest 200, credentials in URLs masked). Before, it could say "No errors yet" next to a non-zero error counter.
 - **List and sitemap crawls show their site** in the sidebar, History and Monitor: they use the first URL of the list or the first sitemap, also for crawls saved before.
+- **Sidebar page count is live** and matches the Monitor (it read a number saved every 10 pages).
+- **Dashboard list crawls** in the legacy TypeScript dashboard crawl the pasted URLs.
+- **Search Console and GA4 ask for exactly the configured number of days** (the inclusive end date added one day).
+- **Log analysis**: a byte-order mark no longer drops the first row; unreadable rows are counted, and a file in the wrong format fails with a clear message; W3C logs keep the query string; Ghost pages exclude redirects, errors, noindex and canonicalised pages; more real bots are verified.
+- **No races or hangs** in pause, live tuning, schedule saves, import uploads, MCP autostart, update rollback and Google OAuth.
+- **Pages table** sorts by body size; CSV export and Compare wait for pages to load instead of returning partial files.
+- **MCP**: `crawl_summary` always fits its size limit; `crawl_stop` is marked destructive.
+- **Large JSON-LD** is stored as valid JSON; Search Console rows match crawled URLs exactly first.
+- **Bundled snippets** run in the Go crawler with `--js`; `performance.js` reports LCP and CLS.
+- **Legacy TypeScript crawler**: JSON-LD validation, Plausible/GA4/Search Console/CrUX matching and retries, faster near-duplicate detection, redirect-aware link analysis, sitemap `lastmod` only from real dates, a time limit for regex searches, stricter segments and cron.
 
 ## [1.14.0] - 2026-11-06
 

@@ -46,6 +46,10 @@ export function parseSegment(value: string): Segment {
   const name = value.substring(0, colonIdx).trim();
   const patternStr = value.substring(colonIdx + 1).trim();
 
+  if (!name) {
+    throw new Error(`Empty name in segment "${value}". Expected "name:pattern"`);
+  }
+
   if (!patternStr) {
     throw new Error(`Empty pattern in segment "${name}"`);
   }
@@ -63,11 +67,13 @@ export function parseSegment(value: string): Segment {
 /**
  * Determine which segments a URL belongs to.
  * A URL can match multiple segments. Returns list of segment names.
+ * Several rules may share a name (e.g. two --segment "shop:..." patterns):
+ * they act as one segment, and the name is listed once.
  */
 export function assignSegments(url: string, segments: Segment[]): string[] {
   const matched: string[] = [];
   for (const seg of segments) {
-    if (seg.pattern.test(url)) {
+    if (!matched.includes(seg.name) && seg.pattern.test(url)) {
       matched.push(seg.name);
     }
   }
@@ -112,7 +118,8 @@ export function buildSegmentStats(pages: PageData[], segments: Segment[]): Segme
 
   // Process pages
   for (const page of pages) {
-    const matchedSegments = page.segments || [];
+    // Count a page once per segment, even if its list repeats a name
+    const matchedSegments = new Set(page.segments || []);
 
     for (const segName of matchedSegments) {
       const stats = statsMap.get(segName);
@@ -156,11 +163,10 @@ export function buildSegmentStats(pages: PageData[], segments: Segment[]): Segme
     }
   }
 
-  // Compute averages
-  for (const seg of segments) {
-    const stats = statsMap.get(seg.name)!;
-    const times = responseTimes.get(seg.name)!;
-    const words = wordCounts.get(seg.name)!;
+  // Compute averages (one entry per distinct segment name)
+  for (const [name, stats] of statsMap) {
+    const times = responseTimes.get(name)!;
+    const words = wordCounts.get(name)!;
 
     stats.avgResponseTimeMs = times.length > 0
       ? Math.round(times.reduce((a, b) => a + b, 0) / times.length)
@@ -172,7 +178,5 @@ export function buildSegmentStats(pages: PageData[], segments: Segment[]): Segme
   }
 
   // Return only segments that have at least one page
-  return segments
-    .map(seg => statsMap.get(seg.name)!)
-    .filter(s => s.pageCount > 0);
+  return [...statsMap.values()].filter(s => s.pageCount > 0);
 }

@@ -21,14 +21,16 @@ export function analyzeUrlStructure(url: string): UrlStructureData {
       }
     }
 
-    // Extract query parameters (deduplicate keys, keep first value)
-    const queryParams: Record<string, string> = {};
+    // Extract query parameters (deduplicate keys, keep first value). A Map,
+    // not `key in {}`: names like "constructor" or "__proto__" exist on
+    // every plain object and would be skipped. fromEntries defines them as
+    // own properties.
+    const params = new Map<string, string>();
     parsed.searchParams.forEach((value, key) => {
-      if (!(key in queryParams)) {
-        queryParams[key] = value;
-      }
+      if (!params.has(key)) params.set(key, value);
     });
-    const parameterCount = Object.keys(queryParams).length;
+    const queryParams: Record<string, string> = Object.fromEntries(params);
+    const parameterCount = params.size;
 
     return {
       scheme: parsed.protocol.replace(':', ''),
@@ -62,7 +64,7 @@ export function buildUrlStructureStats(pages: PageData[]): UrlStructureStats | n
 
   const depthDistribution: Record<number, number> = {};
   const directoryCount: Record<string, number> = {};
-  const paramFrequency: Record<string, number> = {};
+  const paramFrequency = new Map<string, number>();
   const extensionCount: Record<string, number> = {};
   let totalDepth = 0;
   let maxDepth = 0;
@@ -87,7 +89,7 @@ export function buildUrlStructureStats(pages: PageData[]): UrlStructureStats | n
 
     // Query parameter frequency
     for (const key of Object.keys(us.queryParams)) {
-      paramFrequency[key] = (paramFrequency[key] || 0) + 1;
+      paramFrequency.set(key, (paramFrequency.get(key) || 0) + 1);
     }
     if (us.parameterCount > 0) withParamsCount++;
 
@@ -107,7 +109,7 @@ export function buildUrlStructureStats(pages: PageData[]): UrlStructureStats | n
     .map(([dir, count]) => ({ directory: dir, count }));
 
   // Sort parameters by frequency descending, take top 15
-  const topParameters = Object.entries(paramFrequency)
+  const topParameters = [...paramFrequency.entries()]
     .sort(([, a], [, b]) => b - a)
     .slice(0, 15)
     .map(([param, count]) => ({ parameter: param, count }));

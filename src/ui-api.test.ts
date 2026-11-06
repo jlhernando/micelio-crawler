@@ -254,6 +254,15 @@ describe('validateCrawlRequest', () => {
   it('accepts public literal URLs', async () => {
     await expect(validateCrawlRequest({ seedUrl: 'https://93.184.215.14/' })).resolves.toBeUndefined();
   });
+
+  it('list mode: urlList URLs are checked, an empty list is refused', async () => {
+    await expect(validateCrawlRequest({ mode: 'list', urlList: 'https://93.184.215.14/a\n\nhttps://93.184.215.14/b' }))
+      .resolves.toBeUndefined();
+    await expect(validateCrawlRequest({ mode: 'list', urlList: 'https://93.184.215.14/a\nhttp://127.0.0.1/' }))
+      .rejects.toThrow(BadRequestError);
+    await expect(validateCrawlRequest({ mode: 'list', urlList: '  \n' })).rejects.toThrow(/at least one URL/);
+    await expect(validateCrawlRequest({ mode: 'list', urlList: 42 })).rejects.toThrow(BadRequestError);
+  });
 });
 
 describe('proxy from the API (trusted proxy only)', () => {

@@ -47,11 +47,25 @@ function filterEligible(pages: PageData[]): PageData[] {
   );
 }
 
+/**
+ * <lastmod> date (YYYY-MM-DD): when the page content last changed, from the
+ * server's Last-Modified header or the source sitemap's lastmod. Never the
+ * crawl time: that would mark every page as changed on every crawl, and
+ * search engines learn to ignore a lastmod that lies. Omitted when unknown.
+ */
+function lastmodOf(page: PageData): string | null {
+  for (const value of [page.lastModified, page.sitemapData?.sitemapLastmod]) {
+    if (!value) continue;
+    const at = Date.parse(value);
+    if (!Number.isNaN(at) && at <= Date.now() + 86_400_000) return new Date(at).toISOString().split('T')[0];
+  }
+  return null;
+}
+
 function buildUrlEntry(page: PageData, opts: SitemapOptions): string {
   const loc = `  <url>\n    <loc>${xmlEscape(page.finalUrl)}</loc>`;
-  const lastmod = page.crawledAt
-    ? `\n    <lastmod>${page.crawledAt.split('T')[0]}</lastmod>`
-    : '';
+  const date = lastmodOf(page);
+  const lastmod = date ? `\n    <lastmod>${date}</lastmod>` : '';
   const changefreq = opts.changefreq
     ? `\n    <changefreq>${xmlEscape(opts.changefreq)}</changefreq>`
     : '';

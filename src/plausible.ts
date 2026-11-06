@@ -35,6 +35,8 @@ export interface PlausibleOptions {
   urls: string[];
   /** Plausible instance URL (default: "https://plausible.io") */
   host?: string;
+  /** Deadline per API request, ms (default 30 s). A request that hangs is retried. */
+  timeoutMs?: number;
 }
 
 interface PlausibleQueryResponse {
@@ -51,6 +53,7 @@ interface PlausibleQueryResponse {
 
 const MAX_RETRIES = 3;
 const CHUNK_SIZE = 100; // Max URL filter values per request
+const REQUEST_TIMEOUT_MS = 30_000;
 
 /**
  * Fetch Plausible analytics data for the given URLs.
@@ -59,7 +62,7 @@ const CHUNK_SIZE = 100; // Max URL filter values per request
  * Uses the event:page dimension to match against crawled URL paths.
  */
 export async function fetchPlausibleData(options: PlausibleOptions): Promise<Map<string, PlausibleData>> {
-  const { siteId, apiKey, days, urls, host = 'https://plausible.io' } = options;
+  const { siteId, apiKey, days, urls, host = 'https://plausible.io', timeoutMs = REQUEST_TIMEOUT_MS } = options;
 
   if (urls.length === 0) return new Map();
 
@@ -77,30 +80,25 @@ export async function fetchPlausibleData(options: PlausibleOptions): Promise<Map
     );
   }
 
-  // Build two maps:
-  // 1. originalPaths: original-case paths for the API filter (Plausible API is case-sensitive)
-  // 2. pathToUrls: normalized paths for matching API results back to crawled URLs
+  // Plausible paths are case-sensitive (/Docs and /docs are two pages), so
+  // the same exact-case path is used for the API filter and for matching
+  // the rows back to crawled URLs.
   const pathToUrls = new Map<string, string[]>();
   const originalPaths: string[] = [];
-  // Set for O(1) membership; the array keeps the request order stable.
-  const seenPaths = new Set<string>();
 
   for (const url of urls) {
     try {
       const parsed = new URL(url);
       const rawPath = extractPath(parsed.pathname);
-      const normPath = normalizePath(rawPath);
 
-      // Collect original-case paths for API filter (deduplicated)
-      if (!seenPaths.has(rawPath)) {
-        seenPaths.add(rawPath);
+      const existing = pathToUrls.get(rawPath);
+      if (existing) {
+        existing.push(url);
+      } else {
+        // First time: also goes into the API filter (request order kept)
+        pathToUrls.set(rawPath, [url]);
         originalPaths.push(rawPath);
       }
-
-      // Map normalized path → full URLs
-      const existing = pathToUrls.get(normPath) || [];
-      existing.push(url);
-      pathToUrls.set(normPath, existing);
     } catch {
       // Skip invalid URLs
     }
@@ -111,10 +109,10 @@ export async function fetchPlausibleData(options: PlausibleOptions): Promise<Map
   // Chunk paths to avoid oversized filter arrays
   for (let i = 0; i < originalPaths.length; i += CHUNK_SIZE) {
     const pathChunk = originalPaths.slice(i, i + CHUNK_SIZE);
-    const chunkData = await fetchChunk(host, siteId, apiKey, days, pathChunk);
+    const chunkData = await fetchChunk(host, siteId, apiKey, days, pathChunk, timeoutMs);
 
-    for (const [normPath, data] of chunkData) {
-      const matchedUrls = pathToUrls.get(normPath);
+    for (const [path, data] of chunkData) {
+      const matchedUrls = pathToUrls.get(path);
       if (matchedUrls) {
         for (const url of matchedUrls) {
           results.set(url, { ...data }); // Copy to avoid shared references
@@ -132,6 +130,7 @@ async function fetchChunk(
   apiKey: string,
   days: number,
   paths: string[],
+  timeoutMs: number,
 ): Promise<Map<string, PlausibleData>> {
   const results = new Map<string, PlausibleData>();
   const endpoint = `${host.replace(/\/+$/, '')}/api/v2/query`;
@@ -149,7 +148,7 @@ async function fetchChunk(
     filters: [['is', 'event:page', paths]],
   };
 
-  const trafficData = await queryPlausible(endpoint, apiKey, trafficBody);
+  const trafficData = await queryPlausible(endpoint, apiKey, trafficBody, timeoutMs);
 
   if (trafficData?.results) {
     for (const row of trafficData.results) {
@@ -159,8 +158,8 @@ async function fetchChunk(
       const m = row.metrics;
       const pageviews = m[2] ?? 0;
       const visits = m[1] ?? 0;
-      // Key by normalized path for consistent matching
-      results.set(normalizePath(pagePath), {
+      // Same exact-case key as the crawled paths
+      results.set(pagePath, {
         visitors: m[0] ?? 0,
         visits,
         pageviews,
@@ -184,6 +183,7 @@ async function queryPlausible(
   endpoint: string,
   apiKey: string,
   body: Record<string, unknown>,
+  timeoutMs: number,
   retries = 0,
 ): Promise<PlausibleQueryResponse> {
   try {
@@ -194,6 +194,9 @@ async function queryPlausible(
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify(body),
+      // fetch has no overall deadline: a stalled server would hold the
+      // post-crawl phase forever. Also bounds reading the body below.
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (response.status === 401) {
@@ -214,7 +217,7 @@ async function queryPlausible(
         const backoff = 5000 * Math.pow(2, retries);
         process.stderr.write(`Plausible rate limit hit, waiting ${backoff / 1000}s...\n`);
         await sleep(backoff);
-        return queryPlausible(endpoint, apiKey, body, retries + 1);
+        return queryPlausible(endpoint, apiKey, body, timeoutMs, retries + 1);
       }
       throw new Error('Plausible API rate limit exceeded after ' + MAX_RETRIES + ' retries.');
     }
@@ -231,7 +234,7 @@ async function queryPlausible(
     if (retries < MAX_RETRIES) {
       const backoff = 3000 * Math.pow(2, retries);
       await sleep(backoff);
-      return queryPlausible(endpoint, apiKey, body, retries + 1);
+      return queryPlausible(endpoint, apiKey, body, timeoutMs, retries + 1);
     }
 
     throw new Error(`Plausible API request failed: ${(err as Error).message}`);
@@ -255,26 +258,6 @@ function extractPath(pathname: string): string {
     path = path.slice(0, -1);
   }
   return path;
-}
-
-/**
- * Normalize a URL path for local matching:
- * - Decode percent-encoding
- * - Remove trailing slash (except root "/")
- * - Lowercase (for case-insensitive local matching)
- */
-function normalizePath(path: string): string {
-  let normalized = path;
-  try {
-    normalized = decodeURIComponent(normalized);
-  } catch {
-    // Keep as-is if decoding fails
-  }
-  normalized = normalized.toLowerCase();
-  if (normalized.length > 1 && normalized.endsWith('/')) {
-    normalized = normalized.slice(0, -1);
-  }
-  return normalized;
 }
 
 function sleep(ms: number): Promise<void> {

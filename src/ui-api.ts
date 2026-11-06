@@ -1,11 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { gzipSync } from 'node:zlib';
 import type { UiStore } from './ui-store.js';
-import type { UiCrawlManager } from './ui-crawl-manager.js';
+import { listModeUrls, type UiCrawlManager } from './ui-crawl-manager.js';
 import { diffPages, DIFF_FIELDS } from './diff.js';
 import type { PageData } from './types.js';
 import { format as csvFormat } from 'fast-csv';
-import { flattenPageForCsv } from './writer.js';
+import { flattenPageForCsv, csvDynamicColumns } from './writer.js';
 import { parseRequestUrl } from './ui-auth.js';
 import { assertPublicUrl, isTrustedProxy, trustedProxy } from './net-guard.js';
 import { formatError } from './utils.js';
@@ -143,6 +143,14 @@ export async function validateCrawlRequest(config: Record<string, unknown>): Pro
   if (config.seedUrl) entries.push(config.seedUrl);
   if (Array.isArray(config.sitemapUrls)) entries.push(...config.sitemapUrls);
   if (Array.isArray(config.urls)) entries.push(...config.urls);
+  if (config.urlList !== undefined && typeof config.urlList !== 'string') {
+    throw new BadRequestError('urlList must be a string (one URL per line)');
+  }
+  // The dashboard sends list-mode URLs as urlList text: check them too
+  entries.push(...listModeUrls({ urlList: config.urlList }));
+  if (config.mode === 'list' && listModeUrls(config).length === 0) {
+    throw new BadRequestError('List mode needs at least one URL');
+  }
   for (const u of entries) {
     if (typeof u !== 'string') throw new BadRequestError('URLs must be strings');
     try {
@@ -300,8 +308,10 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
         });
         const csvStream = csvFormat({ headers: true });
         csvStream.pipe(res);
+        // Every row carries every custom column: the header comes from row 1
+        const columns = csvDynamicColumns({}, results.pages as PageData[]);
         for (const page of results.pages as PageData[]) {
-          csvStream.write(flattenPageForCsv(page));
+          csvStream.write(flattenPageForCsv(page, columns));
         }
         csvStream.end();
         return true;

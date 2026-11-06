@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import type { Page } from 'playwright';
 import { newGuardedContext } from './browser.js';
-import { formatError } from './utils.js';
+import { formatError, snippetName } from './utils.js';
 
 export interface SnippetFn {
   (page: Page): Promise<Record<string, unknown>>;
@@ -29,7 +29,7 @@ export async function loadSnippets(paths: string[]): Promise<LoadedSnippet[]> {
 
   for (const snippetPath of paths) {
     const absolutePath = resolve(snippetPath);
-    const name = snippetPath.replace(/\.(js|mjs|cjs)$/, '').replace(/[/\\]/g, '_');
+    const name = snippetName(snippetPath);
 
     // S2 fix: Validate file exists and has supported extension
     const ext = extname(absolutePath);

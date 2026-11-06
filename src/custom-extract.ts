@@ -1,5 +1,38 @@
+import vm from 'node:vm';
 import type * as cheerio from 'cheerio';
 import type { CustomExtractionRule, CustomSearchRule } from './types.js';
+
+/** Time one regex search may take on one page before it is stopped. */
+export const REGEX_TIME_LIMIT_MS = 250;
+
+// A user regex runs on crawled HTML, which the crawled site controls. A
+// pattern with catastrophic backtracking (e.g. (a+)+$) can take minutes on
+// a short string and would freeze the event loop (dashboard, other crawls).
+// vm's timeout interrupts it; a pattern that times out once is not run
+// again for that rule (that crawl), as it would cost the limit on every page.
+const regexContext = vm.createContext(Object.create(null));
+const regexScript = new vm.Script('re.test(s)');
+const slowRules = new WeakSet<CustomSearchRule>();
+
+function regexSearch(rule: CustomSearchRule, subject: string): boolean {
+  if (slowRules.has(rule)) return false;
+  const ctx = regexContext as { re?: RegExp; s?: string };
+  ctx.re = new RegExp(rule.pattern);
+  ctx.s = subject;
+  try {
+    return regexScript.runInContext(regexContext, { timeout: REGEX_TIME_LIMIT_MS }) === true;
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') {
+      slowRules.add(rule);
+      process.stderr.write(`Custom search /${rule.pattern.slice(0, 80)}/ took over ${REGEX_TIME_LIMIT_MS} ms on one page; skipped for the rest of this crawl (reported as not found)\n`);
+      return false;
+    }
+    throw err;
+  } finally {
+    ctx.re = undefined;
+    ctx.s = undefined;
+  }
+}
 
 /**
  * Run custom CSS extractions against the page using existing cheerio instance.
@@ -44,10 +77,9 @@ export function runCustomSearches(
     try {
       if (rule.isRegex) {
         // S1 fix: Test regex on a truncated sample to limit ReDoS exposure
-        const regex = new RegExp(rule.pattern);
         const REGEX_SAMPLE_LIMIT = 500_000;
         const sample = html.length > REGEX_SAMPLE_LIMIT ? html.slice(0, REGEX_SAMPLE_LIMIT) : html;
-        results[rule.name] = regex.test(sample);
+        results[rule.name] = regexSearch(rule, sample);
       } else {
         results[rule.name] = html.includes(rule.pattern);
       }

@@ -140,36 +140,55 @@ export function mergeGscData(
 ): Map<string, GscData> {
   const merged = new Map<string, GscData>();
 
-  // Build normalized lookup from GSC data
+  // Build normalized lookup from GSC data, plus a protocol/www-agnostic one
+  // that only answers when a single GSC URL has that key (http://a.test/x
+  // and https://www.a.test/x can both be real rows: then no guess is made).
   const normalizedGsc = new Map<string, GscData>();
+  const looseGsc = new Map<string, { norm: string; data: GscData } | null>();
   for (const [url, data] of gscData) {
-    normalizedGsc.set(normalizeUrl(url), data);
+    const norm = normalizeUrl(url);
+    normalizedGsc.set(norm, data);
+    const key = looseKey(norm);
+    const seen = looseGsc.get(key);
+    if (seen === undefined) looseGsc.set(key, { norm, data });
+    else if (seen && seen.norm !== norm) looseGsc.set(key, null);
   }
 
   for (const url of crawledUrls) {
     const norm = normalizeUrl(url);
-
-    // Try exact normalized match
-    const data = normalizedGsc.get(norm);
-    if (data) {
-      merged.set(url, data);
-      continue;
-    }
-
     // Try with/without trailing slash
     const alt = norm.endsWith('/') ? norm.slice(0, -1) : norm + '/';
-    const altData = normalizedGsc.get(alt);
-    if (altData) {
-      merged.set(url, altData);
-    }
+
+    const data = normalizedGsc.get(norm)
+      ?? normalizedGsc.get(alt)
+      ?? looseGsc.get(looseKey(norm))?.data
+      ?? looseGsc.get(looseKey(alt))?.data;
+    if (data) merged.set(url, data);
   }
 
   return merged;
 }
 
+/** Normalized URL without its protocol and a leading "www." on the host. */
+function looseKey(norm: string): string {
+  return norm.replace(/^https?:\/\/(www\.)?/i, '');
+}
+
+/**
+ * Percent-decode only RFC 3986 unreserved characters (letters, digits,
+ * - . _ ~) and upper-case the hex of the rest: /a%2Fb stays a different
+ * resource from /a/b, while /%7Euser and /~user match.
+ */
+function normalizePercentEncoding(path: string): string {
+  return path.replace(/%[0-9a-fA-F]{2}/g, (m) => {
+    const ch = String.fromCharCode(parseInt(m.slice(1), 16));
+    return /[A-Za-z0-9\-._~]/.test(ch) ? ch : m.toUpperCase();
+  });
+}
+
 /**
  * Normalize URL for matching: lowercase host, remove fragment, sort query params,
- * normalize encoding (%2F -> /, %20 -> space), and remove default ports.
+ * normalize percent-encoding (unreserved characters only), and remove default ports.
  */
 function normalizeUrl(rawUrl: string): string {
   try {
@@ -182,12 +201,8 @@ function normalizeUrl(rawUrl: string): string {
         (u.protocol === 'http:' && u.port === '80')) {
       u.port = '';
     }
-    // Decode percent-encoded path segments for consistent comparison
-    try {
-      u.pathname = decodeURIComponent(u.pathname);
-    } catch {
-      // Keep as-is if decoding fails (malformed encoding)
-    }
+    // Same spelling for equivalent encodings; reserved ones (%2F) are kept
+    u.pathname = normalizePercentEncoding(u.pathname);
     // Sort query params for consistent comparison
     const params = new URLSearchParams(u.search);
     const sorted = new URLSearchParams([...params.entries()].sort());

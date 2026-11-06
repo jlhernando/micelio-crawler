@@ -9,7 +9,7 @@ import { fetchPage, checkExternalUrl, headResourceSize, type FetchOptions } from
 import { formatError } from './utils.js';
 import { credentialHostSet, urlBlockReason } from './net-guard.js';
 import { extractPageData, extractResourceRefs, extractBodyText, type ExtractionOptions } from './extractor.js';
-import { ResultWriter } from './writer.js';
+import { ResultWriter, csvDynamicColumns } from './writer.js';
 import { closeBrowser, setBrowserProxy } from './browser.js';
 import { loadSnippets, runSnippets, type LoadedSnippet } from './snippets.js';
 import { fetchPageSpeed } from './pagespeed.js';
@@ -201,7 +201,7 @@ export async function crawl(
   }
 
   // Initialize writer
-  const writer = new ResultWriter(config.outputPath, config.outputFormat);
+  const writer = new ResultWriter(config.outputPath, config.outputFormat, csvDynamicColumns(config));
   // Awaiting the write holds the worker slot until the stream drains
   // (backpressure). A failed stream stops the crawl (shouldAbort) and its
   // error is thrown by writer.close().
@@ -537,7 +537,7 @@ export async function crawl(
 
           // Phase 12: Render comparison (when JS rendering produced different HTML)
           if (fetchResult.rawHtml && fetchResult.html !== fetchResult.rawHtml) {
-            pageData.renderDiffs = compareRender(fetchResult.rawHtml, fetchResult.html);
+            pageData.renderDiffs = compareRender(fetchResult.rawHtml, fetchResult.html, fetchResult.finalUrl);
           }
 
           // Shared cheerio parse for n-grams, page-weight, and embeddings (avoid redundant parsing)
@@ -847,7 +847,7 @@ export async function crawl(
   const hasPostCrawlEnrichment = !cancelled() && newPages.some((p) => p.sitemapData !== null || p.pageWeight !== null);
   if (hasPostCrawlEnrichment) {
     process.stderr.write(`Updating output with post-crawl data...\n`);
-    const rewriter = new ResultWriter(config.outputPath, config.outputFormat);
+    const rewriter = new ResultWriter(config.outputPath, config.outputFormat, csvDynamicColumns(config, newPages));
     for (const page of newPages) {
       await rewriter.write(page);
     }

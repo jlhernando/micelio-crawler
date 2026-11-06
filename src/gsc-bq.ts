@@ -70,14 +70,7 @@ export async function fetchGscFromBigQuery(options: GscBqOptions): Promise<Map<s
   }
   const bigquery = new BigQuery(bqOptions);
 
-  // Calculate date range
-  const endDate = new Date();
-  endDate.setDate(endDate.getDate() - 3); // GSC data has ~3 day lag
-  const startDate = new Date(endDate);
-  startDate.setDate(startDate.getDate() - days);
-
-  const startStr = formatDateYmd(startDate);
-  const endStr = formatDateYmd(endDate);
+  const { startStr, endStr } = bqDateRange(days);
 
   // Build URL parameter list for IN clause
   // Batch in chunks of 1000 to avoid query size limits
@@ -146,6 +139,20 @@ export async function fetchGscFromBigQuery(options: GscBqOptions): Promise<Map<s
   }
 
   return results;
+}
+
+/**
+ * Inclusive date range of `days` calendar days (UTC) ending 3 days ago
+ * (GSC data lag). The query uses BETWEEN, which includes both ends, so the
+ * start is days - 1 before the end: 90 days means 90 dates, not 91.
+ */
+export function bqDateRange(days: number, now = new Date()): { startStr: string; endStr: string } {
+  const count = Math.max(1, Math.floor(days));
+  const endDate = new Date(now);
+  endDate.setUTCDate(endDate.getUTCDate() - 3);
+  const startDate = new Date(endDate);
+  startDate.setUTCDate(startDate.getUTCDate() - (count - 1));
+  return { startStr: formatDateYmd(startDate), endStr: formatDateYmd(endDate) };
 }
 
 /**

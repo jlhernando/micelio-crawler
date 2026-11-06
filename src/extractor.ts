@@ -113,6 +113,7 @@ export function extractPageData(
     images,
     depth,
     crawledAt: new Date().toISOString(),
+    ...lastModifiedField(fetchResult.headers?.['last-modified']),
     hreflang,
     structuredData,
     openGraph,
@@ -147,6 +148,18 @@ export function extractPageData(
     inlinks: 0,
     pageRank: 0,
   };
+}
+
+/**
+ * `lastModified` from a Last-Modified header: kept only when it parses and
+ * is not in the future (a clock-skewed or bogus header is no signal).
+ * Spread into PageData so pages without it carry no key.
+ */
+export function lastModifiedField(header: string | undefined, now = Date.now()): { lastModified?: string } {
+  if (!header) return {};
+  const at = Date.parse(header);
+  if (Number.isNaN(at) || at > now + 60_000) return {};
+  return { lastModified: new Date(at).toISOString() };
 }
 
 function buildErrorPage(fetchResult: FetchResult, depth: number): PageData {

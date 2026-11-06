@@ -66,6 +66,13 @@ describe('normalizeUrlForComparison', () => {
     expect(normalizeUrlForComparison('https://example.com/page/')).toBe('example.com/page');
   });
 
+  it('keeps a non-default port (another origin), drops the default one', () => {
+    expect(normalizeUrlForComparison('https://example.com:8443/page'))
+      .not.toBe(normalizeUrlForComparison('https://example.com/page'));
+    expect(normalizeUrlForComparison('https://example.com:443/page')).toBe('example.com/page');
+    expect(normalizeUrlForComparison('http://example.com:80/page')).toBe('example.com/page');
+  });
+
   it('preserves root path as /', () => {
     expect(normalizeUrlForComparison('https://example.com/')).toBe('example.com/');
   });

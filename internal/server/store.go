@@ -355,12 +355,7 @@ func (s *UiStore) createCrawlJob(config map[string]interface{}, existingDBPath s
 		return nil, fmt.Errorf("marshal config: %w", err)
 	}
 
-	seedURL := ""
-	if u, ok := config["seedUrl"].(string); ok {
-		seedURL = u
-	} else if u, ok := config["url"].(string); ok {
-		seedURL = u
-	}
+	seedURL := jobSeedURL(config)
 	mode := "spider"
 	if m, ok := config["mode"].(string); ok {
 		mode = m
@@ -695,6 +690,34 @@ func (s *UiStore) Close() error {
 	return err
 }
 
+// jobSeedURL is the URL a crawl job is shown under (History, Monitor,
+// sidebar, reports): the start URL, or for list and sitemap crawls, which
+// have none, the first URL of the list or the first sitemap.
+func jobSeedURL(config map[string]interface{}) string {
+	for _, k := range []string{"seedUrl", "url"} {
+		if u, _ := config[k].(string); strings.TrimSpace(u) != "" {
+			return strings.TrimSpace(u)
+		}
+	}
+	for _, k := range []string{"urlList", "urls", "sitemapUrls", "sitemapUrl"} {
+		switch v := config[k].(type) {
+		case string:
+			for _, line := range strings.Split(v, "\n") {
+				if line = strings.TrimSpace(line); line != "" {
+					return line
+				}
+			}
+		case []interface{}:
+			for _, e := range v {
+				if u, _ := e.(string); strings.TrimSpace(u) != "" {
+					return strings.TrimSpace(u)
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func rowToJob(stmt *sqlite.Stmt) *CrawlJob {
 	job := &CrawlJob{
 		ID:         stmt.ColumnText(0),
@@ -711,6 +734,9 @@ func rowToJob(stmt *sqlite.Stmt) *CrawlJob {
 	var cfg map[string]interface{}
 	_ = json.Unmarshal([]byte(stmt.ColumnText(1)), &cfg)
 	job.Config = cfg
+	if job.SeedURL == "" { // list and sitemap crawls saved before jobSeedURL
+		job.SeedURL = jobSeedURL(cfg)
+	}
 
 	// Nullable fields
 	if stmt.ColumnType(4) != sqlite.TypeNull {

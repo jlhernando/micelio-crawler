@@ -4,6 +4,11 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+### Fixed
+
+- **Monitor errors panel** lists 4xx/5xx pages as well as network errors, and a Monitor opened or reloaded mid-crawl shows the errors seen so far (the server keeps the latest 200, credentials in URLs masked). Before, it could say "No errors yet" next to a non-zero error counter.
+- **List and sitemap crawls show their site** in the sidebar, History and Monitor: they use the first URL of the list or the first sitemap, also for crawls saved before.
+
 ## [1.14.0] - 2026-11-06
 
 A second round of security and reliability fixes: proxies and Tor work safely, credentials stay on the exact site, crawled content is treated as data everywhere it leaves Micelio, and the dashboard, log analysis and imports have firm limits.

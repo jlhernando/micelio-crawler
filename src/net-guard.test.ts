@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest';
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from 'node:http';
 import { connect as netConnect, type AddressInfo } from 'node:net';
-import { ProxyAgent, request } from 'undici';
+import { request } from 'undici';
+import { pinnedProxyDispatcher } from './proxy-dispatcher.js';
 import {
   isBlockedIp, urlBlockReason, guardedLookup, guardedDispatcher, assertPublicUrl,
   setAllowPrivateNetworks, stripCredentialsOnCrossOrigin, isCredentialHeader, credentialHostAllowed,
@@ -402,14 +403,13 @@ describe('fetcher through a user proxy (CLI --proxy / trusted proxy)', () => {
     await new Promise<void>((r) => site.listen(0, '127.0.0.1', r));
     const sitePort = (site.address() as AddressInfo).port;
     proxy = createServer((req, res) => {
-      proxied.push(req.url || '');
+      proxied.push(`${req.method} ${req.url}`);
       const out = httpRequest({ host: '127.0.0.1', port: sitePort, path: new URL(req.url || '').pathname, method: req.method }, (r) => {
         res.writeHead(r.statusCode ?? 502, r.headers);
         r.pipe(res);
       });
       req.pipe(out);
     });
-    // undici's ProxyAgent tunnels plain http too
     proxy.on('connect', (req, sock, head) => {
       proxied.push(`CONNECT ${req.url}`);
       const t = netConnect(sitePort, '127.0.0.1', () => {
@@ -435,8 +435,8 @@ describe('fetcher through a user proxy (CLI --proxy / trusted proxy)', () => {
     proxy.close();
   });
 
-  it('resolves and checks each target before handing it to the proxy', async () => {
-    const dispatcher = new ProxyAgent(proxyUrl);
+  it('resolves and checks each target, then hands the proxy only the checked IP', async () => {
+    const dispatcher = pinnedProxyDispatcher(proxyUrl);
     try {
       proxied.length = 0;
       const page = await fetchPage('http://evil.test/secret', { userAgent: 't', dispatcher });
@@ -448,13 +448,13 @@ describe('fetcher through a user proxy (CLI --proxy / trusted proxy)', () => {
       const ok = await fetchPage('http://public.test/', { userAgent: 't', dispatcher });
       expect(ok.statusCode).toBe(200);
       expect(ok.html).toContain('page');
-      expect(proxied).toEqual(['CONNECT public.test:80']);
+      expect(proxied).toEqual(['GET http://203.0.113.7:80/']);
 
       // A redirect hop to a name that resolves to loopback is refused too
       proxied.length = 0;
       const hop = await fetchPage('http://public.test/hop', { userAgent: 't', dispatcher });
       expect(hop.error).toMatch(/Blocked/);
-      expect(proxied).toEqual(['CONNECT public.test:80']);
+      expect(proxied).toEqual(['GET http://203.0.113.7:80/hop']);
     } finally {
       await dispatcher.close();
     }

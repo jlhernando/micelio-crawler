@@ -82,7 +82,7 @@ function parseIPv4(ip: string): number[] | null {
 }
 
 /** Expand an IPv6 address to 8 hextets (handles :: and a dotted-quad tail). */
-function parseIPv6(ip: string): number[] | null {
+export function parseIPv6(ip: string): number[] | null {
   let addr = ip.replace(/^\[|\]$/g, '').toLowerCase();
   const zone = addr.indexOf('%');
   if (zone >= 0) addr = addr.slice(0, zone);
@@ -230,15 +230,16 @@ export async function assertPublicUrl(rawUrl: string): Promise<void> {
 /**
  * Resolve a host for a direct connection: the URL-level check first, then
  * DNS through guardedLookup. Returns the checked address to dial, so the
- * caller connects to exactly the address that was checked.
+ * caller connects to exactly the address that was checked. `family` asks
+ * DNS for one address family only (SOCKS4 can carry IPv4 only).
  */
-export async function resolvePublicAddress(hostname: string): Promise<{ address: string; family: number }> {
+export async function resolvePublicAddress(hostname: string, family?: 4 | 6): Promise<{ address: string; family: number }> {
   const host = bareHost(hostname);
   const reason = urlBlockReason(`http://${host.includes(':') ? `[${host}]` : host}/`);
   if (reason) throw new BlockedAddressError(reason);
   if (isIP(host)) return { address: host, family: isIP(host) };
   return new Promise((resolve, reject) => {
-    guardedLookup(host, {}, (err, address, family) => {
+    guardedLookup(host, family ? { family } : {}, (err, address, family) => {
       if (err) reject(err);
       else resolve({ address: address as string, family: family ?? 4 });
     });

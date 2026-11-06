@@ -3,6 +3,7 @@ import type { FetchResult, HeadResult, RedirectHop } from './types.js';
 import { renderPage } from './browser.js';
 import { formatError } from './utils.js';
 import { assertPublicUrl, BlockedAddressError, credentialHostAllowed, guardedDispatcher, stripCredentialsOnCrossOrigin, urlBlockReason } from './net-guard.js';
+import { PinnedProxyAgent } from './proxy-dispatcher.js';
 
 const MAX_RETRIES = 3;
 const MAX_REDIRECTS = 10;
@@ -27,8 +28,10 @@ export interface FetchOptions {
   cookies?: string;
   /**
    * Custom proxy. Without one, requests use the SSRF-guarded dispatcher.
-   * A proxy resolves and connects to targets itself, so with one every
-   * target (each redirect hop too) is resolved and checked here first.
+   * Use pinnedProxyDispatcher (proxy-dispatcher.ts): it resolves and checks
+   * every target (each redirect hop too) here and hands the proxy only the
+   * checked IP. Any other dispatcher gets a pre-check, which cannot stop a
+   * proxy that resolves the name again.
    */
   dispatcher?: Dispatcher;
   /**
@@ -86,7 +89,7 @@ export async function fetchPage(
 
   while (true) {
     try {
-      if (options.dispatcher) await assertPublicUrl(currentUrl);
+      if (options.dispatcher && !(options.dispatcher instanceof PinnedProxyAgent)) await assertPublicUrl(currentUrl);
       const { statusCode, headers, body } = await request(currentUrl, {
         headers: requestHeaders,
         maxRedirections: 0,
@@ -306,7 +309,7 @@ export async function fetchHead(
 
   while (true) {
     try {
-      if (options.dispatcher) await assertPublicUrl(currentUrl);
+      if (options.dispatcher && !(options.dispatcher instanceof PinnedProxyAgent)) await assertPublicUrl(currentUrl);
       const { statusCode, headers, body } = await request(currentUrl, {
         method: 'HEAD',
         headers: requestHeaders,

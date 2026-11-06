@@ -1006,8 +1006,8 @@ program
         console.error(`Error: Invalid proxy URL "${opts.proxy}". Format: http://host:port or socks5://host:port`);
         process.exit(1);
       }
-      const { ProxyAgent } = await import('undici');
-      dispatcher = new ProxyAgent(opts.proxy);
+      const { pinnedProxyDispatcher } = await import('./proxy-dispatcher.js');
+      dispatcher = pinnedProxyDispatcher(opts.proxy);
     }
 
     const fetchOpts: HeadFetchOptions = {
@@ -1054,7 +1054,7 @@ program
 
     // Close proxy dispatcher
     if (dispatcher && 'close' in dispatcher) {
-      await (dispatcher as import('undici').ProxyAgent).close();
+      await dispatcher.close();
     }
 
     const durationSec = ((Date.now() - startTime) / 1000).toFixed(1);

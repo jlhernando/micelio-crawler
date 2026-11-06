@@ -19,6 +19,7 @@ import (
 	"github.com/micelio/micelio/internal/crawler"
 	"github.com/micelio/micelio/internal/logs"
 	"github.com/micelio/micelio/internal/scheduler"
+	"github.com/micelio/micelio/internal/secrets"
 	"github.com/micelio/micelio/internal/storage"
 	"github.com/micelio/micelio/internal/types"
 )
@@ -70,10 +71,13 @@ type ActiveCrawl struct {
 	Queued      int // URLs in queue waiting to be crawled
 	TotalSeen   int // total unique URLs discovered
 	Excluded    int // URLs filtered out by rules
-	Paused      bool
-	Stopping    bool          // true = stop crawling but still run analysis
-	pauseCh     chan struct{} // closed when unpaused; recreated on each pause
-	pauseMu     sync.Mutex
+	// RecentErrors holds the latest failed pages (4xx, 5xx, network
+	// errors), so a Monitor opened mid-crawl can list them.
+	RecentErrors []CrawlError
+	Paused       bool
+	Stopping     bool          // true = stop crawling but still run analysis
+	pauseCh      chan struct{} // closed when unpaused; recreated on each pause
+	pauseMu      sync.Mutex
 }
 
 // WaitIfPaused blocks until the crawl is unpaused or the context is cancelled.
@@ -497,6 +501,45 @@ func (m *CrawlManager) activeCounters(crawlID string) (queued, totalSeen, exclud
 	return m.active.Queued, m.active.TotalSeen, m.active.Excluded
 }
 
+// CrawlError is one failed page shown in the Monitor's error list.
+type CrawlError struct {
+	URL        string `json:"url"`
+	StatusCode int    `json:"statusCode,omitempty"`
+	Error      string `json:"error"`
+}
+
+// maxRecentErrors caps the errors kept for the Monitor (the dashboard shows
+// the same number).
+const maxRecentErrors = 200
+
+// crawlErrorFor describes a failed page, or returns false for a page that
+// did not fail: a network error, or a 4xx/5xx answer.
+func crawlErrorFor(url string, statusCode int, pageError string) (CrawlError, bool) {
+	switch {
+	case pageError != "":
+		return CrawlError{URL: url, StatusCode: statusCode, Error: pageError}, true
+	case statusCode >= 400:
+		return CrawlError{URL: url, StatusCode: statusCode, Error: fmt.Sprintf("HTTP %d", statusCode)}, true
+	}
+	return CrawlError{}, false
+}
+
+// activeErrors returns a copy of the running crawl's latest errors, oldest
+// first, with credentials in URLs masked.
+func (m *CrawlManager) activeErrors(crawlID string) []CrawlError {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.active == nil || m.active.ID != crawlID {
+		return nil
+	}
+	out := make([]CrawlError, len(m.active.RecentErrors))
+	for i, e := range m.active.RecentErrors {
+		e.URL = secrets.RedactURL(e.URL)
+		out[i] = e
+	}
+	return out
+}
+
 // GetStatus returns the active crawl status or nil.
 func (m *CrawlManager) GetStatus() *ActiveCrawl {
 	m.mu.RLock()
@@ -643,6 +686,12 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 				group = "err"
 			}
 			m.active.StatusCodes[group]++
+			if ce, ok := crawlErrorFor(p.CurrentURL, sc, p.PageError); ok {
+				if len(m.active.RecentErrors) >= maxRecentErrors {
+					m.active.RecentErrors = m.active.RecentErrors[1:]
+				}
+				m.active.RecentErrors = append(m.active.RecentErrors, ce)
+			}
 		}
 		m.mu.Unlock()
 

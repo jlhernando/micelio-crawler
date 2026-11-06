@@ -227,8 +227,12 @@
 
       pendingRTs.push(responseTimeMs);
 
+      // Failed pages: network errors and 4xx/5xx answers, which the
+      // "Errors" counter above also counts.
       if (error) {
         pendingErrors.push({ url, error });
+      } else if (statusCode >= 400) {
+        pendingErrors.push({ url, error: `HTTP ${statusCode}` });
       }
 
       scheduleFlush();
@@ -355,6 +359,12 @@
     startedAt = new Date(job.startedAt as string).getTime();
     if (status !== 'completed') {
       elapsedMs = Date.now() - startedAt;
+    }
+    // A Monitor opened mid-crawl lists the errors seen so far (the server
+    // keeps the latest ones); live messages are appended after them.
+    const recent = job.recentErrors as { url: string; error: string }[] | undefined;
+    if (Array.isArray(recent) && recent.length > 0 && errors.length === 0) {
+      errors = recent.map(e => ({ url: e.url, error: e.error })).slice(-200);
     }
     // Restore status code counts from active crawl data
     if (job.statusCodes && typeof job.statusCodes === 'object') {

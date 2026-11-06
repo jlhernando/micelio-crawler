@@ -155,8 +155,10 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 				TotalSeen   int            `json:"totalSeen"`
 				Excluded    int            `json:"excluded"`
 				Analyzing   bool           `json:"analyzing,omitempty"`
+				// Latest failed pages, for a Monitor opened mid-crawl.
+				RecentErrors []CrawlError `json:"recentErrors,omitempty"`
 			}
-			resp := jobWithLiveStats{CrawlJob: job, StatusCodes: codes, Analyzing: analyzing}
+			resp := jobWithLiveStats{CrawlJob: job, StatusCodes: codes, Analyzing: analyzing, RecentErrors: manager.activeErrors(id)}
 			resp.Queued, resp.TotalSeen, resp.Excluded = manager.activeCounters(id)
 			jsonOK(w, resp)
 			return

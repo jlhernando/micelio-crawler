@@ -4,6 +4,28 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-11-06
+
+A second round of security and reliability fixes: proxies and Tor work safely, credentials stay on the exact site, crawled content is treated as data everywhere it leaves Micelio, and the dashboard, log analysis and imports have firm limits.
+
+### Security
+
+- **Proxies get the checked address, never the host name.** With a proxy (HTTP, SOCKS5, Tor or `HTTPS_PROXY`), every target is resolved and checked on this computer first, and the proxy is asked for that IP. A proxy can no longer resolve a name to an internal address. Proxies must accept IP targets; plain `http` goes through `CONNECT` to port 80.
+- **Local proxies and Tor work again.** A proxy you set yourself may run on this computer or the local network (`--proxy http://127.0.0.1:…`, `--proxy tor`); sites reached through it keep the full check. Before, such crawls returned 0 pages.
+- **Dashboard crawls use only the proxy you trust.** Start the dashboard with `micelio ui --trusted-proxy <url>` (or `MICELIO_TRUSTED_PROXY`); any other proxy in a crawl config, schedule or resume is refused.
+- **Credentials go to the same host or its www twin only**, on the same port and never after a switch from https to http. Other subdomains (shop tenants, shared hosting) no longer receive cookies or auth headers. Masked secrets are restored only for that same host.
+- **Wrong tokens are throttled.** After 5 wrong tokens an address waits 1 s, doubling up to 5 min; a logged-in browser keeps working. The browser login posts the token instead of putting it in the URL, and `/ws?token=` is gone.
+- **`micelio import` and `micelio mcp` check they are talking to your own dashboard** before sending a crawl or a token, so another program on the port cannot collect them.
+- **Crawled content is treated as data.** CSV exports neutralise spreadsheet formulas, terminal output escapes control characters, the HTML report escapes attribute quotes, and MCP answers redact credentials in URLs, cap their size and mark page content as untrusted.
+- Google OAuth callbacks check the state on every call; unknown SMTP security modes are refused instead of sending in clear text; webhook errors no longer log token-bearing URLs; Docker base images are pinned by digest.
+
+### Fixed
+
+- **Firm limits for the dashboard**: header, idle and no-progress timeouts, at most 64 WebSocket clients, shared work for identical requests, one log merge at a time, batched merge reads, and size caps for `micelio import` on the command line too.
+- **JSON-LD** is read item by item with size caps, so a hostile page cannot blow up memory.
+- **Log analysis** caps distinct URLs, decompressed size and format-detection buffering; turning GC off is safe with several analyses at once; bot verification runs on a bounded pool, caches by bot and IP, and accepts Googlebot only from `googlebot.com` and `google.com`. Speed is unchanged (about 270K lines/s).
+- **Legacy TypeScript crawler**: OAuth with state and PKCE, CSV and terminal sanitising, caps on page, sitemap, JSON-LD, n-gram and embedding work, a safer AI prompt, redacted scheduler logs, no crash on a bad Host header, guarded webhook redirects and IP-pinned proxies.
+
 ## [1.13.0] - 2026-11-05
 
 A client-ready PDF report with an SEO and GEO backlog, Core Web Vitals and CDN checks; hreflang and AI agent readiness audits; and a round of security and reliability fixes.

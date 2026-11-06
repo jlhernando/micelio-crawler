@@ -619,10 +619,15 @@ start without a token. Prefer the `MICELIO_AUTH_TOKEN` environment variable to
 the flag: a flag value shows in the process list. TLS and network access
 control should be provided by a trusted reverse proxy or host firewall.
 
-With a token, CLI and MCP clients send `Authorization: Bearer <token>`. In a
-browser, open the dashboard once as `http://host:3100/?token=<token>`: Micelio
-sets an HttpOnly, SameSite=Strict cookie and removes the token from the address
-bar. The cookie holds a value derived from the token (HMAC-SHA256), not the
+With a token, CLI and MCP clients send `Authorization: Bearer <token>` (never
+`?token=`: `/api/` and `/ws` do not read it from the URL). In a browser, enter
+the token on the dashboard's login screen: Micelio sets an HttpOnly,
+SameSite=Strict cookie. The token is posted, so it does not end up in the
+browser history or a proxy's access log. Opening `http://host:3100/?token=<token>`
+still works and redirects to the same page without the token, but the URL with
+the token may be kept by a proxy log. After 5 wrong tokens from one address,
+further attempts from it get 429 for 1 s, doubling up to 5 minutes; a right
+token resets it, and a browser that is already logged in is never blocked. The cookie holds a value derived from the token (HMAC-SHA256), not the
 token itself, and its name includes the port (`micelio_session_3100`), so two
 dashboards on one host keep separate logins. Changing the token logs browsers
 out.

@@ -53,6 +53,16 @@ requests, robots.txt respected.`,
 				}
 			}
 			backend := mcpserver.NewHTTPBackend(serverURL, authToken)
+			if isLocalHTTP(backend.Base) {
+				// Every connection to a dashboard on this computer must
+				// prove it is this user's dashboard before the token or a
+				// tool call goes out (an impostor could hold the port).
+				client, err := dashboardClient(backend.Base, 60*time.Second)
+				if err != nil {
+					return err
+				}
+				backend.Client = client
+			}
 			// The dashboard is checked (and started) on the first tool call,
 			// so the agent's handshake never waits for it.
 			backend.Ready = func(ctx context.Context) error {
@@ -74,8 +84,12 @@ requests, robots.txt respected.`,
 // ensureDashboard makes sure a dashboard answers at base, starting one if
 // autostart is set.
 func ensureDashboard(ctx context.Context, base, token string, autostart bool) error {
-	if _, ok := reachableDashboard(base); ok {
+	switch state, err := probeDashboard(base); state {
+	case dashVerified:
 		return nil
+	case dashUnverified:
+		// Something else holds the port: starting a dashboard cannot help.
+		return fmt.Errorf("refusing to use %s: %v; is the dashboard running as this user with this HOME and this micelio version?", base, innerErr(err))
 	}
 	if !autostart {
 		return fmt.Errorf("no Micelio dashboard answers at %s: start it with \"micelio ui\" (or run micelio mcp without --no-autostart)", base)
@@ -90,7 +104,7 @@ func ensureDashboard(ctx context.Context, base, token string, autostart bool) er
 	}
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, ok := reachableDashboard(base); ok {
+		if state, _ := probeDashboard(base); state == dashVerified {
 			log.Printf("micelio mcp: started the dashboard on %s (log %s)", net.JoinHostPort(host, port), logPath)
 			return proc.Release()
 		}

@@ -70,11 +70,11 @@
   <div class="max-w-xl mx-auto mt-16 rounded-md border border-border bg-surface-2 p-5 text-sm">
     <p class="text-fg font-medium mb-2">This dashboard needs its access token.</p>
     <p class="text-fg-2 mb-4">
-      It was started with <code>--auth-token</code> or <code>MICELIO_AUTH_TOKEN</code>. Open
-      <code>{location.origin}/?token=&lt;token&gt;</code> once, or enter the token below. The browser then keeps a login cookie.
+      It was started with <code>--auth-token</code> or <code>MICELIO_AUTH_TOKEN</code>. Enter the token below.
+      The browser then keeps a login cookie.
     </p>
     {#if auth.failed}
-      <p class="text-danger mb-3" role="alert">Wrong token, try again.</p>
+      <p class="text-danger mb-3" role="alert">{auth.message || 'Wrong token, try again.'}</p>
     {/if}
     <form class="flex gap-2" onsubmit={(e) => { e.preventDefault(); if (token.trim()) loginWithToken(token.trim()); }}>
       <input type="password" bind:value={token} placeholder="Access token" autocomplete="current-password"

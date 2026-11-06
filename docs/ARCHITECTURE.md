@@ -119,7 +119,14 @@ large files. It was tested with 3 files of 6.5 GB each (19.4 GB, 28M lines):
   a token (`--insecure-no-auth` to override); cross-site browser requests
   (foreign `Origin`, `Sec-Fetch-Site: cross-site` except navigations) get 403;
   a tokenless loopback dashboard refuses a `Host` that is not this computer
-  (DNS rebinding). Browsers log in once with `/?token=` (HttpOnly cookie).
+  (DNS rebinding). Browsers log in once on the login screen (POST `/login`,
+  HttpOnly cookie). Wrong tokens are throttled per client address
+  (`authlimit.go`: 5 free, then 1 s doubling to 5 min, 429 + Retry-After).
+- **Dashboard identity.** `internal/server/identity.go`: the dashboard that
+  holds the folder lock writes a random key to `~/.micelio/ui/dashboard.key`
+  (0600) and answers `GET /api/identity?nonce=` with HMAC(key, nonce, the
+  address reached). `micelio import` and `micelio mcp` check that proof on
+  every connection to a local http dashboard before sending a token or file.
 
 For how memory stays bounded on large crawls, see
 [Memory management](MEMORY-MANAGEMENT.md).

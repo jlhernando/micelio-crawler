@@ -4,10 +4,12 @@ package webhook
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -86,7 +88,8 @@ func Send(opts Options, payload Payload) bool {
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		req, err := http.NewRequest(http.MethodPost, opts.URL, bytes.NewReader(body))
 		if err != nil {
-			log.Printf("[webhook] request error: %v", err)
+			// The error quotes the URL, which may hold a token.
+			log.Printf("[webhook] invalid webhook URL %s", RedactURL(opts.URL))
 			return false
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -97,7 +100,7 @@ func Send(opts Options, payload Payload) bool {
 
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Printf("[webhook] attempt %d failed: %v", attempt+1, err)
+			log.Printf("[webhook] attempt %d failed: %s", attempt+1, redactErr(err))
 		} else {
 			resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -116,10 +119,26 @@ func Send(opts Options, payload Payload) bool {
 }
 
 // RedactURL strips path and query (may contain tokens) for safe logging.
+// Something that does not parse as a URL with a host is not shown at all.
 func RedactURL(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Host == "" {
-		return rawURL
+	if err != nil || parsed.Host == "" || parsed.Scheme == "" {
+		return "[invalid URL]"
 	}
 	return fmt.Sprintf("%s://%s/...", parsed.Scheme, parsed.Host)
+}
+
+// urlInText finds URLs inside an error message.
+var urlInText = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s"']+`)
+
+// redactErr renders a delivery error without the URL's path and query:
+// http.Client wraps every failure (DNS, TLS, timeout, redirect) in a
+// *url.Error that quotes the full request URL, and webhook URLs carry
+// their token there (Slack: in the path).
+func redactErr(err error) string {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Op + " " + RedactURL(ue.URL) + ": " + redactErr(ue.Err)
+	}
+	return urlInText.ReplaceAllStringFunc(err.Error(), RedactURL)
 }

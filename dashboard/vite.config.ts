@@ -17,6 +17,7 @@ export default defineConfig({
     // its own origin. It refuses pages from other ports of this machine.
     proxy: {
       '/api': { target: 'http://localhost:3000', changeOrigin: false },
+      '/login': { target: 'http://localhost:3000', changeOrigin: false },
       '/ws': {
         target: 'ws://localhost:3000',
         ws: true,

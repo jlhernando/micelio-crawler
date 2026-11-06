@@ -24,8 +24,9 @@ type EmailConfig struct {
 	Password string
 	From     string
 	To       []string
-	// Security is "starttls" (default, port 587), "tls" (implicit TLS, port
-	// 465) or "none" (plain text; only for local relays).
+	// Security is "starttls" (default, port 587), "tls" or "ssl" (implicit
+	// TLS, port 465) or "none" (plain text; only for local relays). Other
+	// values are refused (NormalizeSecurity).
 	Security string
 }
 
@@ -45,6 +46,22 @@ func ParseRecipients(s string) []string {
 	return out
 }
 
+// NormalizeSecurity checks an SMTP security setting. "" and "starttls"
+// mean STARTTLS, "tls" and "ssl" implicit TLS, "none" plain text. Anything
+// else is an error: a typo must never fall back to plain text, which would
+// send the SMTP password and the reports unencrypted.
+func NormalizeSecurity(s string) (string, error) {
+	switch v := strings.ToLower(strings.TrimSpace(s)); v {
+	case "", "starttls":
+		return "starttls", nil
+	case "tls", "ssl":
+		return "tls", nil
+	case "none":
+		return "none", nil
+	}
+	return "", fmt.Errorf("unknown SMTP security %q: use starttls, tls or none", s)
+}
+
 // dialTimeout bounds every SMTP step; tests shorten it.
 var dialTimeout = 20 * time.Second
 
@@ -58,7 +75,10 @@ func SendEmail(c EmailConfig, subject, text, html string) error {
 			return fmt.Errorf("invalid address %q", a)
 		}
 	}
-	security := strings.ToLower(c.Security)
+	security, err := NormalizeSecurity(c.Security)
+	if err != nil {
+		return err
+	}
 	port := c.Port
 	if port == 0 {
 		port = 587
@@ -70,7 +90,6 @@ func SendEmail(c EmailConfig, subject, text, html string) error {
 	tlsCfg := &tls.Config{ServerName: c.Host, MinVersion: tls.VersionTLS12}
 
 	var conn net.Conn
-	var err error
 	dialer := &net.Dialer{Timeout: dialTimeout}
 	if security == "tls" {
 		conn, err = tls.DialWithDialer(dialer, "tcp", addr, tlsCfg)
@@ -88,7 +107,7 @@ func SendEmail(c EmailConfig, subject, text, html string) error {
 	}
 	defer client.Close()
 
-	if security == "" || security == "starttls" {
+	if security == "starttls" {
 		if ok, _ := client.Extension("STARTTLS"); !ok {
 			return errors.New("the server does not offer STARTTLS; use security \"tls\" or a local relay with \"none\"")
 		}

@@ -22,6 +22,14 @@ The dashboard keeps running after the agent closes; its log goes to
 started. With `--no-autostart` the tool returns an error that tells you to run
 `micelio ui` instead.
 
+A dashboard on this computer must prove it is yours before `micelio mcp` sends
+it the token or a tool call: it holds a random key in
+`~/.micelio/ui/dashboard.key` (readable only by you) and answers a challenge
+with it on every new connection. A program that took the port first gets
+nothing, and the tool reports it. Run the dashboard as the same user, with
+the same HOME and a micelio version that has this check. A remote dashboard
+(`--server https://...`) is trusted through its TLS certificate instead.
+
 ## Setup
 
 ### Claude Code

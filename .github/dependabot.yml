@@ -52,3 +52,10 @@ updates:
         update-types:
           - "minor"
           - "patch"
+
+  # Base images in the Dockerfile are pinned by digest; this keeps them fresh.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0

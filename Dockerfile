@@ -7,13 +7,19 @@
 #           export MICELIO_AUTH_TOKEN="$(openssl rand -hex 32)"
 #           docker run --rm -p 127.0.0.1:3100:3100 -e MICELIO_AUTH_TOKEN \
 #             -v micelio-data:/home/micelio/.micelio micelio
-#         then open http://localhost:3100/?token=<the token> once in the browser.
+#         then open http://localhost:3100 and enter the token once.
 # CLI:    docker run --rm micelio crawl https://example.com --max-pages 100
 #
 # The legacy TypeScript crawler in src/ is not part of this image.
+#
+# Base images are pinned by digest (multi-arch index, checked 2026-11-06), so
+# a rebuild cannot pick up different layers behind the same tag. To update:
+# look up the tag's new index digest (docker buildx imagetools inspect
+# node:24-alpine) and replace the @sha256 part; Dependabot ("docker" in
+# .github/dependabot.yml) proposes these updates.
 
 # ---- Stage 1: dashboard (Vite build -> /src/dist/dashboard) ----
-FROM node:24-alpine AS dashboard
+FROM node:24-alpine@sha256:a34ab6d7f6f4813f4d0c5469d74685604b962fbdbf5793a7bc7b4998ecb867c8 AS dashboard
 WORKDIR /src/dashboard
 COPY dashboard/package.json dashboard/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -21,7 +27,7 @@ COPY dashboard/ ./
 RUN npm run build
 
 # ---- Stage 2: Go binary with the dashboard embedded ----
-FROM golang:1.26-alpine AS build
+FROM golang:1.26-alpine@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696 AS build
 WORKDIR /src
 ENV CGO_ENABLED=0
 COPY go.mod go.sum ./
@@ -37,7 +43,7 @@ ARG VERSION=docker
 RUN go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/micelio ./cmd/micelio
 
 # ---- Stage 3: runtime ----
-FROM alpine:3.22
+FROM alpine:3.22@sha256:bfe7ceb9f09ec0566c48fb93356e45a47a00be5a1dd14fa5b909e7709c66b034
 # JS rendering (--js) needs a Chrome/Chromium binary. It is optional
 # because it adds ~300 MB to the image.
 ARG WITH_CHROMIUM=false

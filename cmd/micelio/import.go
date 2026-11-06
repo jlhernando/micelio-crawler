@@ -49,11 +49,21 @@ next time the dashboard starts.`,
 				return err
 			}
 			if !local {
-				if base, ok := reachableDashboard(serverURL); ok {
+				base := strings.TrimRight(serverURL, "/")
+				switch state, err := probeDashboard(base); state {
+				case dashVerified:
 					return uploadImport(base, authToken, path, linkIntelligence)
-				}
-				if cmd.Flags().Changed("server") {
-					return fmt.Errorf("no dashboard answering at %s", serverURL)
+				case dashUnverified:
+					// Never send the crawl (or the token) to a program that
+					// only sits on the dashboard's port.
+					if cmd.Flags().Changed("server") {
+						return fmt.Errorf("refusing to send the crawl: %w", innerErr(err))
+					}
+					fmt.Fprintf(os.Stderr, "Not sending the crawl to %s: %v\nImporting into ~/.micelio instead.\n", base, innerErr(err))
+				default:
+					if cmd.Flags().Changed("server") {
+						return fmt.Errorf("no dashboard answering at %s", serverURL)
+					}
 				}
 			}
 			return localImport(cmd.Context(), path, linkIntelligence)
@@ -64,18 +74,6 @@ next time the dashboard starts.`,
 	cmd.Flags().BoolVar(&linkIntelligence, "link-intelligence", false, "run link analysis (centrality, suggestions) even if the crawl did not")
 	cmd.Flags().BoolVar(&local, "local", false, "import into ~/.micelio directly, even if a dashboard is running")
 	return cmd
-}
-
-func reachableDashboard(base string) (string, bool) {
-	base = strings.TrimRight(base, "/")
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(base + "/api/update/status")
-	if err != nil {
-		return "", false
-	}
-	resp.Body.Close()
-	// 401 still means a dashboard is there (it needs --auth-token).
-	return base, resp.StatusCode < 500
 }
 
 func uploadImport(base, token, path string, linkIntelligence bool) error {
@@ -104,11 +102,15 @@ func uploadImport(base, token, path string, linkIntelligence bool) error {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	fmt.Fprintf(os.Stderr, "Sending %s to the dashboard at %s...\n", filepath.Base(path), base)
-	// No redirects: one could carry the token to another host or to http.
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Do(req)
+	// No redirects (one could carry the token to another host or to http),
+	// and on this computer only to the dashboard that proved its identity.
+	client, err := dashboardClient(base, 0)
 	if err != nil {
 		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return innerErr(err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

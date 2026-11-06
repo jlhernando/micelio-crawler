@@ -65,11 +65,12 @@ machine. Another interface needs a token, or the dashboard refuses to start:
 ```bash
 export MICELIO_AUTH_TOKEN="$(openssl rand -hex 32)"
 micelio ui --host 0.0.0.0 --port 3100
-# In the browser, open once: http://<host>:3100/?token=<the token>
+# In the browser, open http://<host>:3100 and enter the token once
 ```
 
-The `?token=` visit sets a login cookie (derived from the token, never the token
-itself), so the dashboard works as usual afterwards. Requests from other
+Logging in sets a login cookie (derived from the token, never the token
+itself), so the dashboard works as usual afterwards. Repeated wrong tokens
+are slowed down (up to 5 minutes between tries). Requests from other
 websites are refused, so a page you visit cannot start crawls or updates
 through your local dashboard.
 

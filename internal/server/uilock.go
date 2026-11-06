@@ -18,10 +18,11 @@ var errUIDirBusy = errors.New("ui folder in use")
 // lock when the process exits, even after a crash.
 func lockUIDir(uiDir, owner string) (release func(), err error) {
 	path := filepath.Join(uiDir, "server.lock")
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
+	_ = f.Chmod(0o600) // also for a lock file made by an older version
 	if err := tryLockFile(f); err != nil {
 		b, _ := os.ReadFile(path)
 		f.Close()
@@ -33,7 +34,16 @@ func lockUIDir(uiDir, owner string) (release func(), err error) {
 	}
 	_ = f.Truncate(0)
 	_, _ = f.WriteAt([]byte(owner+"\n"), 0)
+	// Only the lock holder proves to the CLI that it is the dashboard.
+	removeKey, err := writeDashboardKey(uiDir)
+	if err != nil {
+		_ = f.Truncate(0)
+		unlockFile(f)
+		f.Close()
+		return nil, fmt.Errorf("write dashboard key: %w", err)
+	}
 	return func() {
+		removeKey()
 		_ = f.Truncate(0)
 		unlockFile(f)
 		f.Close()

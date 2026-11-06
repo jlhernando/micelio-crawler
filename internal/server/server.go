@@ -198,7 +198,7 @@ func StartUIServerWithOptions(opts ServerOptions, dashboardFS fs.FS) error {
 		log.Printf("Allowed hosts (reverse proxy / tunnel): %s\n", strings.Join(srv.allowedHosts, ", "))
 	}
 	if authToken != "" {
-		log.Printf("Auth: token required on /api/*, /ws and /debug/pprof/ (browser: open /?token=<token> once)\n")
+		log.Printf("Auth: token required on /api/*, /ws and /debug/pprof/ (browser: enter it on the login screen)\n")
 	}
 	return httpServer.ListenAndServe()
 }
@@ -224,10 +224,10 @@ func (s *Server) buildHandler(opts ServerOptions, dashboardFS fs.FS) http.Handle
 	mux := http.NewServeMux()
 
 	// WebSocket endpoint. Browsers send the login cookie; other clients
-	// may pass the token as ?token= or a Bearer header.
+	// a Bearer header. Never ?token=: URLs end up in logs.
 	if authToken != "" {
 		mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-			if tokenEqual(r.URL.Query().Get("token"), authToken) || authorized(r, authToken, cookie) {
+			if authorized(r, authToken, cookie) {
 				s.handleWebSocket(w, r)
 				return
 			}
@@ -238,6 +238,7 @@ func (s *Server) buildHandler(opts ServerOptions, dashboardFS fs.FS) http.Handle
 	}
 
 	mux.Handle("/api/", protect(s.withCORS(s.api)))
+	mux.HandleFunc("/api/identity", HandleIdentity) // no token: the CLI checks the dashboard before sending one
 
 	// pprof endpoints for profiling (PGO, CPU/memory analysis): on loopback,
 	// or anywhere with --pprof, always behind the same token as the API.
@@ -259,6 +260,7 @@ func (s *Server) buildHandler(opts ServerOptions, dashboardFS fs.FS) http.Handle
 	// dashboard. With a token it is not needed (the attacker's origin
 	// never holds it) and it would break reverse proxies.
 	h = withGuard(IsLoopbackHost(opts.Host) && authToken == "", authToken, s.allowedHosts, h)
+	h = withAuthLimit(authToken, newAuthLimiter(), h) // throttles wrong tokens before any other check
 	return s.withHeaders(h)
 }
 

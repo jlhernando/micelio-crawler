@@ -4,7 +4,9 @@
  *
  * Mirrors the Go crawler (internal/netguard): this computer, private and
  * link-local networks (cloud metadata included), CGNAT, unspecified,
- * multicast and broadcast addresses are never reached. Host names are
+ * multicast and broadcast addresses, and every other special-purpose range
+ * that is not globally reachable (benchmarking, documentation, reserved,
+ * non-global IPv6) are never reached. Host names are
  * checked after DNS resolution and the connection is pinned to the checked
  * address, so DNS rebinding cannot swap the address between check and dial.
  *
@@ -67,6 +69,54 @@ export function privateNetworksAllowed(): boolean {
   return allowPrivate;
 }
 
+/**
+ * Environment variable that lets crawls reach the benchmarking range
+ * 198.18.0.0/15. Fake-IP proxies (Clash, Surge, Shadowrocket, sing-box in
+ * fake-IP DNS/TUN mode) answer every DNS query with an address from it, so
+ * without this opt-in every crawl is refused. Only that range is affected.
+ * Mirrors Go netguard.AllowFakeIPEnv.
+ */
+export const ALLOW_FAKE_IP_ENV = 'MICELIO_ALLOW_FAKE_IP';
+
+/** Read once, on first use. */
+let allowFakeIp: boolean | null = null;
+
+function fakeIpAllowed(): boolean {
+  if (allowFakeIp === null) {
+    allowFakeIp = /^(1|t|true)$/i.test((process.env[ALLOW_FAKE_IP_ENV] ?? '').trim());
+  }
+  return allowFakeIp;
+}
+
+/** Override MICELIO_ALLOW_FAKE_IP (null re-reads the environment). Tests only. */
+export function setAllowFakeIpForTests(allow: boolean | null): void {
+  allowFakeIp = allow;
+}
+
+function inFakeIpRange(o: number[]): boolean {
+  return o[0] === 198 && (o[1] === 18 || o[1] === 19);
+}
+
+/**
+ * Explains a refused address in 198.18.0.0/15 (the range of fake-IP
+ * proxies) and how to allow it. Returns '' for any other address.
+ */
+export function fakeIpHint(address: string): string {
+  let v4 = parseIPv4(address);
+  if (!v4) {
+    const w = parseIPv6(address);
+    if (w && w.slice(0, 5).every((x) => x === 0) && w[5] === 0xffff) v4 = [w[6] >> 8, w[6] & 0xff, w[7] >> 8, w[7] & 0xff];
+  }
+  if (!v4 || !inFakeIpRange(v4)) return '';
+  return `${v4.join('.')} is in the benchmarking range 198.18.0.0/15, used by fake-IP proxies (Clash, Surge, Shadowrocket, sing-box). `
+    + `If you use one, set ${ALLOW_FAKE_IP_ENV}=1 or switch it to redir-host/real-IP mode`;
+}
+
+function withFakeIpHint(message: string, address: string): string {
+  const hint = fakeIpHint(address);
+  return hint ? `${message}: ${hint}` : message;
+}
+
 export class BlockedAddressError extends Error {
   constructor(message: string) {
     super(message);
@@ -109,53 +159,77 @@ export function parseIPv6(ip: string): number[] | null {
   return words;
 }
 
-function blockedIPv4(o: number[]): boolean {
-  const [a, b] = o;
-  return (
-    a === 0 || // "this network"
-    a === 10 || // RFC 1918
-    a === 127 || // loopback
-    (a === 100 && b >= 64 && b <= 127) || // CGNAT / Tailscale
-    (a === 169 && b === 254) || // link-local, cloud metadata
-    (a === 172 && b >= 16 && b <= 31) || // RFC 1918
-    (a === 192 && b === 168) || // RFC 1918
-    a >= 224 // multicast, reserved, broadcast
-  );
+/**
+ * IPv4 special-purpose ranges that are not globally reachable (IANA IPv4
+ * Special-Purpose Address Registry, RFC 6890 and updates). Kept in sync
+ * with Go internal/netguard specialV4.
+ */
+const SPECIAL_V4: ReadonlyArray<readonly [number, number, number, number, number]> = [
+  [0, 0, 0, 0, 8], // "this network"
+  [10, 0, 0, 0, 8], // RFC 1918
+  [100, 64, 0, 0, 10], // CGNAT / Tailscale
+  [127, 0, 0, 0, 8], // loopback
+  [169, 254, 0, 0, 16], // link-local, cloud metadata
+  [172, 16, 0, 0, 12], // RFC 1918
+  [192, 0, 0, 0, 24], // IETF protocol assignments (DS-Lite, NAT64 discovery...)
+  [192, 0, 2, 0, 24], // documentation TEST-NET-1
+  [192, 88, 99, 0, 24], // deprecated 6to4 relay anycast
+  [192, 168, 0, 0, 16], // RFC 1918
+  [198, 18, 0, 0, 15], // benchmarking
+  [198, 51, 100, 0, 24], // documentation TEST-NET-2
+  [203, 0, 113, 0, 24], // documentation TEST-NET-3
+  [224, 0, 0, 0, 3], // multicast 224/4, reserved 240/4, broadcast
+];
+
+function blockedIPv4(o: number[], allowFake = false): boolean {
+  if (allowFake && inFakeIpRange(o)) return false;
+  const ip = ((o[0] << 24) | (o[1] << 16) | (o[2] << 8) | o[3]) >>> 0;
+  return SPECIAL_V4.some(([a, b, c, d, bits]) => {
+    const net = ((a << 24) | (b << 16) | (c << 8) | d) >>> 0;
+    const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+    return ((ip & mask) >>> 0) === net;
+  });
 }
 
 /**
  * Whether an IP literal is an address crawls must never reach. Anything that
- * is not a valid IP literal is reported as blocked (fail closed). IPv6
- * transition addresses (NAT64, 6to4, Teredo) are judged by the IPv4 address
- * they carry.
+ * is not a valid IP literal is reported as blocked (fail closed). IPv6 forms
+ * that carry an IPv4 address (mapped, translated, compatible, NAT64, 6to4,
+ * Teredo) are judged by that IPv4 address. Other IPv6 addresses are allowed
+ * only inside global unicast 2000::/3, minus its special-purpose blocks.
+ * With MICELIO_ALLOW_FAKE_IP, plain (or IPv4-mapped) addresses in
+ * 198.18.0.0/15 are allowed; see ALLOW_FAKE_IP_ENV.
+ * Mirrors Go internal/netguard BlockedIP.
  */
 export function isBlockedIp(ip: string): boolean {
   const v4 = parseIPv4(ip);
-  if (v4) return blockedIPv4(v4);
+  if (v4) return blockedIPv4(v4, fakeIpAllowed());
   const w = parseIPv6(ip);
   if (!w) return true;
-  // IPv4-mapped (::ffff:a.b.c.d), IPv4-compatible (::a.b.c.d) and NAT64
-  // (64:ff9b::a.b.c.d) addresses carry an IPv4 address in the last 32 bits.
   const embeddedV4 = [w[6] >> 8, w[6] & 0xff, w[7] >> 8, w[7] & 0xff];
-  const zeroPrefix = w.slice(0, 5).every((x) => x === 0);
-  if (zeroPrefix && (w[5] === 0xffff || w[5] === 0)) {
-    if (w[5] === 0 && w[6] === 0 && w[7] <= 1) return true; // :: and ::1
-    return blockedIPv4(embeddedV4);
+  const zero = (from: number, to: number) => w.slice(from, to).every((x) => x === 0);
+  if (zero(0, 5) && (w[5] === 0xffff || w[5] === 0)) {
+    // IPv4-mapped ::ffff:0:0/96 and deprecated IPv4-compatible ::/96
+    // (:: and ::1 included: they decode to 0.0.0.0/8). Like Go's To4, only
+    // the mapped form counts as plain IPv4 for the fake-IP opt-in.
+    return blockedIPv4(embeddedV4, w[5] === 0xffff && fakeIpAllowed());
   }
-  if (w[0] === 0x64 && w[1] === 0xff9b && w.slice(2, 6).every((x) => x === 0)) {
-    return blockedIPv4(embeddedV4);
-  }
-  // The rest mirrors Go internal/netguard BlockedIP.
-  // Local-use NAT64 64:ff9b:1::/48 (RFC 8215) translates into a local network.
-  if (w[0] === 0x64 && w[1] === 0xff9b && w[2] === 0x0001) return true;
+  // IPv4-translatable ::ffff:0:0:0/96 (RFC 2765).
+  if (zero(0, 4) && w[4] === 0xffff && w[5] === 0) return blockedIPv4(embeddedV4);
+  // NAT64 well-known prefix 64:ff9b::/96 (RFC 6052).
+  if (w[0] === 0x64 && w[1] === 0xff9b && zero(2, 6)) return blockedIPv4(embeddedV4);
   // 6to4 2002::/16: the IPv4 address sits in bits 16-47.
   if (w[0] === 0x2002) return blockedIPv4([w[1] >> 8, w[1] & 0xff, w[2] >> 8, w[2] & 0xff]);
   // Teredo 2001::/32: the client IPv4 is the last 32 bits, each byte inverted.
   if (w[0] === 0x2001 && w[1] === 0) return blockedIPv4(embeddedV4.map((b) => b ^ 0xff));
-  if ((w[0] & 0xfe00) === 0xfc00) return true; // unique local fc00::/7
-  if ((w[0] & 0xffc0) === 0xfe80) return true; // link-local fe80::/10
-  if ((w[0] & 0xffc0) === 0xfec0) return true; // deprecated site-local fec0::/10
-  if ((w[0] & 0xff00) === 0xff00) return true; // multicast ff00::/8
+  // Only global unicast 2000::/3 can be reached. This refuses everything
+  // else: local-use NAT64 64:ff9b:1::/48, discard 100::/64, unique local
+  // fc00::/7, link-local fe80::/10, site-local fec0::/10, multicast ff00::/8,
+  // SRv6 5f00::/16 and unassigned space.
+  if ((w[0] & 0xe000) !== 0x2000) return true;
+  if (w[0] === 0x2001 && w[1] < 0x200) return true; // IETF protocol assignments 2001::/23 (benchmarking, ORCHID...)
+  if (w[0] === 0x2001 && w[1] === 0x0db8) return true; // documentation 2001:db8::/32
+  if (w[0] === 0x3fff && w[1] < 0x1000) return true; // documentation 3fff::/20
   return false;
 }
 
@@ -186,7 +260,9 @@ export function urlBlockReason(rawUrl: string): string | null {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return `Blocked: unsupported scheme ${parsed.protocol}`;
   }
-  if (!allowPrivate && isPrivateHostname(parsed.hostname)) return 'Blocked: private/loopback address';
+  if (!allowPrivate && isPrivateHostname(parsed.hostname)) {
+    return withFakeIpHint('Blocked: private/loopback address', bareHost(parsed.hostname));
+  }
   return null;
 }
 
@@ -205,7 +281,7 @@ export function guardedLookup(hostname: string, options: LookupOptions, callback
     if (!allowPrivate) {
       const bad = list.find((a) => isBlockedIp(a.address));
       if (bad || list.length === 0) {
-        const e = new BlockedAddressError(`Blocked: ${hostname} resolves to private address ${bad?.address ?? '(none)'}`) as NodeJS.ErrnoException;
+        const e = new BlockedAddressError(withFakeIpHint(`Blocked: ${hostname} resolves to private address ${bad?.address ?? '(none)'}`, bad?.address ?? '')) as NodeJS.ErrnoException;
         e.code = 'EBLOCKED';
         return callback(e, '');
       }
@@ -259,7 +335,7 @@ export function guardedDispatcher(): Dispatcher {
       connect: (opts, cb) => {
         const host = bareHost(opts.hostname);
         if (!allowPrivate && isIP(host) && isBlockedIp(host)) {
-          cb(new BlockedAddressError(`Blocked: private/loopback address ${host}`), null);
+          cb(new BlockedAddressError(withFakeIpHint(`Blocked: private/loopback address ${host}`, host)), null);
           return;
         }
         base(opts, cb);

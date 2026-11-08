@@ -103,6 +103,10 @@ type RunControl struct {
 
 func newRunControl() *RunControl { return &RunControl{changed: make(chan struct{}, 1)} }
 
+// NewRunControl returns a RunControl for crawls supervised outside a
+// Scheduler (see MonitorPrecheck).
+func NewRunControl() *RunControl { return newRunControl() }
+
 // Paused reports whether the crawl should be paused, and why.
 func (c *RunControl) Paused() (bool, string) {
 	c.mu.Lock()
@@ -112,6 +116,10 @@ func (c *RunControl) Paused() (bool, string) {
 
 // Changed is signalled whenever Paused changes.
 func (c *RunControl) Changed() <-chan struct{} { return c.changed }
+
+// Set records a check result taken outside MonitorPrecheck (e.g. a first
+// check run at once); it reports whether Paused changed.
+func (c *RunControl) Set(paused bool, reason string) bool { return c.set(paused, reason) }
 
 func (c *RunControl) set(paused bool, reason string) bool {
 	c.mu.Lock()
@@ -415,7 +423,34 @@ func (s *Scheduler) monitorPrecheck(ctx context.Context, ctl *RunControl) {
 	if !pc.Enabled() {
 		return
 	}
-	t := time.NewTicker(pc.Interval())
+	MonitorPrecheck(ctx, pc.Interval(), pc.Run, ctl, func(check PrecheckResult, changed bool) {
+		s.recordCheck(check)
+		if !changed {
+			return
+		}
+		s.mu.Lock()
+		s.state.Paused = !check.OK
+		if !check.OK {
+			s.state.LastReason = "paused: " + check.Reason
+		}
+		s.mu.Unlock()
+		s.saveState()
+		if check.OK {
+			fmt.Fprintf(os.Stderr, "\nCheck passes again, resuming crawl\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "\nCheck failed (%s), pausing crawl\n", check.Reason)
+			if check.Output != "" {
+				fmt.Fprintf(os.Stderr, "Check output: %s\n", check.Output)
+			}
+		}
+	})
+}
+
+// MonitorPrecheck calls run every interval until ctx is cancelled and flips
+// ctl to paused while it fails. onCheck (optional) sees every result and
+// whether it changed the paused state.
+func MonitorPrecheck(ctx context.Context, interval time.Duration, run func(context.Context) PrecheckResult, ctl *RunControl, onCheck func(PrecheckResult, bool)) {
+	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
 		select {
@@ -423,29 +458,16 @@ func (s *Scheduler) monitorPrecheck(ctx context.Context, ctl *RunControl) {
 			return
 		case <-t.C:
 		}
-		check := pc.Run(ctx)
+		check := run(ctx)
 		if ctx.Err() != nil {
 			return
 		}
-		s.recordCheck(check)
 		// Record the new state before flipping ctl: the runner reacts to the
 		// flip at once, and anyone it notifies must already see it.
-		if paused, _ := ctl.Paused(); paused != !check.OK {
-			s.mu.Lock()
-			s.state.Paused = !check.OK
-			if !check.OK {
-				s.state.LastReason = "paused: " + check.Reason
-			}
-			s.mu.Unlock()
-			s.saveState()
-			if check.OK {
-				fmt.Fprintf(os.Stderr, "\nCheck passes again, resuming crawl\n")
-			} else {
-				fmt.Fprintf(os.Stderr, "\nCheck failed (%s), pausing crawl\n", check.Reason)
-				if check.Output != "" {
-					fmt.Fprintf(os.Stderr, "Check output: %s\n", check.Output)
-				}
-			}
+		paused, _ := ctl.Paused()
+		changed := paused != !check.OK
+		if onCheck != nil {
+			onCheck(check, changed)
 		}
 		ctl.set(!check.OK, check.Reason)
 	}

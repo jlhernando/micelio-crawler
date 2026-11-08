@@ -25,7 +25,7 @@ import { startGuardedProxy } from './guard-proxy.js';
 import { fetchPage } from './fetcher.js';
 
 /** Public-looking address (TEST-NET-3) that the fake upstreams route to 127.0.0.1. */
-const PUBLIC_IP = '203.0.113.7';
+const PUBLIC_IP = '93.184.215.14';
 /** Address inside the "proxy's network" a rebinding answer points at. */
 const INTERNAL_IP = '10.0.0.5';
 
@@ -139,7 +139,7 @@ beforeEach(() => {
     'secure.test': [PUBLIC_IP],
     // Public for our check, internal for anyone who asks again
     'rebind.test': [PUBLIC_IP, INTERNAL_IP],
-    'v6.test': ['2001:db8::1'],
+    'v6.test': ['2606:4700::1'],
   };
   for (const k of Object.keys(lookups)) delete lookups[k];
   siteHits.length = 0;
@@ -531,7 +531,7 @@ describe('guarded proxy (Chromium) pins the checked IP for its upstream', () => 
     try {
       const t = await connectViaProxy(front.port, `v6.test:${sitePort}`);
       expect(t.status).toBe(502); // the fake upstream cannot reach it
-      expect(up.requests).toEqual([{ atyp: 4, host: '2001:db8:0:0:0:0:0:1', port: sitePort }]);
+      expect(up.requests).toEqual([{ atyp: 4, host: '2606:4700:0:0:0:0:0:1', port: sitePort }]);
     } finally {
       await front.close();
       await close(up.server);

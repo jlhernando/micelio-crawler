@@ -57,7 +57,7 @@ Then start the dashboard and open http://localhost:3100:
 micelio ui
 ```
 
-Prerequisites: none for the binary. Building needs Go 1.26+ and Node.js 20+. JS rendering needs Chrome or Chromium.
+Prerequisites: none for the binary. Building needs Go 1.26+ and Node.js 22.12+. JS rendering needs Chrome or Chromium.
 
 Each release has a `checksums.txt`, and the in-app updater checks it before it installs an update. See the [User Guide](docs/USER-GUIDE.md#install-and-verify).
 

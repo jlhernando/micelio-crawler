@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,7 +24,10 @@ import (
 var ga4Endpoint = "https://analyticsdata.googleapis.com/v1beta"
 
 const (
-	ga4BatchSize   = 100000
+	// ga4BatchSize rows per runReport page. A row (path + 7 metrics) is a
+	// few hundred bytes of JSON, so 10,000 rows stay well under the 4 MB cap;
+	// a page that still does not fit is asked again with fewer rows.
+	ga4BatchSize   = 10000
 	ga4MaxBodySize = 4 << 20 // 4 MB
 	ga4Scope       = "https://www.googleapis.com/auth/analytics.readonly"
 )
@@ -102,12 +106,19 @@ func (c *GA4Client) FetchBatch(ctx context.Context, urls []string) (map[string]*
 	startDate, endDate := reportDateRange(time.Now(), c.days, 1) // ~1 day lag
 
 	offset := 0
+	pageSize := ga4BatchSize
 	for {
 		if ctx.Err() != nil {
 			return results, ctx.Err()
 		}
 
-		rows, total, err := c.runReport(ctx, token, startDate, endDate, offset)
+		rows, total, err := c.runReport(ctx, token, startDate, endDate, offset, pageSize)
+		if errors.Is(err, errResponseTooLarge) {
+			if smaller, ok := shrinkPage(pageSize); ok {
+				pageSize = smaller
+				continue
+			}
+		}
 		if err != nil {
 			return results, err
 		}
@@ -135,7 +146,7 @@ type ga4Row struct {
 	Path string
 }
 
-func (c *GA4Client) runReport(ctx context.Context, token, startDate, endDate string, offset int) ([]ga4Row, int, error) {
+func (c *GA4Client) runReport(ctx context.Context, token, startDate, endDate string, offset, limit int) ([]ga4Row, int, error) {
 	query := map[string]interface{}{
 		"dateRanges": []map[string]string{{
 			"startDate": startDate,
@@ -151,7 +162,7 @@ func (c *GA4Client) runReport(ctx context.Context, token, startDate, endDate str
 			{"name": "engagementRate"},
 			{"name": "averageSessionDuration"},
 		},
-		"limit":  ga4BatchSize,
+		"limit":  limit,
 		"offset": offset,
 	}
 
@@ -171,13 +182,14 @@ func (c *GA4Client) runReport(ctx context.Context, token, startDate, endDate str
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, ga4MaxBodySize))
-	if err != nil {
-		return nil, 0, err
+	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, 0, fmt.Errorf("ga4: HTTP %d: %s", resp.StatusCode, truncate(string(errBody), 200))
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, 0, fmt.Errorf("ga4: HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 200))
+	respBody, err := readCappedBody(resp.Body, ga4MaxBodySize)
+	if err != nil {
+		return nil, 0, fmt.Errorf("ga4: %w", err)
 	}
 
 	var result struct {

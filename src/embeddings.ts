@@ -25,7 +25,11 @@ export interface EmbeddingStats {
   dimensions: number;
   /** Raw embedding vectors keyed by URL. Used by link suggestions for semantic scoring. */
   vectors: Map<string, number[]>;
-  /** Pages compared pairwise (at most SIMILARITY_LIMITS.maxPages). */
+  /**
+   * Pages compared pairwise: the first similarityPageCap(dimensions) embedded
+   * pages (at most maxPages, fewer for very wide vectors). When it is below
+   * pagesEmbedded, the rest were embedded but not searched for duplicates.
+   */
   pagesCompared?: number;
 }
 
@@ -37,6 +41,15 @@ export interface EmbeddingStats {
 export const SIMILARITY_LIMITS = {
   /** Pages compared pairwise (first N embedded pages); the rest are only embedded. */
   maxPages: 10_000,
+  /**
+   * Multiply-adds allowed for the whole pairwise step (pairs x dimensions).
+   * The loop yields every sliceMs, so this only bounds total time:
+   * 10,000 pages x 1,536 dims (76.8e9) took ~50 s on an M-series Mac and
+   * is allowed; 3,072 dims (text-embedding-3-large) -> ~7,200 pages.
+   */
+  maxWork: 80_000_000_000,
+  /** Longest stretch of comparisons before yielding to the event loop. */
+  sliceMs: 10,
   /** Most similar neighbours kept per page. */
   topKPerPage: 10,
   /** Pairs kept overall (memory bound before sorting and grouping). */
@@ -49,6 +62,17 @@ export const SIMILARITY_LIMITS = {
 export function clampThreshold(threshold: number): number {
   if (!Number.isFinite(threshold)) return 0.85;
   return Math.min(1, Math.max(0, threshold));
+}
+
+/**
+ * Pages that can be compared pairwise for vectors of this width: the largest
+ * n with n*(n-1)/2*dims <= maxWork, and never more than maxPages.
+ */
+export function similarityPageCap(dims: number): number {
+  const L = SIMILARITY_LIMITS;
+  if (!(dims > 0)) return L.maxPages;
+  const n = Math.floor((1 + Math.sqrt(1 + (8 * L.maxWork) / dims)) / 2);
+  return Math.max(2, Math.min(L.maxPages, n));
 }
 
 /** Unit-length Float32 copy of a vector (empty when the norm is 0). */
@@ -66,24 +90,34 @@ function normalize(v: number[]): Float32Array {
  * Pairs of pages whose cosine similarity is >= threshold, bounded by
  * SIMILARITY_LIMITS: each page keeps only its topKPerPage best neighbours and
  * the total list never exceeds maxPairs. Sorted by similarity, descending.
- * Yields to the event loop between rows and stops when signal aborts.
+ * The number of pages compared also shrinks with the vector width (maxWork),
+ * and the loop yields to the event loop every sliceMs so the dashboard keeps
+ * answering; it stops when signal aborts.
  */
 export async function findSimilarPairs(
   urls: string[],
   vectors: number[][],
   threshold: number,
   signal?: AbortSignal,
-): Promise<{ pairs: SimilarPair[]; compared: number }> {
+): Promise<{ pairs: SimilarPair[]; compared: number; total: number }> {
   const t = clampThreshold(threshold);
   const L = SIMILARITY_LIMITS;
   const idx: number[] = [];
   const unit: Float32Array[] = [];
-  for (let i = 0; i < vectors.length && idx.length < L.maxPages; i++) {
+  const firstDims = vectors.find((v) => v.length > 0)?.length ?? 0;
+  const cap = similarityPageCap(firstDims);
+  let total = 0; // embedded pages that could be compared
+  for (let i = 0; i < vectors.length; i++) {
     if (vectors[i].length === 0) continue;
+    if (idx.length >= cap) {
+      total++;
+      continue;
+    }
     const u = normalize(vectors[i]);
     if (u.length === 0) continue;
     idx.push(i);
     unit.push(u);
+    total++;
   }
   const n = unit.length;
   // Per-page best neighbours (both directions), as small sorted arrays.
@@ -96,20 +130,40 @@ export async function findSimilarPairs(
     list.splice(k, 0, { j: b, sim });
     if (list.length > L.topKPerPage) list.pop();
   };
-  for (let a = 0; a < n; a++) {
+  let sliceStart = performance.now();
+  let aborted = false;
+  for (let a = 0; a < n && !aborted; a++) {
     if (signal?.aborted) break;
     const ua = unit[a];
     for (let b = a + 1; b < n; b++) {
+      if ((b & 255) === 0 && performance.now() - sliceStart >= L.sliceMs) {
+        await new Promise((r) => setImmediate(r));
+        sliceStart = performance.now();
+        if (signal?.aborted) { aborted = true; break; }
+      }
       const ub = unit[b];
       if (ub.length !== ua.length) continue;
-      let dot = 0;
-      for (let d = 0; d < ua.length; d++) dot += ua[d] * ub[d];
+      // Four running sums: about twice as fast as one in V8
+      const len = ua.length;
+      const len4 = len - (len % 4);
+      let s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+      for (let d = 0; d < len4; d += 4) {
+        s0 += ua[d] * ub[d];
+        s1 += ua[d + 1] * ub[d + 1];
+        s2 += ua[d + 2] * ub[d + 2];
+        s3 += ua[d + 3] * ub[d + 3];
+      }
+      for (let d = len4; d < len; d++) s0 += ua[d] * ub[d];
+      const dot = s0 + s1 + s2 + s3;
       if (dot >= t) {
         offer(a, b, dot);
         offer(b, a, dot);
       }
     }
-    if (a % 100 === 99) await new Promise((r) => setImmediate(r));
+    if (performance.now() - sliceStart >= L.sliceMs) {
+      await new Promise((r) => setImmediate(r));
+      sliceStart = performance.now();
+    }
   }
   const seen = new Set<string>();
   const pairs: SimilarPair[] = [];
@@ -128,7 +182,7 @@ export async function findSimilarPairs(
     }
   }
   pairs.sort((x, y) => y.similarity - x.similarity);
-  return { pairs, compared: n };
+  return { pairs, compared: n, total };
 }
 
 const DEFAULT_MODELS: Record<string, string> = {
@@ -291,7 +345,13 @@ export async function computeEmbeddings(
   }
 
   // Similar pairs, bounded (top-K neighbours per page, page and pair caps)
-  const { pairs, compared } = await findSimilarPairs(urls, embeddings, threshold, signal);
+  const { pairs, compared, total } = await findSimilarPairs(urls, embeddings, threshold, signal);
+  if (compared < total) {
+    console.warn(
+      `  Similarity: compared ${compared} of ${total} embedded pages ` +
+      `(limit for ${dimensions}-dimension vectors); the rest are not checked for duplicates`,
+    );
+  }
 
   // Group into cannibalization clusters (union-find / transitive closure)
   const groups = buildCannibalizationGroups(pairs);

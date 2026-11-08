@@ -202,7 +202,7 @@ func TestScheduleSanitizesConfig(t *testing.T) {
 	t.Chdir(t.TempDir()) // the schedule creates its output dir
 	_, s, m := newTestAPI(t)
 	cfg := map[string]interface{}{"seedUrl": "https://example.com/", "outputPath": "/tmp/x", "dbPath": "/tmp/y.db"}
-	if _, err := m.newUISchedule(s, scheduleRequest{Cron: "@daily", Config: cfg}); err != nil {
+	if _, err := m.startUISchedule(s, scheduleRequest{Cron: "@daily", Config: cfg}); err != nil {
 		t.Fatal(err)
 	}
 	if cfg["outputPath"] != nil || cfg["dbPath"] != nil {
@@ -212,7 +212,7 @@ func TestScheduleSanitizesConfig(t *testing.T) {
 		{Cron: "@daily", Config: map[string]interface{}{"seedUrl": "https://example.com/", "limit": 1e12}},
 		{Cron: "@daily", URL: "https://example.com/", OutputDir: "../../etc"},
 	} {
-		if _, err := m.newUISchedule(s, req); err == nil {
+		if _, err := m.startUISchedule(s, req); err == nil {
 			t.Errorf("schedule accepted: %+v", req)
 		}
 	}
@@ -289,7 +289,7 @@ func TestResumeUIScheduleWithOldConfig(t *testing.T) {
 	}
 
 	// Creating a schedule with the same config is still refused.
-	if _, err := m.newUISchedule(s, scheduleRequest{Cron: "@daily", OutputDir: "../crawls",
+	if _, err := m.startUISchedule(s, scheduleRequest{Cron: "@daily", OutputDir: "../crawls",
 		Config: map[string]interface{}{"seedUrl": "https://example.com/"}}); err == nil {
 		t.Error("new schedule with outputDir outside the working directory accepted")
 	}

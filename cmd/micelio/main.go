@@ -1513,27 +1513,8 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 		}
 		if enriched {
 			fmt.Fprintf(os.Stderr, "  Rewriting output with enriched data...\n")
-			// Atomic rewrite: write to temp file, rename on success (H1 fix)
-			// Preserve compression extension so NewResultWriter detects it
-			tmpPath := config.OutputPath + ".tmp"
-			ext := filepath.Ext(config.OutputPath)
-			if ext == ".gz" || ext == ".zst" {
-				tmpPath = strings.TrimSuffix(config.OutputPath, ext) + ".tmp" + ext
-			}
-			rw, rwErr := storage.NewResultWriter(tmpPath, string(config.OutputFormat))
-			if rwErr != nil {
-				fmt.Fprintf(os.Stderr, "  [warn] Could not open output for rewrite: %v\n", rwErr)
-			} else {
-				if rewriteErr := rw.RewriteAll(result.Pages); rewriteErr != nil {
-					fmt.Fprintf(os.Stderr, "  [warn] Rewrite failed: %v\n", rewriteErr)
-					rw.Close()
-					os.Remove(tmpPath)
-				} else {
-					rw.Close()
-					if renameErr := os.Rename(tmpPath, config.OutputPath); renameErr != nil {
-						fmt.Fprintf(os.Stderr, "  [warn] Rewrite rename failed: %v\n", renameErr)
-					}
-				}
+			if err := rewriteEnrichedOutput(config.OutputPath, string(config.OutputFormat), result.Pages); err != nil {
+				fmt.Fprintf(os.Stderr, "  [warn] %v\n", err)
 			}
 		}
 	}
@@ -1951,4 +1932,47 @@ func parseMemLimit(s string) (int64, error) {
 		return 0, fmt.Errorf("invalid memory limit %q", s)
 	}
 	return num, nil
+}
+
+// pageRewriter is the part of storage.ResultWriter used by the enriched rewrite.
+type pageRewriter interface {
+	RewriteAll(pages []*types.PageData) error
+	Close() error
+}
+
+// newRewriteWriter opens the temporary rewrite target (swapped in tests).
+var newRewriteWriter = func(path, format string) (pageRewriter, error) {
+	return storage.NewResultWriter(path, format)
+}
+
+// rewriteEnrichedOutput rewrites outputPath with the enriched pages atomically:
+// it writes a temp file and renames it over the output only after every write,
+// flush and close succeeded. Close finalises gzip/zstd streams and flushes
+// buffers, so a failed Close means the temp file is truncated and the original
+// output must stay.
+func rewriteEnrichedOutput(outputPath, format string, pages []*types.PageData) error {
+	// Preserve compression extension so NewResultWriter detects it
+	tmpPath := outputPath + ".tmp"
+	ext := filepath.Ext(outputPath)
+	if ext == ".gz" || ext == ".zst" {
+		tmpPath = strings.TrimSuffix(outputPath, ext) + ".tmp" + ext
+	}
+	rw, err := newRewriteWriter(tmpPath, format)
+	if err != nil {
+		return fmt.Errorf("could not open output for rewrite: %w", err)
+	}
+	if err := rw.RewriteAll(pages); err != nil {
+		rw.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("rewrite failed: %w", err)
+	}
+	if err := rw.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rewrite failed while closing output: %w", err)
+	}
+	if err := os.Rename(tmpPath, outputPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rewrite rename failed: %w", err)
+	}
+	return nil
 }

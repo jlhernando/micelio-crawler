@@ -137,7 +137,11 @@ func ssrfSafeDialer(base *net.Dialer, cache *dnsCache) func(ctx context.Context,
 		}
 		for _, ip := range ips {
 			if blockedIP(ip.IP) {
-				return nil, &ssrfBlockedError{msg: fmt.Sprintf("DNS rebinding blocked: %s resolved to private IP %s", host, ip.IP)}
+				msg := fmt.Sprintf("DNS rebinding blocked: %s resolved to private IP %s", host, ip.IP)
+				if hint := netguard.FakeIPHint(ip.IP.String()); hint != "" {
+					msg += ": " + hint
+				}
+				return nil, &ssrfBlockedError{msg: msg}
 			}
 		}
 		// Connect to the first resolved IP

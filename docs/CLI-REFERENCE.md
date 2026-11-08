@@ -747,9 +747,30 @@ Explicit flags take precedence over environment variables.
 | `MICELIO_SMTP_PASSWORD` | Email report password (dashboard and `schedule --email-to`) |
 | `MICELIO_TELEGRAM_TOKEN` | Telegram bot token (dashboard and `schedule --telegram-chat`) |
 | `MICELIO_ENV_FILE` | Path of the local secrets file; default `~/.micelio/micelio.env` |
+| `MICELIO_ALLOW_FAKE_IP` | Set to `1` to let crawls reach `198.18.0.0/15`. Fake-IP proxies (Clash, Surge, Shadowrocket, sing-box in fake-IP DNS/TUN mode) resolve every site into that range, which is blocked by default. Only that range is affected. Read once at start (environment, or `~/.micelio/micelio.env` for the Go binary); switching the proxy to redir-host/real-IP mode works too |
 
 Every alert channel setting can also come from `~/.micelio/micelio.env`. The
 [user guide](USER-GUIDE.md#6-configure-integrations-and-defaults) lists the keys.
 
 Avoid putting secrets directly in shell history. Use your shell's environment,
 secret manager, or locally protected configuration.
+
+## Legacy Node.js engine limits
+
+The commands above describe the Go binary. When using the legacy Node.js
+engine, Node.js 22.12 or newer is required. Its dashboard requires an auth
+token of at least 32 characters when a token is configured. Generate one
+with `openssl rand -hex 32`; the browser posts it to `/login` and receives an
+HttpOnly session cookie. Valid tokens remain usable while wrong guesses
+from the same address are throttled.
+
+Legacy semantic similarity compares at most 10,000 embedded pages and also
+bounds work by vector width. At 3,072 dimensions the comparison covers about
+7,200 pages; the crawl log warns when fewer pages are compared. All embedded
+pages remain stored, but those outside the comparison are not checked for
+semantic duplicates. The Go engine is unaffected by this Node.js limit.
+
+The Node.js engine also checks the estimated size before reloading a saved
+crawl into the JavaScript heap. A rejected reload leaves the pages in the
+database and output file and reports an error; it is not streaming analysis
+or a hard limit on the whole process.

@@ -4,7 +4,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AddressInfo } from 'node:net';
-import { crawl } from './orchestrator.js';
+import { crawl, DB_RELOAD_LIMITS, dbReloadBudgetBytes } from './orchestrator.js';
+import { getHeapStatistics } from 'node:v8';
 import { mergeConfig } from './config.js';
 import { CrawlStore } from './db-store.js';
 import { setAllowPrivateNetworks, setDnsLookupForTests } from './net-guard.js';
@@ -34,6 +35,11 @@ beforeAll(async () => {
   server = createServer((req, res) => {
     // Slow enough that a crawl can be paused or cancelled mid-way
     setTimeout(() => {
+      if (req.url === '/sitemap.xml') {
+        res.writeHead(200, { 'content-type': 'application/xml' });
+        res.end(`<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${base}/s1</loc></url><url><loc>${base}/s2</loc></url></urlset>`);
+        return;
+      }
       res.writeHead(200, { 'content-type': 'text/html' });
       res.end(`<html><head><title>${req.url}</title></head><body><p>page ${req.url} with enough body text for the embeddings phase to pick it up</p><a href="https://external.example/x">out</a></body></html>`);
     }, 30);
@@ -140,6 +146,68 @@ describe('crawl', () => {
     });
     expect(crawled).toHaveLength(0);
     paused = false;
+  });
+
+  it('sitemap mode works without a seedUrl (dashboard config)', async () => {
+    const result = await crawl(mergeConfig({
+      mode: 'sitemap',
+      seedUrl: '',
+      sitemapUrls: [`${base}/sitemap.xml`],
+      concurrency: 1,
+      delayMs: 0,
+      outputPath: join(dir, `sm-${Math.random().toString(36).slice(2)}.jsonl`),
+    }));
+    expect(result.pages.map((p) => p.url).sort()).toEqual([`${base}/s1`, `${base}/s2`]);
+  });
+
+  it('sitemap mode without any sitemap URL rejects with a clear error', async () => {
+    await expect(crawl(mergeConfig({ mode: 'sitemap', seedUrl: '', sitemapUrls: [] })))
+      .rejects.toThrow(/at least one sitemap URL/);
+  });
+
+  it('stops and rejects when a page cannot be saved to the DB', async () => {
+    const insert = CrawlStore.prototype.insertPage;
+    let calls = 0;
+    vi.spyOn(CrawlStore.prototype, 'insertPage').mockImplementation(function (this: CrawlStore, page: PageData) {
+      if (++calls === 2) throw new Error('SQLITE_FULL: database or disk is full');
+      insert.call(this, page);
+    });
+    const progress: number[] = [];
+    const dbPath = join(dir, `dbfail-${Math.random().toString(36).slice(2)}.db`);
+    await expect(crawl(listConfig(5, { dbPath }), (p) => progress.push(p.completed)))
+      .rejects.toThrow(/cannot save pages to the database.*SQLITE_FULL/);
+    // The crawl stopped early (only pages already in flight finished) and
+    // the page the DB refused was never counted as crawled
+    const store = new CrawlStore(dbPath);
+    const stored = store.getPageCount();
+    expect(store.getPage(`${base}/p1`)).toBeNull();
+    store.close();
+    expect(stored).toBeLessThan(4);
+    expect(Math.max(0, ...progress)).toBe(stored);
+  });
+
+  it('rejects instead of running out of memory when the DB is too big to read back', async () => {
+    const saved = DB_RELOAD_LIMITS.maxJsonBytes;
+    DB_RELOAD_LIMITS.maxJsonBytes = 100;
+    const load = vi.spyOn(CrawlStore.prototype, 'getAllPages');
+    try {
+      const dbPath = join(dir, `big-${Math.random().toString(36).slice(2)}.db`);
+      await expect(crawl(listConfig(3, { dbPath }))).rejects.toThrow(/too large to analyse in memory: 3 pages/);
+      expect(load).not.toHaveBeenCalled();
+      const store = new CrawlStore(dbPath);
+      expect(store.getPageCount()).toBe(3);
+      store.close();
+    } finally {
+      DB_RELOAD_LIMITS.maxJsonBytes = saved;
+    }
+  });
+
+  it('sizes the reload budget from the heap limit, not the current (garbage-inflated) heap use', () => {
+    const limit = getHeapStatistics().heap_size_limit;
+    const garbage = Array.from({ length: 200_000 }, (_, i) => ({ i, s: `x${i}` }));
+    const budget = dbReloadBudgetBytes();
+    expect(garbage.length).toBe(200_000);
+    expect(budget).toBe(Math.floor((limit * DB_RELOAD_LIMITS.heapShare) / DB_RELOAD_LIMITS.parsedPerJsonByte));
   });
 
   it('rejects instead of crashing when the output file cannot be written', async () => {

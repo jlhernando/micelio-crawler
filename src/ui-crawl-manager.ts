@@ -275,10 +275,12 @@ export class UiCrawlManager {
     const bool = (v: unknown, d: boolean): boolean => typeof v === 'boolean' ? v : d;
     const str = (v: unknown, d: string = ''): string => typeof v === 'string' ? v : d;
 
+    const sitemapUrls = Array.isArray(config.sitemapUrls) ? config.sitemapUrls : [];
     return {
-      seedUrl: str(config.seedUrl),
+      // Sitemap mode: the dashboard sends no seed, the first sitemap is it (as in the CLI)
+      seedUrl: str(config.seedUrl) || (config.mode === 'sitemap' ? str(sitemapUrls[0]) : ''),
       urls: config.mode === 'list' ? listModeUrls(config) : [],
-      sitemapUrls: Array.isArray(config.sitemapUrls) ? config.sitemapUrls : [],
+      sitemapUrls,
       mode: (config.mode as CrawlConfig['mode']) || 'spider',
       maxDepth: num(config.depth, 3),
       maxPages: num(config.limit, 500),

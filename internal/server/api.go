@@ -943,7 +943,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 	mux.HandleFunc("DELETE /api/schedules/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		// Stop if actively running
-		manager.StopScheduler(id)
+		manager.DeleteScheduler(id)
 		// Delete state file
 		if err := scheduler.DeleteSchedule(id); err != nil {
 			jsonError(w, err.Error(), http.StatusInternalServerError)
@@ -2627,13 +2627,32 @@ func statsMapToCrawlStats(m map[string]interface{}) *types.CrawlStats {
 	if m == nil {
 		return &types.CrawlStats{}
 	}
-	data, err := json.Marshal(m)
+	// Legacy issue details can have a different shape. Decode them separately
+	// so they cannot discard otherwise valid crawl totals and SEO metrics.
+	clean := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		if k == "urlIssueStats" {
+			continue
+		}
+		clean[k] = v
+	}
+	data, err := json.Marshal(clean)
 	if err != nil {
 		return &types.CrawlStats{}
 	}
 	var stats types.CrawlStats
 	if err := json.Unmarshal(data, &stats); err != nil {
+		log.Printf("statsMapToCrawlStats: %v", err)
 		return &types.CrawlStats{}
+	}
+	if raw, ok := m["urlIssueStats"]; ok {
+		issues, err := json.Marshal(raw)
+		if err == nil {
+			var typed map[string][]string
+			if err := json.Unmarshal(issues, &typed); err == nil {
+				stats.URLIssueStats = typed
+			}
+		}
 	}
 	return &stats
 }

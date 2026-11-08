@@ -1,4 +1,5 @@
 import pLimit from 'p-limit';
+import { getHeapStatistics } from 'node:v8';
 import * as cheerio from 'cheerio';
 import type { Dispatcher } from 'undici';
 import { pinnedProxyDispatcher, type PinnedProxyAgent } from './proxy-dispatcher.js';
@@ -56,6 +57,31 @@ export interface CrawlControl {
   isPaused?: () => boolean;
 }
 
+/**
+ * Guard for reading a DB-backed crawl back into memory after the crawl.
+ * The stored page JSON is estimated as page count x average page size (a
+ * running total kept while inserting, no extra read of the pages). Parsed
+ * pages take a few times their JSON size; the crawl stops with a clear error
+ * only when that clearly exceeds the heap limit (heapShare of
+ * heap_size_limit, not of the current free heap, which counts uncollected
+ * garbage as used), instead of running out of memory near the end.
+ */
+export const DB_RELOAD_LIMITS = {
+  /** Share of the heap limit the parsed pages may take. */
+  heapShare: 0.75,
+  /** Heap bytes per byte of stored page JSON (estimate). */
+  parsedPerJsonByte: 3,
+  /** Fixed JSON byte budget instead of the heap estimate (0 = use the heap). Tests. */
+  maxJsonBytes: 0,
+};
+
+/** Largest amount of stored page JSON that can be read back into memory. */
+export function dbReloadBudgetBytes(): number {
+  const L = DB_RELOAD_LIMITS;
+  if (L.maxJsonBytes > 0) return L.maxJsonBytes;
+  return Math.floor((getHeapStatistics().heap_size_limit * L.heapShare) / L.parsedPerJsonByte);
+}
+
 export async function crawl(
   config: CrawlConfig,
   onProgress?: (progress: CrawlProgress) => void,
@@ -64,9 +90,15 @@ export async function crawl(
   const isListMode = config.mode === 'list';
   const isSitemapMode = config.mode === 'sitemap';
   const isSpiderMode = config.mode === 'spider';
+  // The dashboard sends no seedUrl in sitemap mode: the first sitemap is the
+  // seed (the CLI does the same when it builds the config).
+  const seedUrlStr = isSitemapMode ? (config.seedUrl || config.sitemapUrls[0] || '') : config.seedUrl;
+  if (isSitemapMode && !seedUrlStr) {
+    throw new Error('Sitemap mode needs at least one sitemap URL');
+  }
   const seedUrl = isListMode
     ? (config.urls[0] ? new URL(config.urls[0]) : new URL('https://localhost'))
-    : new URL(config.seedUrl);
+    : new URL(seedUrlStr);
   let seedDomain = seedUrl.hostname;
 
   // Every request goes through the SSRF guard (net-guard.ts); say so up front
@@ -153,7 +185,7 @@ export async function crawl(
   const queueSeedUrl = isListMode
     ? (config.urls[0] || 'https://localhost')
     : isSitemapMode
-      ? (sitemapDiscoveredUrls[0] || config.seedUrl)
+      ? (sitemapDiscoveredUrls[0] || seedUrlStr)
       : config.seedUrl;
 
   const queue = new CrawlQueue(queueSeedUrl, maxDepth, maxPages, {
@@ -276,7 +308,7 @@ export async function crawl(
     customExtractions: config.customExtractions,
     customSearches: config.customSearches,
     linkIntelligence: config.linkIntelligence,
-    seedUrl: config.seedUrl,
+    seedUrl: seedUrlStr,
   };
 
   // Phase 3: Load JS snippets
@@ -386,6 +418,21 @@ export async function crawl(
   // external checks, embeddings) and return as soon as the queue stops
   const cancelled = (): boolean => control.signal?.aborted === true;
 
+  // First failed DB write: the crawl stops and rejects, since with a DB the
+  // results are read back from it and a page that is not stored is lost.
+  let dbError: unknown = null;
+  const storePage = (page: PageData): boolean => {
+    if (!store) return true;
+    try {
+      store.insertPage(page);
+      return true;
+    } catch (err) {
+      dbError ??= err;
+      process.stderr.write(`\n  [db-error] Failed to save ${page.url} to DB: ${formatError(err)}\n`);
+      return false;
+    }
+  };
+
   // Conditional termination tracking
   let crawlAborted = false;
   const crawlStartMs = Date.now();
@@ -395,6 +442,11 @@ export async function crawl(
     if (control.signal?.aborted) {
       crawlAborted = true;
       process.stderr.write(`\n  Crawl stopped: cancelled\n`);
+      return true;
+    }
+    if (dbError) {
+      crawlAborted = true;
+      process.stderr.write(`\n  Crawl stopped: cannot write database ${config.dbPath}\n`);
       return true;
     }
     if (writer.failed) {
@@ -491,9 +543,7 @@ export async function crawl(
           };
           await writePage(blockedPage);
           keepPage(blockedPage);
-          if (store) {
-            try { store.insertPage(blockedPage); } catch (e) { process.stderr.write(`  [warn] Failed to store blocked page ${blockedPage.url}: ${e}\n`); }
-          }
+          storePage(blockedPage);
         }
         continue;
       }
@@ -626,15 +676,9 @@ export async function crawl(
 
           await writePage(pageData);
           keepPage(pageData);
-          // Phase 12.1: Persist to DB immediately (auto-save)
-          // ISSUE-2 fix: Graceful handling of DB write failures
-          if (store) {
-            try {
-              store.insertPage(pageData);
-            } catch (dbErr) {
-              process.stderr.write(`\n  [db-warn] Failed to save to DB: ${formatError(dbErr)}\n`);
-            }
-          }
+          // Phase 12.1: Persist to DB immediately (auto-save). A page the DB
+          // did not take is not counted: the crawl stops (shouldAbort).
+          if (!storePage(pageData)) return;
 
           // Adaptive throttling: back off on 429, recover on consecutive successes
           if (pageData.statusCode === 429) {
@@ -693,7 +737,45 @@ export async function crawl(
   }
 
   await Promise.all([...allTasks]);
+
+  // Browser and proxy pools, released once the fetching is over
+  const releaseFetchResources = async () => {
+    if (config.jsRendering || snippets.length > 0) {
+      await closeBrowser();
+    }
+    if (proxyDispatcher) {
+      await (proxyDispatcher as PinnedProxyAgent).close();
+    }
+  };
+
+  if (dbError) {
+    await writer.close().catch(() => {});
+    await releaseFetchResources().catch(() => {});
+    store?.close();
+    throw new Error(
+      `Crawl stopped: cannot save pages to the database ${config.dbPath}: ${formatError(dbError)}. ` +
+      `Pages stored so far stay in the database.`,
+    );
+  }
   await writer.close();
+
+  // Reading a DB-backed crawl back must not run the process out of memory:
+  // stop with a clear error instead (the pages stay in the DB and output).
+  if (store) {
+    const count = store.getPageCount();
+    const jsonBytes = Math.round(count * store.averagePageBytes());
+    const budget = dbReloadBudgetBytes();
+    if (jsonBytes > budget) {
+      store.close();
+      await releaseFetchResources().catch(() => {});
+      const mb = (n: number) => Math.ceil(n / 1024 / 1024);
+      throw new Error(
+        `Crawl too large to analyse in memory: ${count} pages (~${mb(jsonBytes)} MB of page data, ` +
+        `budget ${mb(budget)} MB). The pages are saved in ${config.dbPath} and ${config.outputPath}. ` +
+        `Raise the Node heap (NODE_OPTIONS=--max-old-space-size=...) and resume the crawl to build the report.`,
+      );
+    }
+  }
 
   // The reporter and link intelligence need every page in memory. With a DB
   // the pages are read back here, once: `allPages` is every page in the DB
@@ -829,14 +911,8 @@ export async function crawl(
     process.stderr.write(`\r  External: ${extChecked}/${externalLinkMap.size} — ${externalLinkResults.length} broken\n`);
   }
 
-  if (config.jsRendering || snippets.length > 0) {
-    await closeBrowser();
-  }
-
-  // Close the proxy dispatcher to release its connection pools
-  if (proxyDispatcher) {
-    await (proxyDispatcher as PinnedProxyAgent).close();
-  }
+  // Close the browser and the proxy dispatcher's connection pools
+  await releaseFetchResources();
 
   // Memory optimization: Clear transient maps that are no longer needed
   externalLinkMap.clear();
@@ -915,7 +991,9 @@ export async function crawl(
         },
         control.signal,
       );
-      process.stderr.write(`\nEmbeddings complete: ${embeddingStats.pagesEmbedded} pages, ${embeddingStats.similarPairs.length} similar pairs found\n`);
+      const compared = embeddingStats.pagesCompared ?? embeddingStats.pagesEmbedded;
+      const comparedNote = compared < embeddingStats.pagesEmbedded ? ` (compared ${compared} of ${embeddingStats.pagesEmbedded} pages)` : '';
+      process.stderr.write(`\nEmbeddings complete: ${embeddingStats.pagesEmbedded} pages, ${embeddingStats.similarPairs.length} similar pairs found${comparedNote}\n`);
     } catch (err) {
       process.stderr.write(`\nEmbedding computation failed: ${formatError(err)}\n`);
     }

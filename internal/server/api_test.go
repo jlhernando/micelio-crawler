@@ -22,6 +22,7 @@ func newTestManager(t *testing.T, s *UiStore) *CrawlManager {
 	t.Helper()
 	m := NewCrawlManager(s)
 	t.Cleanup(func() {
+		m.StopAllSchedulers()
 		if a := m.GetStatus(); a != nil {
 			m.CancelCrawl(a.ID)
 		}

@@ -7,7 +7,7 @@ import { startGuardedProxy, type GuardedProxy } from './guard-proxy.js';
 import { closeBrowser, getBrowser, renderPage, setGuardedProxyOptionsForTests } from './browser.js';
 
 /** A public-looking address (TEST-NET-3) that tests route to the local server. */
-const PUBLIC_IP = '203.0.113.7';
+const PUBLIC_IP = '93.184.215.14';
 
 let server: Server;
 let serverPort = 0;

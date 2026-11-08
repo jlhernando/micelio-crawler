@@ -6,7 +6,7 @@ import { fetchPage } from './fetcher.js';
 import { RobotsChecker, SITEMAP_LIMITS } from './robots.js';
 import { extractPageData, JSONLD_LIMITS } from './extractor.js';
 import { NgramAnalyzer, MAX_PAGE_TOKENS } from './ngrams.js';
-import { findSimilarPairs, clampThreshold, SIMILARITY_LIMITS } from './embeddings.js';
+import { findSimilarPairs, clampThreshold, similarityPageCap, SIMILARITY_LIMITS } from './embeddings.js';
 import { readBodyCapped } from './body-limit.js';
 
 // ── Local hostile server ─────────────────────────────────
@@ -224,6 +224,58 @@ describe('embedding similarity bounds', () => {
       expect(pairs[0].similarity).toBeGreaterThan(0.999);
     } finally {
       SIMILARITY_LIMITS.maxPages = saved;
+    }
+  });
+
+  it('compares 10,000 pages of 1,536-dim vectors and lowers the cap only for wider ones', () => {
+    const L = SIMILARITY_LIMITS;
+    expect(similarityPageCap(1536)).toBe(L.maxPages);
+    const n3072 = similarityPageCap(3072);
+    expect(n3072).toBeLessThan(L.maxPages);
+    expect(n3072).toBeGreaterThan(7000);
+    expect((n3072 * (n3072 - 1)) / 2 * 3072).toBeLessThanOrEqual(L.maxWork);
+    expect(((n3072 + 1) * n3072) / 2 * 3072).toBeGreaterThan(L.maxWork);
+    expect(similarityPageCap(3)).toBe(L.maxPages);
+  });
+
+  it('compares fewer pages when vectors are wide', async () => {
+    const saved = SIMILARITY_LIMITS.maxWork;
+    // 4 dims, budget for 10 pages: 10*9/2*4 = 180
+    SIMILARITY_LIMITS.maxWork = 180;
+    try {
+      const urls = Array.from({ length: 50 }, (_, i) => `u${i}`);
+      const vectors = urls.map(() => [1, 0, 0, 0]);
+      vectors[3] = []; // not embedded: neither compared nor counted
+      const { compared, total } = await findSimilarPairs(urls, vectors, 0.5);
+      expect(compared).toBe(10);
+      expect(total).toBe(49);
+    } finally {
+      SIMILARITY_LIMITS.maxWork = saved;
+    }
+  });
+
+  it('yields to the event loop inside a row and stops on abort', async () => {
+    const savedSlice = SIMILARITY_LIMITS.sliceMs;
+    SIMILARITY_LIMITS.sliceMs = 0;
+    try {
+      const n = 2000;
+      const urls = Array.from({ length: n }, (_, i) => `u${i}`);
+      const vectors = urls.map((_, i) => [1, (i % 7) / 100]);
+      const ctrl = new AbortController();
+      let ticks = 0;
+      // Abort from the event loop: only possible if the loop yields mid-work.
+      const timer = setImmediate(function tick() {
+        ticks++;
+        if (ticks === 3) ctrl.abort();
+        else setImmediate(tick);
+      });
+      const { pairs } = await findSimilarPairs(urls, vectors, 0.9, ctrl.signal);
+      clearImmediate(timer);
+      expect(ticks).toBeGreaterThanOrEqual(3);
+      // Aborted after a few slices: far fewer than every page's top-K.
+      expect(pairs.length).toBeLessThan(n * SIMILARITY_LIMITS.topKPerPage / 2);
+    } finally {
+      SIMILARITY_LIMITS.sliceMs = savedSlice;
     }
   });
 });

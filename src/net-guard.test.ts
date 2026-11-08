@@ -6,7 +6,7 @@ import { pinnedProxyDispatcher } from './proxy-dispatcher.js';
 import {
   isBlockedIp, urlBlockReason, guardedLookup, guardedDispatcher, assertPublicUrl,
   setAllowPrivateNetworks, stripCredentialsOnCrossOrigin, isCredentialHeader, credentialHostAllowed,
-  credentialHostSet, setDnsLookupForTests,
+  credentialHostSet, setDnsLookupForTests, setAllowFakeIpForTests, fakeIpHint, ALLOW_FAKE_IP_ENV,
 } from './net-guard.js';
 import { fetchPage, fetchHead, checkExternalUrl, headResourceSize } from './fetcher.js';
 
@@ -45,9 +45,60 @@ describe('isBlockedIp', () => {
   it.each([
     '64:ff9b::8.8.8.8', '2002:808:808::1', // NAT64 / 6to4 of 8.8.8.8
     '2001:0:4136:e378:8000:63bf:f7f7:f7f7', // Teredo, client 8.8.8.8
-    '2001:db8::1', '2001:4860:4860::8888', // 2001::/32 is only Teredo, not all of 2001::/16
+    '2001:4860:4860::8888', '2001:200::1', // 2001::/32 is Teredo and 2001::/23 is special, not all of 2001::/16
+    '::ffff:0:808:808', '::8.8.8.8', // IPv4-translatable / IPv4-compatible forms of 8.8.8.8
   ])('allows public transition address %s', (ip) => {
     expect(isBlockedIp(ip)).toBe(false);
+  });
+
+  // Other special-purpose ranges that are not globally reachable (IANA registries, RFC 6890).
+  it.each([
+    '0.1.2.3', // 0.0.0.0/8
+    '192.0.0.1', '192.0.0.255', // IETF protocol assignments 192.0.0.0/24
+    '192.0.2.1', '198.51.100.7', '203.0.113.7', // documentation TEST-NET-1/2/3
+    '192.88.99.1', // deprecated 6to4 relay anycast
+    '198.18.0.1', '198.19.255.255', // benchmarking 198.18.0.0/15
+    '240.0.0.1', '254.1.2.3', '255.255.255.255', // reserved 240/4 and broadcast
+    '2001:db8::1', '2001:db8:ffff::1', // documentation 2001:db8::/32
+    '3fff::1', '3fff:fff::1', // documentation 3fff::/20
+    '2001:2::1', '2001:10::1', '2001:20::1', '2001:1ff::1', // 2001::/23 (benchmarking, ORCHID...)
+    '100::1', '100::ffff:ffff:ffff:ffff', // discard-only 100::/64
+    '5f00::1', '4000::1', '1::1', 'e000::1', // outside global unicast 2000::/3
+    'fc00::1', 'fdff::1', 'fe80::1', 'fec0::1', 'ff0e::1', // ULA, link-local, site-local, multicast
+  ])('blocks special-purpose %s', (ip) => {
+    expect(isBlockedIp(ip)).toBe(true);
+  });
+
+  // Transition forms are decoded and judged by the IPv4 address they carry.
+  it.each([
+    '::ffff:198.18.0.1', '::ffff:192.0.2.1', '::ffff:240.0.0.1', // IPv4-mapped
+    '::ffff:0:127.0.0.1', '::ffff:0:10.0.0.1', '::ffff:0:198.18.0.1', '::ffff:0:0:0', // IPv4-translatable ::ffff:0:0:0/96
+    '::10.0.0.1', '::198.18.0.1', // IPv4-compatible ::/96
+    '64:ff9b::198.18.0.1', '64:ff9b::192.0.2.1', '64:ff9b::240.0.0.1', // NAT64 64:ff9b::/96
+    '64:ff9b:1::8.8.8.8', // local-use NAT64 64:ff9b:1::/48
+    '2002:c612:1::', '2002:c000:201::', '2002:f000:1::', // 6to4 of 198.18.0.1, 192.0.2.1, 240.0.0.1
+    '2001:0:4136:e378::39ed:fffe', // Teredo, client 198.18.0.1
+  ])('blocks transition form of a special address %s', (ip) => {
+    expect(isBlockedIp(ip)).toBe(true);
+  });
+
+  it.each(['8.8.8.8', '1.1.1.1', '93.184.215.14', '198.17.255.255', '198.20.0.1', '192.0.3.1', '223.255.255.255',
+    '2606:4700::1111', '2a00:1450:4001::1', '3fff:1000::1', '2001:db9::1'])(
+    'still allows public %s', (ip) => {
+      expect(isBlockedIp(ip)).toBe(false);
+    },
+  );
+
+  it('blocks special-purpose literals in URLs and DNS answers', async () => {
+    for (const u of ['http://198.18.0.1/', 'http://[2001:db8::1]/', 'http://[::ffff:0:a00:1]/', 'http://240.0.0.1/', 'http://[100::1]/']) {
+      expect(urlBlockReason(u), u).not.toBeNull();
+    }
+    setDnsLookupForTests((_h, _o, cb) => cb(null, [{ address: '198.18.0.10', family: 4 }]));
+    try {
+      await expect(assertPublicUrl('http://bench.test/')).rejects.toThrow(/private address 198\.18\.0\.10/);
+    } finally {
+      setDnsLookupForTests(null);
+    }
   });
 
   it('blocks transition literals in URLs too', () => {
@@ -58,6 +109,53 @@ describe('isBlockedIp', () => {
 
   it('fails closed on garbage', () => {
     expect(isBlockedIp('not-an-ip')).toBe(true);
+  });
+});
+
+// Fake-IP proxies (Clash, Surge...) resolve every name into 198.18.0.0/15.
+// Blocked by default with a hint; MICELIO_ALLOW_FAKE_IP allows that range only.
+describe('fake-IP range 198.18.0.0/15', () => {
+  afterEach(() => {
+    setAllowFakeIpForTests(false);
+    setDnsLookupForTests(null);
+    delete process.env[ALLOW_FAKE_IP_ENV];
+  });
+
+  it('is blocked by default, and the error says why and how to allow it', async () => {
+    setAllowFakeIpForTests(false);
+    expect(isBlockedIp('198.18.0.42')).toBe(true);
+    setDnsLookupForTests((_h, _o, cb) => cb(null, [{ address: '198.18.0.42', family: 4 }]));
+    const err = await assertPublicUrl('http://example.test/').catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    const msg = (err as Error).message;
+    for (const want of ['198.18.0.42', '198.18.0.0/15', 'fake-IP', 'Clash', `${ALLOW_FAKE_IP_ENV}=1`, 'redir-host']) {
+      expect(msg).toContain(want);
+    }
+    expect(urlBlockReason('http://198.18.0.42/')).toContain(`${ALLOW_FAKE_IP_ENV}=1`);
+    expect(urlBlockReason('http://10.0.0.1/')).not.toContain('fake-IP');
+    expect(fakeIpHint('10.0.0.1')).toBe('');
+    expect(fakeIpHint('::ffff:198.18.0.1')).toContain('198.18.0.1 is in the benchmarking range');
+  });
+
+  it('is allowed with the opt-in, and nothing else changes', async () => {
+    setAllowFakeIpForTests(true);
+    for (const ip of ['198.18.0.42', '198.19.255.255', '::ffff:198.18.0.1']) expect(isBlockedIp(ip), ip).toBe(false);
+    for (const ip of [
+      '127.0.0.1', '10.0.0.1', '192.168.1.1', '169.254.169.254', '100.64.0.1', '192.0.2.1', '203.0.113.7', '240.0.0.1',
+      '2001:db8::1', 'fc00::1',
+      '64:ff9b::198.18.0.1', '2002:c612:1::', '::ffff:0:198.18.0.1', '::198.18.0.1', // transition forms stay blocked
+    ]) expect(isBlockedIp(ip), ip).toBe(true);
+    expect(urlBlockReason('http://198.18.0.42/')).toBeNull();
+    setDnsLookupForTests((_h, _o, cb) => cb(null, [{ address: '198.18.0.42', family: 4 }]));
+    await expect(assertPublicUrl('http://example.test/')).resolves.toBeUndefined();
+  });
+
+  it('reads MICELIO_ALLOW_FAKE_IP from the environment', () => {
+    for (const [v, want] of [['1', false], ['true', false], ['0', true], ['', true], ['nope', true]] as const) {
+      process.env[ALLOW_FAKE_IP_ENV] = v;
+      setAllowFakeIpForTests(null);
+      expect(isBlockedIp('198.18.0.42'), v).toBe(want);
+    }
   });
 });
 
@@ -423,7 +521,7 @@ describe('fetcher through a user proxy (CLI --proxy / trusted proxy)', () => {
     await new Promise<void>((r) => proxy.listen(0, '127.0.0.1', r));
     proxyUrl = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`;
     setDnsLookupForTests((hostname, _opts, cb) => {
-      const ip = ({ 'evil.test': '127.0.0.1', 'public.test': '203.0.113.7' } as Record<string, string>)[hostname];
+      const ip = ({ 'evil.test': '127.0.0.1', 'public.test': '93.184.215.14' } as Record<string, string>)[hostname];
       if (!ip) return cb(Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }), []);
       cb(null, [{ address: ip, family: 4 }]);
     });
@@ -448,13 +546,13 @@ describe('fetcher through a user proxy (CLI --proxy / trusted proxy)', () => {
       const ok = await fetchPage('http://public.test/', { userAgent: 't', dispatcher });
       expect(ok.statusCode).toBe(200);
       expect(ok.html).toContain('page');
-      expect(proxied).toEqual(['GET http://203.0.113.7:80/']);
+      expect(proxied).toEqual(['GET http://93.184.215.14:80/']);
 
       // A redirect hop to a name that resolves to loopback is refused too
       proxied.length = 0;
       const hop = await fetchPage('http://public.test/hop', { userAgent: 't', dispatcher });
       expect(hop.error).toMatch(/Blocked/);
-      expect(proxied).toEqual(['GET http://203.0.113.7:80/hop']);
+      expect(proxied).toEqual(['GET http://93.184.215.14:80/hop']);
     } finally {
       await dispatcher.close();
     }

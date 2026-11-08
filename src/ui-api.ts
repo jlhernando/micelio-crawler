@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { gzipSync } from 'node:zlib';
+import { gzip } from 'node:zlib';
+import { promisify } from 'node:util';
 import type { UiStore } from './ui-store.js';
 import { listModeUrls, type UiCrawlManager } from './ui-crawl-manager.js';
 import { diffPages, DIFF_FIELDS } from './diff.js';
@@ -289,7 +290,7 @@ export function createApiHandler(store: UiStore, crawlManager: UiCrawlManager) {
         const results = await crawlManager.getResults(job.id);
         if (!results) return notFound(res, 'Crawl results not found');
         const graphData = buildGraphResponse(results.pages as PageData[]);
-        jsonCompressed(req, res, 200, graphData);
+        await jsonCompressed(req, res, 200, graphData);
         return true;
       }
 
@@ -593,11 +594,13 @@ export function buildGraphResponse(pages: PageData[]): GraphResponse {
   };
 }
 
-function jsonCompressed(req: IncomingMessage, res: ServerResponse, status: number, data: unknown): void {
+const gzipAsync = promisify(gzip);
+
+async function jsonCompressed(req: IncomingMessage, res: ServerResponse, status: number, data: unknown): Promise<void> {
   const body = JSON.stringify(data);
   const acceptEncoding = req.headers['accept-encoding'] || '';
   if (acceptEncoding.includes('gzip')) {
-    const compressed = gzipSync(Buffer.from(body));
+    const compressed = await gzipAsync(Buffer.from(body));
     res.writeHead(status, {
       'Content-Type': 'application/json',
       'Content-Encoding': 'gzip',

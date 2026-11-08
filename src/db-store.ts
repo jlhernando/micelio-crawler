@@ -44,6 +44,9 @@ export class CrawlStore {
   private stmtTotalSeen!: Database.Statement;
   private stmtSetMeta!: Database.Statement;
   private stmtGetMeta!: Database.Statement;
+  /** Running total of the page JSON this object inserted (reload size estimate). */
+  private insertedBytes = 0;
+  private insertedCount = 0;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
@@ -116,12 +119,15 @@ export class CrawlStore {
   // ── Page Storage ──────────────────────────────────────────
 
   insertPage(page: PageData): void {
+    const data = JSON.stringify(page);
     this.stmtInsertPage.run(
       page.url,
-      JSON.stringify(page),
+      data,
       page.statusCode,
       page.crawledAt,
     );
+    this.insertedBytes += data.length;
+    this.insertedCount++;
   }
 
   updatePage(url: string, page: PageData): void {
@@ -170,6 +176,18 @@ export class CrawlStore {
       pages: rows.map((r) => JSON.parse(r.data) as PageData),
       lastRowid: rows.length ? rows[rows.length - 1].rowid : afterRowid,
     };
+  }
+
+  /**
+   * Average stored page JSON length (characters): from the pages this store
+   * object inserted (running total, no read), else from the last 100 rows.
+   */
+  averagePageBytes(): number {
+    if (this.insertedCount > 0) return this.insertedBytes / this.insertedCount;
+    const row = this.db
+      .prepare('SELECT AVG(LENGTH(data)) AS n FROM (SELECT data FROM pages ORDER BY rowid DESC LIMIT 100)')
+      .get() as { n: number | null };
+    return row.n ?? 0;
   }
 
   getPageCount(): number {

@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, readdirSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildOutputFilename } from './scheduler.js';
 
 describe('buildOutputFilename', () => {
@@ -32,4 +34,32 @@ describe('buildOutputFilename', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+describe('updateScheduleState across processes', () => {
+  it('several scheduler processes updating one schedule lose no run and never crash', async () => {
+    const root = join(fileURLToPath(import.meta.url), '..', '..');
+    const home = mkdtempSync(join(tmpdir(), 'micelio-sched-'));
+    const script = join(home, 'worker.ts');
+    writeFileSync(script, `
+      import { updateScheduleState } from ${JSON.stringify(pathToFileURL(join(root, 'src', 'scheduler.ts')).href)};
+      const init = () => ({ id: 'race', url: 'https://a.test/', cron: '* * * * *', createdAt: '', lastRun: null,
+        lastStatus: null, lastPages: 0, lastDurationMs: 0, nextRun: '', totalRuns: 0, outputDir: '.' });
+      for (let i = 0; i < 25; i++) updateScheduleState('race', init, (s) => { s.totalRuns++; s.lastPages = i; });
+    `);
+    const tsx = join(root, 'node_modules', '.bin', 'tsx');
+    try {
+      const codes = await Promise.all(Array.from({ length: 4 }, () => new Promise<number | null>((done) => {
+        const child = spawn(tsx, [script], { env: { ...process.env, HOME: home, USERPROFILE: home }, stdio: 'inherit' });
+        child.on('exit', done);
+      })));
+      expect(codes).toEqual([0, 0, 0, 0]);
+      const dir = join(home, '.micelio', 'schedules');
+      expect(JSON.parse(readFileSync(join(dir, 'race.json'), 'utf-8')).totalRuns).toBe(100);
+      // No temp or lock file is left behind
+      expect(readdirSync(dir)).toEqual(['race.json']);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

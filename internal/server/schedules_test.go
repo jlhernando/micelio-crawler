@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/micelio/micelio/internal/scheduler"
@@ -58,6 +61,96 @@ func TestScheduleDuplicateKeepsSavedConfig(t *testing.T) {
 	}
 	if got := states[0].CrawlConfig["limit"]; got != float64(10) {
 		t.Fatalf("saved limit = %v, want 10 (duplicate overwrote it)", got)
+	}
+}
+
+// Identical POSTs sent at once start one scheduler: the others get 409, and
+// the one that runs is the one the manager tracks (so it can be stopped).
+func TestScheduleConcurrentCreateStartsOne(t *testing.T) {
+	fakeHome(t)
+	t.Chdir(t.TempDir())
+	api, _, m := newTestAPI(t)
+	defer m.StopAllSchedulers()
+	const n = 16
+	codes := make([]int, n)
+	ids := make([]string, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			rec := httptest.NewRecorder()
+			api.ServeHTTP(rec, httptest.NewRequest("POST", "/api/schedules", strings.NewReader(
+				`{"cron":"@daily","name":"race","config":{"seedUrl":"https://example.com/"}}`)))
+			codes[i] = rec.Code
+			var body map[string]any
+			json.Unmarshal(rec.Body.Bytes(), &body)
+			ids[i], _ = body["id"].(string)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	ok, conflict := 0, 0
+	var id string
+	for i, c := range codes {
+		switch c {
+		case 200:
+			ok++
+			id = ids[i]
+		case 409:
+			conflict++
+		default:
+			t.Fatalf("unexpected status %d", c)
+		}
+	}
+	if ok != 1 || conflict != n-1 {
+		t.Fatalf("%d created, %d conflicts; want 1 and %d", ok, conflict, n-1)
+	}
+	m.mu.RLock()
+	tracked, reserved := len(m.schedulers), len(m.scheduleReserved)
+	m.mu.RUnlock()
+	if tracked != 1 || reserved != 0 || m.trackedScheduler(id) == nil {
+		t.Fatalf("tracked %d, reserved %d, id %q tracked=%v", tracked, reserved, id, m.trackedScheduler(id) != nil)
+	}
+}
+
+// A delete or shutdown that arrives while a schedule is being created (ID
+// reserved, scheduler.New still saving) stops it: the scheduler is never
+// tracked or run, and a deleted one leaves no saved state behind.
+func TestScheduleStoppedWhileBeingCreated(t *testing.T) {
+	for _, tc := range []string{"delete", "shutdown"} {
+		t.Run(tc, func(t *testing.T) {
+			fakeHome(t)
+			t.Chdir(t.TempDir())
+			_, s, m := newTestAPI(t)
+			afterScheduleReserved = func(id string) {
+				if tc == "delete" {
+					m.DeleteScheduler(id)
+					scheduler.DeleteSchedule(id)
+				} else {
+					m.StopAllSchedulers()
+				}
+			}
+			t.Cleanup(func() { afterScheduleReserved = nil })
+
+			_, err := m.startUISchedule(s, scheduleRequest{Cron: "@daily", Name: tc,
+				Config: map[string]interface{}{"seedUrl": "https://example.com/"}})
+			if !errors.Is(err, errScheduleCancelled) {
+				t.Fatalf("err = %v, want errScheduleCancelled", err)
+			}
+			m.mu.RLock()
+			tracked, reserved := len(m.schedulers), len(m.scheduleReserved)
+			m.mu.RUnlock()
+			if tracked != 0 || reserved != 0 {
+				t.Fatalf("tracked %d, reserved %d after cancel", tracked, reserved)
+			}
+			states, _ := scheduler.ListSchedules()
+			if tc == "delete" && len(states) != 0 {
+				t.Fatalf("deleted schedule left saved state: %v", states)
+			}
+		})
 	}
 }
 

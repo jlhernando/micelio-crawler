@@ -22,6 +22,7 @@
 FROM node:24-alpine@sha256:a34ab6d7f6f4813f4d0c5469d74685604b962fbdbf5793a7bc7b4998ecb867c8 AS dashboard
 WORKDIR /src/dashboard
 COPY dashboard/package.json dashboard/package-lock.json ./
+COPY dashboard/vendor/ ./vendor/
 RUN npm ci --no-audit --no-fund
 COPY dashboard/ ./
 RUN npm run build

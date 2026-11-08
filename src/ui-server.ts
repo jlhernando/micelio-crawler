@@ -7,7 +7,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { UiStore } from './ui-store.js';
 import { UiCrawlManager } from './ui-crawl-manager.js';
 import { createApiHandler } from './ui-api.js';
-import { checkUiAccess, isLoopbackHost, parseRequestUrl } from './ui-auth.js';
+import { AuthLimiter, authTokenProblem, checkUiAccess, handleLogin, isLoopbackHost, parseRequestUrl, sessionCookieName, type UiAccessOptions } from './ui-auth.js';
 import { setAllowPrivateNetworks, setTrustedProxy } from './net-guard.js';
 
 const MIME_TYPES: Record<string, string> = {
@@ -26,7 +26,7 @@ const MIME_TYPES: Record<string, string> = {
 export interface UiServerOptions {
   /** Listen address. Default 127.0.0.1; anything else needs authToken. */
   host?: string;
-  /** Bearer token required on /api/* and /ws. */
+  /** Token required on /api/* and /ws (Bearer header, or the cookie set by POST /login). */
   authToken?: string;
   /** The only proxy dashboard crawls may use (--trusted-proxy). */
   trustedProxy?: string;
@@ -37,6 +37,11 @@ export async function startUiServer(port: number, autoOpen = true, opts: UiServe
   const authToken = opts.authToken || '';
   if (!isLoopbackHost(host) && !authToken) {
     console.error(`Error: --host ${host} exposes the dashboard to the network. Set --auth-token (or MICELIO_AUTH_TOKEN) too.`);
+    process.exit(1);
+  }
+  const tokenProblem = authTokenProblem(authToken);
+  if (tokenProblem) {
+    console.error(`Error: ${tokenProblem}`);
     process.exit(1);
   }
   // The dashboard never crawls private networks, whatever the CLI flags say
@@ -60,6 +65,7 @@ export async function startUiServer(port: number, autoOpen = true, opts: UiServe
   const store = new UiStore();
   const crawlManager = new UiCrawlManager(store);
   const apiHandler = createApiHandler(store, crawlManager);
+  const access: UiAccessOptions = { authToken, cookieName: sessionCookieName(port), limiter: new AuthLimiter() };
 
   // ── HTTP Server ─────────────────────────────────────────
 
@@ -78,13 +84,20 @@ export async function startUiServer(port: number, autoOpen = true, opts: UiServe
 
     // API routes
     if (path.startsWith('/api/')) {
-      const denied = checkUiAccess(req, { authToken }, 'api');
+      const denied = checkUiAccess(req, access, 'api');
       if (denied) {
+        const code = denied.status === 401 ? 'UNAUTHORIZED' : denied.status === 429 ? 'TOO_MANY_REQUESTS' : 'FORBIDDEN';
         res.writeHead(denied.status, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { code: denied.status === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN', message: denied.message } }));
+        res.end(JSON.stringify({ error: { code, message: denied.message } }));
         return;
       }
       await apiHandler(req, res);
+      return;
+    }
+
+    // Dashboard login screen: sets the session cookie (never falls through to the SPA)
+    if (path === '/login' && req.method === 'POST') {
+      await handleLogin(req, res, access);
       return;
     }
 
@@ -110,7 +123,7 @@ export async function startUiServer(port: number, autoOpen = true, opts: UiServe
   server.on('upgrade', (req, socket, head) => {
     const url = parseRequestUrl(req);
     if (url?.pathname === '/ws') {
-      if (checkUiAccess(req, { authToken }, 'ws')) {
+      if (checkUiAccess(req, access, 'ws')) {
         socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
         socket.destroy();
         return;
@@ -153,7 +166,7 @@ export async function startUiServer(port: number, autoOpen = true, opts: UiServe
   server.listen(port, host, () => {
     const url = `http://${isLoopbackHost(host) ? 'localhost' : host}:${port}`;
     process.stderr.write(`\n  Micelio UI running at ${url}\n\n`);
-    if (authToken) process.stderr.write('  Auth: Bearer token required on /api/* and /ws\n\n');
+    if (authToken) process.stderr.write('  Auth: token required (dashboard login screen, or Authorization: Bearer for scripts)\n\n');
 
     if (autoOpen) {
       const cmd = process.platform === 'darwin' ? 'open'

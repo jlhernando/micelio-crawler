@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -110,18 +111,22 @@ type CrawlManager struct {
 	active *ActiveCrawl
 	// tuneMu serialises TuneCrawl (apply, config copy, save), so two tunes
 	// cannot save their configs in the opposite order of their changes.
-	tuneMu      sync.Mutex
-	results     map[string]*CrawlResults
-	schedulers  map[string]*scheduler.Scheduler
-	onProgress  ProgressCallback
-	resultOrder []string
-	resultSize  map[string]int64 // estimated bytes per cached result
-	loads       *resultLoads
-	logBotIPs   map[string]map[string]map[string]struct{} // jobID -> bot -> IPs
-	ctx         context.Context
-	cancel      context.CancelFunc
-	mu          sync.RWMutex
-	background  sync.WaitGroup // post-crawl work that outlives the "complete" event
+	tuneMu     sync.Mutex
+	results    map[string]*CrawlResults
+	schedulers map[string]*scheduler.Scheduler
+	// scheduleReserved tracks a schedule being created and any stop/delete received meanwhile.
+	scheduleReserved map[string]string
+	// schedulersClosed prevents pending creations from starting during shutdown.
+	schedulersClosed bool
+	onProgress       ProgressCallback
+	resultOrder      []string
+	resultSize       map[string]int64 // estimated bytes per cached result
+	loads            *resultLoads
+	logBotIPs        map[string]map[string]map[string]struct{} // jobID -> bot -> IPs
+	ctx              context.Context
+	cancel           context.CancelFunc
+	mu               sync.RWMutex
+	background       sync.WaitGroup // post-crawl work that outlives the "complete" event
 	// SkipSSRF lets crawls reach loopback and private addresses. Tests
 	// only: no API, flag or setting can turn it on.
 	SkipSSRF bool
@@ -184,12 +189,26 @@ func (m *CrawlManager) TrackScheduler(s *scheduler.Scheduler) {
 	m.schedulers[state.ID] = s
 }
 
-// StopScheduler stops and removes a tracked scheduler.
+// StopScheduler stops and removes a tracked scheduler. A schedule still
+// being created under this ID (startUISchedule) is not started.
 func (m *CrawlManager) StopScheduler(id string) {
+	m.stopScheduler(id, reserveStopped)
+}
+
+// DeleteScheduler stops a scheduler for a deletion: a schedule still being
+// created under this ID is not started and its saved state is removed.
+func (m *CrawlManager) DeleteScheduler(id string) {
+	m.stopScheduler(id, reserveDeleted)
+}
+
+func (m *CrawlManager) stopScheduler(id string, mark string) {
 	m.mu.Lock()
 	s, ok := m.schedulers[id]
 	if ok {
 		delete(m.schedulers, id)
+	}
+	if _, creating := m.scheduleReserved[id]; creating && m.scheduleReserved[id] != reserveDeleted {
+		m.scheduleReserved[id] = mark
 	}
 	m.mu.Unlock()
 	if ok {
@@ -198,8 +217,10 @@ func (m *CrawlManager) StopScheduler(id string) {
 }
 
 // StopAllSchedulers stops all running schedulers (called on server shutdown).
+// Schedules still being created are not started afterwards.
 func (m *CrawlManager) StopAllSchedulers() {
 	m.mu.Lock()
+	m.schedulersClosed = true
 	all := make([]*scheduler.Scheduler, 0, len(m.schedulers))
 	for _, s := range m.schedulers {
 		all = append(all, s)
@@ -245,6 +266,14 @@ func (m *CrawlManager) SetProgressCallback(cb ProgressCallback) {
 
 // StartCrawl begins a new crawl. Returns error if one is already running.
 func (m *CrawlManager) StartCrawl(crawlID string, config map[string]interface{}) error {
+	return m.startCrawl(crawlID, config, nil)
+}
+
+// startCrawl takes the single active-crawl slot, then runs prepare (if set)
+// before the crawl starts. prepare is where a restart rewrites the job, so a
+// refused start (another crawl active) changes nothing. If prepare fails the
+// slot is given back and the crawl does not start.
+func (m *CrawlManager) startCrawl(crawlID string, config map[string]interface{}, prepare func() error) error {
 	m.mu.Lock()
 	if m.active != nil {
 		activeID := m.active.ID
@@ -268,11 +297,48 @@ func (m *CrawlManager) StartCrawl(crawlID string, config map[string]interface{})
 		Cancel:      cancel,
 		StatusCodes: make(map[string]int),
 	}
+	reserved := m.active
 	m.mu.Unlock()
 
+	if prepare != nil {
+		if err := prepare(); err != nil {
+			m.mu.Lock()
+			if m.active == reserved {
+				m.active = nil
+			}
+			m.mu.Unlock()
+			cancel()
+			release()
+			return err
+		}
+	}
+
+	// Cancel or stop may have hit the slot while prepare ran (or since the
+	// unlock above). Then the crawl must not start: saving "running" would
+	// overwrite "cancelled" and runCrawl would run on a dead context. Saved
+	// under m.mu, so a later cancel's "cancelled" lands after "running".
+	m.mu.Lock()
+	if m.active != reserved || ctx.Err() != nil {
+		stopped := m.active == reserved // StopCrawl keeps the slot, cancel clears it
+		if stopped {
+			m.active = nil
+			if err := m.store.UpdateCrawlJob(crawlID, map[string]interface{}{"status": "cancelled"}); err != nil {
+				log.Printf("store: update crawl %s status: %v", crawlID, err)
+			}
+		}
+		m.mu.Unlock()
+		cancel()
+		release()
+		if stopped {
+			m.store.AddCrawlEvent(crawlID, "cancelled", "stopped before the crawl started")
+			m.emit(ProgressEvent{CrawlID: crawlID, Type: "cancelled", Data: map[string]interface{}{"crawlId": crawlID}})
+		}
+		return fmt.Errorf("crawl %s was cancelled before it started", crawlID)
+	}
 	if err := m.store.UpdateCrawlJob(crawlID, map[string]interface{}{"status": "running"}); err != nil {
 		log.Printf("store: update crawl %s status: %v", crawlID, err)
 	}
+	m.mu.Unlock()
 	// Add "started" event (only for new crawls — resumes add their own event)
 	if _, isResume := config["resume"]; !isResume {
 		m.store.AddCrawlEvent(crawlID, "started", "")
@@ -322,9 +388,9 @@ func (m *CrawlManager) PauseCrawl(crawlID string) error {
 // ResumeCrawl resumes a paused crawl.
 func (m *CrawlManager) ResumeCrawl(crawlID string) error {
 	m.mu.Lock()
-	if m.active == nil || m.active.ID != crawlID {
+	if err := m.liveCrawlLocked(crawlID); err != nil {
 		m.mu.Unlock()
-		return fmt.Errorf("no active crawl with id %s", crawlID)
+		return err
 	}
 	m.active.pauseMu.Lock()
 	m.active.Paused = false
@@ -333,11 +399,13 @@ func (m *CrawlManager) ResumeCrawl(crawlID string) error {
 		m.active.pauseCh = nil
 	}
 	m.active.pauseMu.Unlock()
-	m.mu.Unlock()
-
+	// Saved under m.mu, like pause: completion sets finished under it first,
+	// so "running" never lands after "completed".
 	if err := m.store.UpdateCrawlJob(crawlID, map[string]interface{}{"status": "running"}); err != nil {
 		log.Printf("store: update crawl %s status: %v", crawlID, err)
 	}
+	m.mu.Unlock()
+
 	m.emit(ProgressEvent{CrawlID: crawlID, Type: "resumed", Data: map[string]interface{}{"crawlId": crawlID}})
 	return nil
 }
@@ -384,35 +452,39 @@ func (m *CrawlManager) RestartCrawl(oldJobID string, configOverride map[string]i
 	config["resume"] = true
 	config["dbPath"] = oldJob.DBPath
 
-	// Clean up any duplicate jobs sharing the same DB (from previous resume attempts)
-	if _, cleanErr := m.store.DeleteCrawlJobsByDBPath(oldJobID, oldJob.DBPath); cleanErr != nil {
-		log.Printf("store: clean up duplicate jobs for %s: %v", oldJobID, cleanErr)
-	}
-
-	// Reuse the existing job — update its config and status, add "resumed" event.
-	// The saved config leaves out resume/dbPath so a later Recrawl of this
-	// job starts fresh instead of reopening its DB.
-	saved := make(map[string]interface{}, len(config))
-	for k, v := range config {
-		if k != "resume" && k != "dbPath" {
-			saved[k] = v
+	// The job is rewritten only once the crawl slot is ours: a restart
+	// refused because another crawl runs (or this one is still active)
+	// leaves the job, its config and its events untouched.
+	prepare := func() error {
+		// Clean up any duplicate jobs sharing the same DB (from previous resume attempts)
+		if _, cleanErr := m.store.DeleteCrawlJobsByDBPath(oldJobID, oldJob.DBPath); cleanErr != nil {
+			log.Printf("store: clean up duplicate jobs for %s: %v", oldJobID, cleanErr)
 		}
-	}
-	if err := m.store.UpdateCrawlJobConfig(oldJobID, saved); err != nil {
-		return "", fmt.Errorf("save config for resume: %w", err)
-	}
-	if err := m.store.UpdateCrawlJob(oldJobID, map[string]interface{}{
-		"status":      "running",
-		"completedAt": nil,
-		"durationMs":  nil,
-	}); err != nil {
-		return "", fmt.Errorf("update job for resume: %w", err)
-	}
-	m.store.AddCrawlEvent(oldJobID, "resumed", fmt.Sprintf("from %d pages", oldJob.PageCount))
 
-	if err := m.StartCrawl(oldJobID, config); err != nil {
-		// Rollback status
-		m.store.UpdateCrawlJob(oldJobID, map[string]interface{}{"status": "failed"})
+		// Reuse the existing job — update its config and status, add "resumed" event.
+		// The saved config leaves out resume/dbPath so a later Recrawl of this
+		// job starts fresh instead of reopening its DB.
+		saved := make(map[string]interface{}, len(config))
+		for k, v := range config {
+			if k != "resume" && k != "dbPath" {
+				saved[k] = v
+			}
+		}
+		if err := m.store.UpdateCrawlJobConfig(oldJobID, saved); err != nil {
+			return fmt.Errorf("save config for resume: %w", err)
+		}
+		if err := m.store.UpdateCrawlJob(oldJobID, map[string]interface{}{
+			"status":      "running",
+			"completedAt": nil,
+			"durationMs":  nil,
+		}); err != nil {
+			return fmt.Errorf("update job for resume: %w", err)
+		}
+		m.store.AddCrawlEvent(oldJobID, "resumed", fmt.Sprintf("from %d pages", oldJob.PageCount))
+		return nil
+	}
+
+	if err := m.startCrawl(oldJobID, config, prepare); err != nil {
 		return "", fmt.Errorf("start resumed crawl: %w", err)
 	}
 
@@ -422,9 +494,9 @@ func (m *CrawlManager) RestartCrawl(oldJobID string, configOverride map[string]i
 // CancelCrawl cancels the active crawl.
 func (m *CrawlManager) CancelCrawl(crawlID string) error {
 	m.mu.Lock()
-	if m.active == nil || m.active.ID != crawlID {
+	if err := m.liveCrawlLocked(crawlID); err != nil {
 		m.mu.Unlock()
-		return fmt.Errorf("no active crawl with id %s", crawlID)
+		return err
 	}
 	active := m.active
 	m.active = nil
@@ -454,9 +526,9 @@ func (m *CrawlManager) CancelCrawl(crawlID string) error {
 // on whatever pages have been crawled so far.
 func (m *CrawlManager) StopCrawl(crawlID string) error {
 	m.mu.Lock()
-	if m.active == nil || m.active.ID != crawlID {
+	if err := m.liveCrawlLocked(crawlID); err != nil {
 		m.mu.Unlock()
-		return fmt.Errorf("no active crawl with id %s", crawlID)
+		return err
 	}
 	m.active.Stopping = true
 	m.active.stopAt = time.Now()
@@ -474,6 +546,23 @@ func (m *CrawlManager) StopCrawl(crawlID string) error {
 
 	active.Cancel()
 	m.emit(ProgressEvent{CrawlID: crawlID, Type: "stopping", Data: map[string]interface{}{"crawlId": crawlID}})
+	return nil
+}
+
+// errCrawlFinished: the crawl loop has returned and its post-crawl analysis
+// runs. The job is already "completed"; resume, cancel, stop and tune would
+// overwrite that status or cancel the analysis.
+var errCrawlFinished = errors.New("crawl has finished; its analysis is running")
+
+// liveCrawlLocked checks that crawlID is the active crawl and that its crawl
+// loop is still running. Caller holds m.mu.
+func (m *CrawlManager) liveCrawlLocked(crawlID string) error {
+	if m.active == nil || m.active.ID != crawlID {
+		return fmt.Errorf("no active crawl with id %s", crawlID)
+	}
+	if m.active.finished {
+		return fmt.Errorf("crawl %s: %w", crawlID, errCrawlFinished)
+	}
 	return nil
 }
 
@@ -1938,10 +2027,63 @@ func (m *CrawlManager) runLogAnalysis(jobID, filePath, filename string, formatHi
 	m.logBotIPs[jobID] = result.BotIPs
 	m.mu.Unlock()
 
+	m.finishLogJob(jobID, stats, result.StreamURLs, func() map[string]interface{} {
+		return map[string]interface{}{
+			"completedAt": now, "durationMs": elapsed,
+			"totalLines": stats.TotalLines, "processedLines": stats.TotalLines, "format": string(format),
+		}
+	}, map[string]interface{}{"totalLines": stats.TotalLines})
+}
+
+// finishLogJob saves a parsed log job (per-URL table, summary stats, final
+// status) and announces it. Success is announced only when every write
+// worked. On a failure the partial URL table is dropped, so a later merge
+// does not read it as the full set (it falls back to the capped summary),
+// and the job is marked failed with an error log_complete.
+func (m *CrawlManager) finishLogJob(jobID string, stats *logs.LogStats, stream func(fn func(logs.URLStat) error) error, jobFields func() map[string]interface{}, completeData map[string]interface{}) {
+	err := m.saveLogResult(jobID, stats, stream)
+	fields := jobFields() // after the save: timings include it
+	if err == nil {
+		done := map[string]interface{}{"status": "completed"}
+		for k, v := range fields {
+			done[k] = v
+		}
+		if err = m.store.UpdateLogJob(jobID, done); err != nil {
+			err = fmt.Errorf("save job status: %w", err)
+		}
+	}
+	if err != nil {
+		errMsg := "saving log analysis failed: " + err.Error()
+		log.Printf("[logs] jobID=%s %s", jobID, errMsg)
+		_ = m.store.SaveLogURLStats(jobID, nil) // drop a partial URL table
+		failed := map[string]interface{}{"status": "failed", "errorMsg": errMsg}
+		for k, v := range fields {
+			if k != "format" && k != "totalLines" && k != "processedLines" {
+				failed[k] = v
+			}
+		}
+		if uerr := m.store.UpdateLogJob(jobID, failed); uerr != nil {
+			log.Printf("[logs] jobID=%s mark failed: %v", jobID, uerr)
+		}
+		m.emit(ProgressEvent{
+			Type: "log_complete",
+			Data: map[string]interface{}{"jobId": jobID, "error": errMsg},
+		})
+		return
+	}
+	data := map[string]interface{}{"jobId": jobID}
+	for k, v := range completeData {
+		data[k] = v
+	}
+	m.emit(ProgressEvent{Type: "log_complete", Data: data})
+}
+
+// saveLogResult writes the per-URL table (if any) and the summary stats.
+func (m *CrawlManager) saveLogResult(jobID string, stats *logs.LogStats, stream func(fn func(logs.URLStat) error) error) error {
 	// Stream URL stats to per-job SQLite table (no intermediate slice).
-	if result.StreamURLs != nil {
-		if err := m.store.StreamLogURLStats(jobID, result.StreamURLs); err != nil {
-			log.Printf("[logs] URL stats save error: %v", err)
+	if stream != nil {
+		if err := m.store.StreamLogURLStats(jobID, stream); err != nil {
+			return fmt.Errorf("save URL stats: %w", err)
 		}
 		if len(stats.TopURLs) == 0 {
 			if topURLs, err := m.store.QueryTopLogURLs(jobID, 500); err == nil && len(topURLs) > 0 {
@@ -1949,19 +2091,14 @@ func (m *CrawlManager) runLogAnalysis(jobID, filePath, filename string, formatHi
 			}
 		}
 	}
-
-	statsJSON, _ := json.Marshal(stats)
-	m.store.SaveLogStats(jobID, statsJSON)
-
-	m.store.UpdateLogJob(jobID, map[string]interface{}{
-		"status": "completed", "completedAt": now, "durationMs": elapsed,
-		"totalLines": stats.TotalLines, "processedLines": stats.TotalLines, "format": string(format),
-	})
-
-	m.emit(ProgressEvent{
-		Type: "log_complete",
-		Data: map[string]interface{}{"jobId": jobID, "totalLines": stats.TotalLines},
-	})
+	statsJSON, err := json.Marshal(stats)
+	if err != nil {
+		return fmt.Errorf("encode stats: %w", err)
+	}
+	if err := m.store.SaveLogStats(jobID, statsJSON); err != nil {
+		return fmt.Errorf("save stats: %w", err)
+	}
+	return nil
 }
 
 // runLogAnalysisMulti parses N log files in parallel with a shared aggregator
@@ -2099,33 +2236,16 @@ func (m *CrawlManager) runLogAnalysisMulti(jobID string, filePaths, filenames []
 	m.logBotIPs[jobID] = result.BotIPs
 	m.mu.Unlock()
 
-	// Stream URL stats to per-job SQLite table (no intermediate slice — saves ~2.5GB).
-	if result.StreamURLs != nil {
-		if err := m.store.StreamLogURLStats(jobID, result.StreamURLs); err != nil {
-			log.Printf("[logs] URL stats save error: %v", err)
+	// URL stats stream to the per-job SQLite table (no intermediate slice —
+	// saves ~2.5GB); analysisMs includes that save.
+	m.finishLogJob(jobID, stats, result.StreamURLs, func() map[string]interface{} {
+		return map[string]interface{}{
+			"completedAt": now, "durationMs": elapsed,
+			"parseMs": parseMs, "analysisMs": time.Since(analysisStart).Milliseconds(),
+			"totalLines": stats.TotalLines, "processedLines": stats.TotalLines, "format": string(format),
+			"files": perFile,
 		}
-		if len(stats.TopURLs) == 0 {
-			if topURLs, err := m.store.QueryTopLogURLs(jobID, 500); err == nil && len(topURLs) > 0 {
-				stats.TopURLs = topURLs
-			}
-		}
-	}
-
-	statsJSON, _ := json.Marshal(stats)
-	m.store.SaveLogStats(jobID, statsJSON)
-
-	analysisMs := time.Since(analysisStart).Milliseconds()
-	m.store.UpdateLogJob(jobID, map[string]interface{}{
-		"status": "completed", "completedAt": now, "durationMs": elapsed,
-		"parseMs": parseMs, "analysisMs": analysisMs,
-		"totalLines": stats.TotalLines, "processedLines": stats.TotalLines, "format": string(format),
-		"files": perFile,
-	})
-
-	m.emit(ProgressEvent{
-		Type: "log_complete",
-		Data: map[string]interface{}{"jobId": jobID, "totalLines": stats.TotalLines, "filesTotal": len(filePaths)},
-	})
+	}, map[string]interface{}{"totalLines": stats.TotalLines, "filesTotal": len(filePaths)})
 }
 
 // runBotVerification performs FCrDNS verification for a log analysis job.

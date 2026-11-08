@@ -4,6 +4,20 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+### Fixed
+
+- Crawls block additional non-global address ranges, including IPv4 addresses hidden in IPv6 transition formats. Fake-IP proxies have an explicit, limited opt-in.
+- Search Console and GA4 retry oversized response pages with smaller batches and retain rows fetched before a later error.
+- Output rewrites preserve the original when flushing or closing fails. Failed log persistence is reported as a failed job.
+- Refused restarts, late lifecycle calls and concurrent schedule creation no longer corrupt jobs or leave untracked schedules. Network checks resume only pauses they own and stop supervising deleted jobs.
+- Typed crawl comparisons retain totals when legacy URL issue details have a different shape, while preserving valid issue lists.
+- Legacy Node.js crawls handle sitemap-only configuration, stop on failed database writes, check reload size, save schedules under a cross-process lock and compress graph responses asynchronously.
+- Legacy Node.js dashboard login uses an HttpOnly cookie and throttles wrong tokens. Configured tokens need at least 32 characters. Similarity yields during comparisons and reports its vector-width comparison limit.
+
+### Development
+
+- The Node.js engine needs Node.js 22.12 or newer. Test tooling uses Vitest 4.1.12. The dashboard development proxy accepts `VITE_API_PROXY_TARGET`.
+
 ## [1.14.1] - 2026-11-06
 
 Dashboard and reliability fixes: the Monitor and sidebar show live, complete numbers, list crawls work from the dashboard, and about fifty smaller bugs are gone.

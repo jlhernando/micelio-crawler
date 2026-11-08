@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,7 +23,10 @@ import (
 var gscEndpoint = "https://searchconsole.googleapis.com/webmasters/v3"
 
 const (
-	gscBatchSize   = 25000
+	// gscBatchSize rows per Search Analytics page (API max 25,000). 10,000
+	// page rows stay under the 4 MB cap; page+query rows are larger, and any
+	// page that still does not fit is asked again with fewer rows.
+	gscBatchSize   = 10000
 	gscMaxBodySize = 4 << 20 // 4 MB
 	gscScope       = "https://www.googleapis.com/auth/webmasters.readonly"
 )
@@ -136,6 +140,7 @@ func (c *GscClient) FetchBatch(ctx context.Context, urls []string) (map[string]*
 	startDate, endDate := reportDateRange(time.Now(), c.days, gscLagDays)
 
 	startRow := 0
+	pageSize := gscBatchSize
 	for {
 		if ctx.Err() != nil {
 			return results, ctx.Err()
@@ -145,11 +150,17 @@ func (c *GscClient) FetchBatch(ctx context.Context, urls []string) (map[string]*
 			"startDate":  startDate,
 			"endDate":    endDate,
 			"dimensions": []string{"page"},
-			"rowLimit":   gscBatchSize,
+			"rowLimit":   pageSize,
 			"startRow":   startRow,
 		}
 
 		rows, err := c.querySearchAnalytics(ctx, token, query)
+		if errors.Is(err, errResponseTooLarge) {
+			if smaller, ok := shrinkPage(pageSize); ok {
+				pageSize = smaller
+				continue
+			}
+		}
 		if err != nil {
 			return results, err
 		}
@@ -166,10 +177,10 @@ func (c *GscClient) FetchBatch(ctx context.Context, urls []string) (map[string]*
 			}
 		}
 
-		if len(rows) < gscBatchSize {
+		if len(rows) < pageSize {
 			break
 		}
-		startRow += gscBatchSize
+		startRow += pageSize
 	}
 
 	return results, nil
@@ -190,6 +201,7 @@ func (c *GscClient) FetchAIOverviewData(ctx context.Context, urls []string) (map
 
 	// Query for pages with AI_OVERVIEW search appearance
 	startRow := 0
+	pageSize := gscBatchSize
 	for {
 		if ctx.Err() != nil {
 			return results, ctx.Err()
@@ -210,11 +222,17 @@ func (c *GscClient) FetchAIOverviewData(ctx context.Context, urls []string) (map
 					},
 				},
 			},
-			"rowLimit": gscBatchSize,
+			"rowLimit": pageSize,
 			"startRow": startRow,
 		}
 
 		rows, err := c.querySearchAnalytics(ctx, token, query)
+		if errors.Is(err, errResponseTooLarge) {
+			if smaller, ok := shrinkPage(pageSize); ok {
+				pageSize = smaller
+				continue
+			}
+		}
 		if err != nil {
 			// AI Overview data may not be available — return what we have
 			return results, err
@@ -249,10 +267,10 @@ func (c *GscClient) FetchAIOverviewData(ctx context.Context, urls []string) (map
 			})
 		}
 
-		if len(rows) < gscBatchSize {
+		if len(rows) < pageSize {
 			break
 		}
-		startRow += gscBatchSize
+		startRow += pageSize
 	}
 
 	// Compute per-URL CTR
@@ -290,13 +308,14 @@ func (c *GscClient) querySearchAnalytics(ctx context.Context, token string, quer
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, gscMaxBodySize))
-	if err != nil {
-		return nil, err
+	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("gsc: HTTP %d: %s", resp.StatusCode, truncate(string(errBody), 200))
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("gsc: HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 200))
+	respBody, err := readCappedBody(resp.Body, gscMaxBodySize)
+	if err != nil {
+		return nil, fmt.Errorf("gsc: %w", err)
 	}
 
 	var result struct {

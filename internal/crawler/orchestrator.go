@@ -468,8 +468,11 @@ func runBatchIntegrations(ctx context.Context, pages []*types.PageData, config t
 			}
 			gscData, err := client.FetchBatch(ctx, urls)
 			if err != nil {
+				// Keep the rows of the pages that did arrive.
 				fmt.Fprintf(os.Stderr, "\n  [warn] GSC fetch: %v\n", err)
-				return
+				if len(gscData) == 0 {
+					return
+				}
 			}
 			for u, data := range gscData {
 				if p := lookupPage(u); p != nil {
@@ -564,8 +567,11 @@ func runBatchIntegrations(ctx context.Context, pages []*types.PageData, config t
 			}
 			ga4Data, err := client.FetchBatch(ctx, urls)
 			if err != nil {
+				// Keep the rows of the pages that did arrive.
 				fmt.Fprintf(os.Stderr, "\n  [warn] GA4 fetch: %v\n", err)
-				return
+				if len(ga4Data) == 0 {
+					return
+				}
 			}
 			for u, data := range ga4Data {
 				if p := lookupPage(u); p != nil {

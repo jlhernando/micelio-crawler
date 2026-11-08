@@ -67,6 +67,51 @@ func TestBlockedIP(t *testing.T) {
 	}
 }
 
+// Special-purpose ranges that are not globally reachable (IANA registries,
+// RFC 6890), and their IPv6 transition forms. Mirrors src/net-guard.test.ts.
+func TestBlockedIPSpecialPurpose(t *testing.T) {
+	blocked := []string{
+		"0.1.2.3",
+		"192.0.0.1", "192.0.0.255", // IETF protocol assignments
+		"192.0.2.1", "198.51.100.7", "203.0.113.7", // documentation
+		"192.88.99.1",                  // deprecated 6to4 relay anycast
+		"198.18.0.1", "198.19.255.255", // benchmarking 198.18.0.0/15
+		"240.0.0.1", "254.1.2.3", "255.255.255.255", // reserved 240/4, broadcast
+		"2001:db8::1", "2001:db8:ffff::1", // documentation 2001:db8::/32
+		"3fff::1", "3fff:fff::1", // documentation 3fff::/20
+		"2001:2::1", "2001:10::1", "2001:20::1", "2001:1ff::1", // 2001::/23
+		"100::1", "100::ffff:ffff:ffff:ffff", // discard 100::/64
+		"5f00::1", "4000::1", "1::1", "e000::1", // outside 2000::/3
+		"fc00::1", "fdff::1", "fe80::1", "fec0::1", "ff0e::1",
+		// Transition forms decoded to a special IPv4 address.
+		"::ffff:198.18.0.1", "::ffff:192.0.2.1", "::ffff:240.0.0.1",
+		"::ffff:0:127.0.0.1", "::ffff:0:10.0.0.1", "::ffff:0:198.18.0.1", "::ffff:0:0:0", // IPv4-translatable
+		"::127.0.0.1", "::10.0.0.1", "::198.18.0.1", "::", "::1", // IPv4-compatible
+		"64:ff9b::198.18.0.1", "64:ff9b::192.0.2.1", "64:ff9b::240.0.0.1",
+		"64:ff9b:1::8.8.8.8",
+		"2002:c612:1::", "2002:c000:201::", "2002:f000:1::", // 6to4
+		"2001:0:4136:e378::39ed:fffe", // Teredo, client 198.18.0.1
+	}
+	for _, s := range blocked {
+		if !BlockedIP(net.ParseIP(s)) {
+			t.Errorf("BlockedIP(%s) = false, want true", s)
+		}
+	}
+	allowed := []string{
+		"8.8.8.8", "1.1.1.1", "93.184.215.14", "198.17.255.255", "198.20.0.1", "192.0.3.1", "223.255.255.255",
+		"2606:4700::1111", "2a00:1450:4001::1", "3fff:1000::1", "2001:db9::1", "2001:200::1", "2001:4860:4860::8888",
+		"::ffff:8.8.8.8", "::ffff:0:808:808", "::8.8.8.8", "64:ff9b::8.8.8.8", "2002:808:808::1",
+	}
+	for _, s := range allowed {
+		if BlockedIP(net.ParseIP(s)) {
+			t.Errorf("BlockedIP(%s) = true, want false", s)
+		}
+	}
+	if !BlockedIP(nil) || !BlockedIP(net.IP{1, 2, 3}) {
+		t.Error("nil or malformed IP must be blocked")
+	}
+}
+
 func TestCheckRedirect(t *testing.T) {
 	req := func(raw string) *http.Request {
 		u, _ := url.Parse(raw)

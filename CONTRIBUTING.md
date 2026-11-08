@@ -6,7 +6,7 @@ the code is organised, see [Architecture](docs/ARCHITECTURE.md).
 ## Prerequisites
 
 - Go 1.26+
-- Node.js 20+ and npm, for the dashboard
+- Node.js 22.12+ and npm, for the dashboard
 - Chrome or Chromium, only for JS rendering and Universe thumbnails
 - `golangci-lint`, only for `make lint`
 
@@ -34,6 +34,7 @@ reinstall it later (`--skip-dashboard` for the Go binary only).
 
 For dashboard work, run the Go backend and the Vite dev server separately. The
 dev server proxies `/api` and `/ws` to port 3000 (`dashboard/vite.config.ts`).
+Set `VITE_API_PROXY_TARGET` to use a different backend address.
 The proxy keeps the browser's `Host` (`changeOrigin: false`): the backend
 refuses pages from other ports, so do not turn it on:
 
@@ -58,8 +59,9 @@ npm --prefix dashboard run test:ui  # Playwright UI tests
 `make bench-cpu` and `make bench-mem` write `cpu.prof` and `mem.prof` for
 `go tool pprof`.
 
-**Tests must pass locally before you open a pull request.** CI is not run on
-pull requests, so a broken test would only show up after the merge.
+**Tests must pass locally before you open a pull request.** CI runs the Go
+build, module checks, vet, race tests and short benchmarks on pull requests.
+Run `npm test` and `npm run build` locally for changes to the Node.js engine.
 
 ## Pull requests
 

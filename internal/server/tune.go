@@ -21,9 +21,10 @@ func (m *CrawlManager) TuneCrawl(crawlID string, n crawler.Tuning) (crawler.Tuni
 	defer m.tuneMu.Unlock()
 	m.mu.RLock()
 	active := m.active
+	err := m.liveCrawlLocked(crawlID)
 	m.mu.RUnlock()
-	if active == nil || active.ID != crawlID {
-		return crawler.Tuning{}, fmt.Errorf("no active crawl with id %s", crawlID)
+	if err != nil {
+		return crawler.Tuning{}, err
 	}
 	m.mu.RLock()
 	tuner := active.Tuner
@@ -53,7 +54,7 @@ func (m *CrawlManager) TuneCrawl(crawlID string, n crawler.Tuning) (crawler.Tuni
 
 	// Copy the config: other goroutines may be reading the old map.
 	m.mu.Lock()
-	if m.active != active {
+	if m.active != active || active.finished {
 		// The crawl ended (or a resume reused its ID) meanwhile: the live
 		// change went to a finished crawl, do not overwrite the job config.
 		m.mu.Unlock()

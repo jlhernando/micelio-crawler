@@ -6,22 +6,90 @@ package netguard
 import (
 	"fmt"
 	"net"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
 
-// cgnat is 100.64.0.0/10, shared address space used by carrier NAT and by
-// private overlay networks such as Tailscale.
-var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+// AllowFakeIPEnv names the environment variable that lets crawls reach the
+// benchmarking range 198.18.0.0/15. Fake-IP proxies (Clash, Surge,
+// Shadowrocket, sing-box in fake-IP DNS/TUN mode) answer every DNS query
+// with an address from it, so without this opt-in every crawl is refused.
+// Only that range is affected. Mirrors src/net-guard.ts.
+const AllowFakeIPEnv = "MICELIO_ALLOW_FAKE_IP"
 
-// IPv6 ranges that carry an IPv4 address inside (NAT64, 6to4, Teredo), and
-// deprecated site-local addresses, which still route inside some networks.
+// fakeIPRange is the benchmarking range fake-IP proxies hand out.
+var fakeIPRange = mustCIDR("198.18.0.0/15")
+
 var (
-	nat64      = mustCIDR("64:ff9b::/96")   // RFC 6052: IPv4 in the last 4 bytes
-	nat64Local = mustCIDR("64:ff9b:1::/48") // RFC 8215: local-use NAT64
-	sixToFour  = mustCIDR("2002::/16")      // RFC 3056: IPv4 in bytes 2-5
-	teredo     = mustCIDR("2001::/32")      // RFC 4380: client IPv4 XORed in the last 4 bytes
-	siteLocal  = mustCIDR("fec0::/10")      // RFC 3879, deprecated
+	fakeIPOnce    sync.Once
+	fakeIPAllowed atomic.Bool
+)
+
+// AllowFakeIP reports whether MICELIO_ALLOW_FAKE_IP is set to a true value
+// ("1", "true"). The variable is read once, on first use, so a value from
+// ~/.micelio/micelio.env (loaded at CLI start) counts.
+func AllowFakeIP() bool {
+	fakeIPOnce.Do(func() {
+		v, _ := strconv.ParseBool(strings.TrimSpace(os.Getenv(AllowFakeIPEnv)))
+		fakeIPAllowed.Store(v)
+	})
+	return fakeIPAllowed.Load()
+}
+
+// SetAllowFakeIP overrides MICELIO_ALLOW_FAKE_IP (tests).
+func SetAllowFakeIP(allow bool) {
+	fakeIPOnce.Do(func() {})
+	fakeIPAllowed.Store(allow)
+}
+
+// FakeIPHint explains a refused address in 198.18.0.0/15 (the range of
+// fake-IP proxies) and how to allow it. It returns "" for any other address.
+func FakeIPHint(addr string) string {
+	ip := net.ParseIP(strings.Trim(addr, "[]"))
+	if ip == nil || !fakeIPRange.Contains(ip) {
+		return ""
+	}
+	return fmt.Sprintf("%s is in the benchmarking range 198.18.0.0/15, used by fake-IP proxies (Clash, Surge, Shadowrocket, sing-box). "+
+		"If you use one, set %s=1 or switch it to redir-host/real-IP mode", ip, AllowFakeIPEnv)
+}
+
+// specialV4 are the IPv4 special-purpose ranges that are not globally
+// reachable (IANA IPv4 Special-Purpose Address Registry, RFC 6890 and
+// updates). Kept in sync with SPECIAL_V4 in src/net-guard.ts.
+var specialV4 = []*net.IPNet{
+	mustCIDR("0.0.0.0/8"),       // "this network"
+	mustCIDR("10.0.0.0/8"),      // RFC 1918
+	mustCIDR("100.64.0.0/10"),   // shared CGNAT space, also Tailscale
+	mustCIDR("127.0.0.0/8"),     // loopback
+	mustCIDR("169.254.0.0/16"),  // link-local, cloud metadata
+	mustCIDR("172.16.0.0/12"),   // RFC 1918
+	mustCIDR("192.0.0.0/24"),    // IETF protocol assignments
+	mustCIDR("192.0.2.0/24"),    // documentation TEST-NET-1
+	mustCIDR("192.88.99.0/24"),  // deprecated 6to4 relay anycast
+	mustCIDR("192.168.0.0/16"),  // RFC 1918
+	mustCIDR("198.18.0.0/15"),   // benchmarking
+	mustCIDR("198.51.100.0/24"), // documentation TEST-NET-2
+	mustCIDR("203.0.113.0/24"),  // documentation TEST-NET-3
+	mustCIDR("224.0.0.0/3"),     // multicast 224/4, reserved 240/4, broadcast
+}
+
+// IPv6 ranges that carry an IPv4 address inside, and special-purpose blocks
+// inside global unicast 2000::/3 that are not globally reachable.
+var (
+	globalUnicast = mustCIDR("2000::/3")
+	ipv4Compat    = mustCIDR("::/96")           // deprecated IPv4-compatible (:: and ::1 too)
+	ipv4Transl    = mustCIDR("::ffff:0:0:0/96") // RFC 2765: IPv4-translatable
+	nat64         = mustCIDR("64:ff9b::/96")    // RFC 6052: IPv4 in the last 4 bytes
+	sixToFour     = mustCIDR("2002::/16")       // RFC 3056: IPv4 in bytes 2-5
+	teredo        = mustCIDR("2001::/32")       // RFC 4380: client IPv4 XORed in the last 4 bytes
+	ietfProto     = mustCIDR("2001::/23")       // IETF protocol assignments (benchmarking, ORCHID...)
+	docV6         = mustCIDR("2001:db8::/32")   // documentation
+	docV6New      = mustCIDR("3fff::/20")       // RFC 9637 documentation
 )
 
 func mustCIDR(s string) *net.IPNet {
@@ -34,35 +102,48 @@ func mustCIDR(s string) *net.IPNet {
 
 // BlockedIP reports whether ip is an address crawls must never reach: this
 // computer, private and link-local networks (cloud metadata included),
-// shared CGNAT space, and unspecified, multicast or broadcast addresses.
-// IPv6 forms that embed an IPv4 address (NAT64, 6to4, Teredo) are judged by
-// that IPv4 address; local-use NAT64 and site-local IPv6 are always blocked.
+// shared CGNAT space, unspecified, multicast or broadcast addresses, and
+// every other special-purpose range that is not globally reachable
+// (benchmarking, documentation, reserved). IPv6 forms that embed an IPv4
+// address (mapped, translatable, compatible, NAT64, 6to4, Teredo) are
+// judged by that IPv4 address. Other IPv6 addresses are allowed only inside
+// global unicast 2000::/3, minus its special-purpose blocks, so local-use
+// NAT64, discard 100::/64, ULA, link-local, site-local and multicast are
+// always blocked. With MICELIO_ALLOW_FAKE_IP, plain (or IPv4-mapped)
+// addresses in 198.18.0.0/15 are allowed; see AllowFakeIPEnv.
 func BlockedIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() {
-		return true
-	}
 	if ip4 := ip.To4(); ip4 != nil {
-		// 0.0.0.0/8 ("this network") and the broadcast address.
-		return ip4[0] == 0 || ip4.Equal(net.IPv4bcast) || cgnat.Contains(ip4)
+		return blockedV4(ip4, AllowFakeIP())
 	}
+	if len(ip) != net.IPv6len {
+		return true // nil or malformed: fail closed
+	}
+	// Transition forms never get the fake-IP allowance: fake-IP proxies
+	// answer with plain IPv4 addresses.
 	switch {
-	case nat64Local.Contains(ip), siteLocal.Contains(ip):
-		return true
-	case nat64.Contains(ip):
-		return BlockedIP(net.IP(ip[12:16]))
+	case ipv4Compat.Contains(ip), ipv4Transl.Contains(ip), nat64.Contains(ip):
+		return blockedV4(net.IP(ip[12:16]), false)
 	case sixToFour.Contains(ip):
-		return BlockedIP(net.IP(ip[2:6]))
+		return blockedV4(net.IP(ip[2:6]), false)
 	case teredo.Contains(ip):
 		v4 := make(net.IP, 4)
 		for i := range v4 {
 			v4[i] = ip[12+i] ^ 0xff
 		}
-		return BlockedIP(v4)
+		return blockedV4(v4, false)
+	}
+	return !globalUnicast.Contains(ip) || ietfProto.Contains(ip) ||
+		docV6.Contains(ip) || docV6New.Contains(ip)
+}
+
+func blockedV4(ip4 net.IP, allowFakeIP bool) bool {
+	if allowFakeIP && fakeIPRange.Contains(ip4) {
+		return false
+	}
+	for _, n := range specialV4 {
+		if n.Contains(ip4) {
+			return true
+		}
 	}
 	return false
 }
@@ -71,7 +152,11 @@ func BlockedIP(ip net.IP) bool {
 type BlockedError struct{ Addr string }
 
 func (e *BlockedError) Error() string {
-	return fmt.Sprintf("blocked connection to private address %s", e.Addr)
+	msg := fmt.Sprintf("blocked connection to private address %s", e.Addr)
+	if hint := FakeIPHint(e.Addr); hint != "" {
+		msg += ": " + hint
+	}
+	return msg
 }
 
 // Dialer returns a dialer that refuses to connect to a blocked address.

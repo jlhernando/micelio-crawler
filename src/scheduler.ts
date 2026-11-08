@@ -3,7 +3,7 @@
  * Designed to run as a foreground process (in terminal, tmux, screen, or systemd).
  */
 
-import { writeFileSync, readFileSync, mkdirSync, readdirSync, renameSync, existsSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, readdirSync, renameSync, existsSync, openSync, closeSync, statSync, unlinkSync } from 'node:fs';
 import { resolve, join, parse as parsePath, format as formatPath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -47,12 +47,73 @@ function scheduleId(url: string, cron: string): string {
 }
 
 function saveState(state: ScheduleState): void {
-  const dir = getScheduleDir();
-  const path = join(dir, `${state.id}.json`);
-  const tmpPath = path + '.tmp';
-  // Atomic write: write to temp file then rename to prevent corruption on crash
-  writeFileSync(tmpPath, JSON.stringify(state, null, 2), 'utf-8');
-  renameSync(tmpPath, path);
+  const path = join(getScheduleDir(), `${state.id}.json`);
+  // Atomic write: temp file then rename. The temp name is unique per write,
+  // so two scheduler processes never truncate or rename each other's file.
+  const tmpPath = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  try {
+    writeFileSync(tmpPath, JSON.stringify(state, null, 2), { encoding: 'utf-8', flag: 'wx' });
+    renameSync(tmpPath, path);
+  } catch (err) {
+    try { unlinkSync(tmpPath); } catch { /* not created or already renamed */ }
+    throw err;
+  }
+}
+
+/** A lock older than this belongs to a process that died while holding it. */
+const STATE_LOCK_STALE_MS = 30_000;
+/** Longest wait for another process to release the lock. */
+const STATE_LOCK_WAIT_MS = 10_000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** Runs fn while holding `<id>.lock` (exclusive create), shared by every scheduler process. */
+function withStateLock<T>(id: string, fn: () => T): T {
+  const lockPath = join(getScheduleDir(), `${id}.lock`);
+  const deadline = Date.now() + STATE_LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      closeSync(openSync(lockPath, 'wx'));
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > STATE_LOCK_STALE_MS) {
+          unlinkSync(lockPath);
+          continue;
+        }
+      } catch {
+        continue; // released between the open and the stat
+      }
+      if (Date.now() > deadline) throw new Error(`schedule state ${id} is locked by another process`);
+      sleepSync(5 + Math.floor(Math.random() * 10));
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try { unlinkSync(lockPath); } catch { /* already gone */ }
+  }
+}
+
+/**
+ * Read-modify-write of a schedule's state under the cross-process lock: the
+ * change is applied to the state on disk (or `initial()` when there is none),
+ * so concurrent scheduler processes never lose each other's updates.
+ */
+export function updateScheduleState(
+  id: string,
+  initial: () => ScheduleState,
+  mutate: (state: ScheduleState) => void,
+): ScheduleState {
+  return withStateLock(id, () => {
+    const state = loadState(id) ?? initial();
+    mutate(state);
+    saveState(state);
+    return state;
+  });
 }
 
 function loadState(id: string): ScheduleState | null {
@@ -141,7 +202,7 @@ export async function runSchedule(config: ScheduleConfig): Promise<void> {
 
   // Initialize or load state
   const id = scheduleId(url, cronExpr);
-  let state: ScheduleState = loadState(id) || {
+  const freshState = (): ScheduleState => ({
     id,
     url,
     cron: cronExpr,
@@ -153,13 +214,23 @@ export async function runSchedule(config: ScheduleConfig): Promise<void> {
     nextRun: '',
     totalRuns: 0,
     outputDir,
-  };
+  });
 
   // Calculate initial next run
   const nextRunDate = nextRun(cron);
-  state.nextRun = nextRunDate.toISOString();
-  state.outputDir = outputDir;
-  saveState(state);
+  const applyStart = (s: ScheduleState) => {
+    s.nextRun = nextRunDate.toISOString();
+    s.outputDir = outputDir;
+  };
+  let state: ScheduleState;
+  try {
+    state = updateScheduleState(id, freshState, applyStart);
+  } catch (err) {
+    // A state file problem must not stop the scheduler: keep going in memory
+    process.stderr.write(`Warning: cannot save schedule state: ${(err as Error).message}\n`);
+    state = loadState(id) ?? freshState();
+    applyStart(state);
+  }
 
   const description = describeCron(cronExpr);
   process.stderr.write(`\nSchedule: ${description}\n`);
@@ -267,13 +338,21 @@ export async function runSchedule(config: ScheduleConfig): Promise<void> {
 
     // Update state
     const nextRunAfter = nextRun(cron);
-    state.lastRun = runTimestamp;
-    state.lastStatus = status as 'success' | 'failed';
-    state.lastPages = pages;
-    state.lastDurationMs = durationMs;
-    state.nextRun = nextRunAfter.toISOString();
-    state.totalRuns++;
-    saveState(state);
+    const applyRun = (s: ScheduleState) => {
+      s.lastRun = runTimestamp;
+      s.lastStatus = status as 'success' | 'failed';
+      s.lastPages = pages;
+      s.lastDurationMs = durationMs;
+      s.nextRun = nextRunAfter.toISOString();
+      s.totalRuns++;
+    };
+    try {
+      const current = state;
+      state = updateScheduleState(id, () => current, applyRun);
+    } catch (err) {
+      applyRun(state);
+      process.stderr.write(`Warning: cannot save schedule state: ${(err as Error).message}\n`);
+    }
 
     // Send webhook
     if (webhook) {

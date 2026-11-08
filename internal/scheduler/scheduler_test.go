@@ -1,9 +1,15 @@
 package scheduler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -126,6 +132,160 @@ func TestBuildOutputFilenameEdgeCases(t *testing.T) {
 	f4 := buildOutputFilename("https://example.com", "/tmp/out", "")
 	if filepath.Ext(f4) != ".jsonl" {
 		t.Fatalf("expected .jsonl for default format, got %q", filepath.Ext(f4))
+	}
+}
+
+// Two runs for the same host in the same second get different files, and an
+// existing crawl output is never reused (the writer would truncate it).
+func TestReserveOutputFileNeverReusesAFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "example-com-2026-11-07T10-00-00.jsonl")
+	if err := os.WriteFile(path, []byte("earlier crawl\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{path: true}
+	for i := 0; i < 3; i++ {
+		got, err := reserveOutputFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen[got] {
+			t.Fatalf("run %d reused %s", i, got)
+		}
+		seen[got] = true
+		if filepath.Ext(got) != ".jsonl" {
+			t.Fatalf("extension lost: %s", got)
+		}
+	}
+	if b, _ := os.ReadFile(path); string(b) != "earlier crawl\n" {
+		t.Fatalf("earlier output changed: %q", b)
+	}
+}
+
+// A run that ends before writing leaves no empty reserved file behind (diff
+// and import would pick it up); a written output is kept.
+func TestRemoveEmptyOutputDropsUnusedReservation(t *testing.T) {
+	dir := t.TempDir()
+	empty, err := reserveOutputFile(filepath.Join(dir, "a.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removeEmptyOutput(empty) {
+		t.Fatal("empty reserved file not removed")
+	}
+	if _, err := os.Stat(empty); !os.IsNotExist(err) {
+		t.Fatalf("empty file still there: %v", err)
+	}
+	written, err := reserveOutputFile(filepath.Join(dir, "b.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(written, []byte("{}\n"), 0o644)
+	if removeEmptyOutput(written) {
+		t.Fatal("written output removed")
+	}
+	if _, err := os.Stat(written); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReserveOutputFilePermissionFailureKeepsEarlierOutput(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("requires Unix permissions and an unprivileged user")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crawl.jsonl")
+	const original = "earlier crawl\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	got, err := reserveOutputFile(path)
+	if err == nil || !errors.Is(err, os.ErrPermission) || got != "" {
+		t.Fatalf("want no path and permission error, got %q, %v", got, err)
+	}
+	if b, err := os.ReadFile(path); err != nil || string(b) != original {
+		t.Fatalf("earlier output changed: %q, %v", b, err)
+	}
+}
+
+func TestReserveOutputFileExhaustionReturnsNoPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crawl.jsonl")
+	const original = "earlier crawl\n"
+	for i := 1; i <= 1000; i++ {
+		candidate := path
+		if i > 1 {
+			candidate = filepath.Join(dir, fmt.Sprintf("crawl-%d.jsonl", i))
+		}
+		if err := os.WriteFile(candidate, []byte(original), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := reserveOutputFile(path)
+	if err == nil || got != "" {
+		t.Fatalf("want no path and exhaustion error, got %q, %v", got, err)
+	}
+	if b, err := os.ReadFile(path); err != nil || string(b) != original {
+		t.Fatalf("earlier output changed: %q, %v", b, err)
+	}
+}
+
+func TestDirectRunnerFailedReservationReturnsNoOutput(t *testing.T) {
+	res := directRunner{}.Run(context.Background(), Config{
+		URL: "https://example.com/", OutputDir: filepath.Join(t.TempDir(), "missing"),
+		CrawlConfig: types.CrawlConfig{OutputFormat: types.FormatJSONL},
+	}, NewRunControlForTest())
+	if res.Status != "failed" || res.Output != "" || !strings.Contains(res.Reason, "reserve crawl output") {
+		t.Fatalf("want a failed reservation without crawl output, got %+v", res)
+	}
+}
+
+func TestDirectRunnerStoreOnlyReportsPersistedPages(t *testing.T) {
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body><a href="/next">Next</a></body></html>`)
+	}))
+	defer site.Close()
+	res := directRunner{}.Run(context.Background(), Config{
+		URL: site.URL, OutputDir: t.TempDir(),
+		CrawlConfig: types.CrawlConfig{
+			SeedURL: site.URL, Mode: types.ModeSpider, MaxPages: 2, MaxDepth: 2,
+			Concurrency: 1, DelayExplicit: true, SkipSSRF: true,
+			StoreOnly: true, NoAgentCheck: true, NoSoft404Probe: true,
+			OutputFormat: types.FormatJSONL,
+		},
+	}, NewRunControlForTest())
+	if res.Status != "success" || res.Pages != 2 {
+		t.Fatalf("want two persisted pages, got %+v", res)
+	}
+	data, err := os.ReadFile(res.Output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Split(strings.TrimSpace(string(data)), "\n"); len(lines) != 2 {
+		t.Fatalf("want two output rows, got %d", len(lines))
+	}
+}
+
+// directRunner removes its reserved file when the crawl fails before writing.
+func TestDirectRunnerFailedRunLeavesNoEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the crawl ends at once
+	res := directRunner{}.Run(ctx, Config{URL: "http://127.0.0.1:1/", OutputDir: dir,
+		CrawlConfig: types.CrawlConfig{OutputFormat: types.FormatJSONL}}, NewRunControlForTest())
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if fi, _ := e.Info(); fi != nil && fi.Size() == 0 {
+			t.Fatalf("empty output %s left (result %+v)", e.Name(), res)
+		}
+	}
+	if res.Output != "" && len(entries) == 0 {
+		t.Fatalf("result names a file that does not exist: %s", res.Output)
 	}
 }
 

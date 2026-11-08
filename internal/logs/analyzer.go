@@ -12,6 +12,10 @@ import (
 	"github.com/micelio/micelio/internal/gctune"
 )
 
+// Bound parser prefetch and pending writes independently of file size.
+const logEntryBuffer = 4096
+const pendingURLBatches = 1
+
 const maxTopURLs = 500
 const maxBotURLs = 100_000
 const maxBotIPs = 10_000
@@ -34,7 +38,7 @@ type AnalysisResult struct {
 // If flusher is non-nil, per-URL stats are flushed incrementally (batches of ~500K URLs)
 // during parsing instead of accumulating in memory.
 func AnalyzeFull(path string, formatHint Format, onProgress ProgressFunc, flusher URLStatsFlusher) (*AnalysisResult, error) {
-	defer suppressGC()()
+	defer holdAnalysisGC(flusher != nil)()
 	a := newAggregator()
 	a.urlFlusher = flusher
 	state := &ParseState{}
@@ -45,6 +49,9 @@ func AnalyzeFull(path string, formatHint Format, onProgress ProgressFunc, flushe
 	// Drain any remaining URLs.
 	if flusher != nil {
 		a.flushURLs()
+		if err := a.waitFlushDone(); err != nil {
+			return &AnalysisResult{Format: format}, fmt.Errorf("persist URL stats: %w", err)
+		}
 	}
 	stats := a.finalize()
 	stats.TotalLines = totalLines
@@ -57,6 +64,15 @@ func AnalyzeFull(path string, formatHint Format, onProgress ProgressFunc, flushe
 		}
 	}
 	return res, nil
+}
+
+// Streaming creates short-lived maps and batches: let GC reclaim them before
+// the soft limit is reached. The in-memory aggregation policy stays unchanged.
+func holdAnalysisGC(streaming bool) func() {
+	if streaming {
+		return gctune.Hold(100, limits().MemLimit)
+	}
+	return suppressGC()
 }
 
 // suppressGC switches GC off while an analysis parses and returns the
@@ -127,7 +143,7 @@ func newAggregator() *aggregator {
 		botIPs:      make(map[string]map[string]struct{}),
 		botIPCaps:   make(map[string]bool),
 		botHeatmaps: make(map[string]*[7][24]int64),
-		urlFlushAt:  500_000, // small flushes overlap with parsing via async flusher; GC off prevents scan cost
+		urlFlushAt:  500_000, // preserve batch boundaries; pending writes are separately bounded
 	}
 }
 
@@ -322,7 +338,8 @@ func (a *aggregator) trackURL(e *LogEntry) {
 		u.humanHits++
 	}
 	// Batch-flush: when the map exceeds the threshold, drain to SQLite via
-	// the callback. This caps memory at ~500K URLs × ~80 bytes = ~40 MB
+	// the callback. This bounds the active map by URL count; queued batches,
+	// strings, and other aggregator maps consume additional memory.
 	// regardless of how many unique URLs exist in the logs.
 	if a.urlFlusher != nil && len(a.urlHits) >= a.urlFlushAt {
 		a.flushURLs()
@@ -332,7 +349,7 @@ func (a *aggregator) trackURL(e *LogEntry) {
 // startAsyncFlusher spawns a background goroutine that processes URL batches
 // from flushCh. Call waitFlushDone() to drain remaining batches.
 func (a *aggregator) startAsyncFlusher() {
-	a.flushCh = make(chan []URLStat, 8) // buffer 8 batches ahead to avoid blocking aggregator
+	a.flushCh = make(chan []URLStat, pendingURLBatches) // backpressure before allocating a large backlog
 	a.flushDone = make(chan struct{})
 	go func() {
 		defer close(a.flushDone)
@@ -353,7 +370,7 @@ func (a *aggregator) waitFlushDone() error {
 		a.flushCh = nil // prevent double-close panic
 		return a.flushErr
 	}
-	return nil
+	return a.flushErr
 }
 
 // flushURLs drains the URL map into a batch and sends it to the async
@@ -378,7 +395,9 @@ func (a *aggregator) flushURLs() {
 		if a.flushCh != nil {
 			a.flushCh <- batch // async: background goroutine writes to SQLite
 		} else {
-			_ = a.urlFlusher(batch) // sync fallback
+			if err := a.urlFlusher(batch); err != nil && a.flushErr == nil {
+				a.flushErr = err
+			}
 		}
 	}
 	a.urlsFlushed += len(batch)
@@ -601,7 +620,7 @@ func AnalyzeMulti(paths []string, formatHint Format, workers int, onProgress Mul
 	}
 
 	// Suppress GC during the parse-heavy phase (see suppressGC).
-	defer suppressGC()()
+	defer holdAnalysisGC(flusher != nil)()
 
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
@@ -656,7 +675,21 @@ func AnalyzeMulti(paths []string, formatHint Format, workers int, onProgress Mul
 	}
 
 	// Buffered channel: parsers write entries, single aggregator consumes.
-	entryCh := make(chan *LogEntry, 65536)
+	entryCh := make(chan *LogEntry, logEntryBuffer)
+
+	// Single aggregator goroutine — no locks needed because only one writer.
+	agg := newAggregator()
+	agg.urlFlusher = flusher
+	if flusher != nil {
+		agg.startAsyncFlusher()
+	}
+	aggDone := make(chan struct{})
+	go func() {
+		for e := range entryCh {
+			agg.add(e)
+		}
+		close(aggDone)
+	}()
 
 	// Worker semaphore bounds concurrency.
 	sem := make(chan struct{}, workers)
@@ -707,20 +740,6 @@ func AnalyzeMulti(paths []string, formatHint Format, workers int, onProgress Mul
 		}(i, paths[i])
 	}
 
-	// Single aggregator goroutine — no locks needed because only one writer.
-	agg := newAggregator()
-	agg.urlFlusher = flusher
-	if flusher != nil {
-		agg.startAsyncFlusher()
-	}
-	aggDone := make(chan struct{})
-	go func() {
-		for e := range entryCh {
-			agg.add(e)
-		}
-		close(aggDone)
-	}()
-
 	workerWg.Wait()
 	close(entryCh)
 	<-aggDone
@@ -729,7 +748,7 @@ func AnalyzeMulti(paths []string, formatHint Format, workers int, onProgress Mul
 	if flusher != nil {
 		agg.flushURLs()
 		if flushErr := agg.waitFlushDone(); flushErr != nil {
-			log.Printf("[logs] async URL flush error: %v", flushErr)
+			return nil, fmt.Errorf("persist URL stats: %w", flushErr)
 		}
 	}
 	stats := agg.finalize()

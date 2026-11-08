@@ -34,13 +34,15 @@ type CrawlProgress struct {
 
 // CrawlResult holds the final crawl output.
 type CrawlResult struct {
-	Coverage              *types.CrawlCoverage
-	ExternalLinks         map[string][]string
-	ResourceRefs          map[string][]types.ResourceEntry
-	TransferSizes         map[string]int64
-	NgramAnalyzer         *analysis.NgramAnalyzer
-	AnchorAggregator      *analysis.AnchorAggregator
-	Pages                 []*types.PageData
+	Coverage         *types.CrawlCoverage
+	ExternalLinks    map[string][]string
+	ResourceRefs     map[string][]types.ResourceEntry
+	TransferSizes    map[string]int64
+	NgramAnalyzer    *analysis.NgramAnalyzer
+	AnchorAggregator *analysis.AnchorAggregator
+	Pages            []*types.PageData
+	// PageCount includes persisted/resumed rows even when Pages is not loaded.
+	PageCount             int
 	DeadLetterQueue       []types.DeadLetterEntry
 	DiscoveredSitemapURLs []string
 	Soft404Probes         []types.Soft404Probe
@@ -271,12 +273,16 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 	dlqEntries := s.loadDeadLetterQueue()
 
 	// Reload pages from disk for post-crawl analysis
-	s.postCrawlReload()
+	if !s.config.StoreOnly {
+		s.postCrawlReload()
+	}
 
 	// Batch integrations with fresh context
 	postCtx, postCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer postCancel()
-	runBatchIntegrations(postCtx, s.pages, s.config)
+	if !s.config.StoreOnly {
+		runBatchIntegrations(postCtx, s.pages, s.config)
+	}
 
 	// Restore GOGC
 	restoreGC()
@@ -294,9 +300,32 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 		}
 	}
 
+	pageCount := len(s.pages)
+	if s.crawlDB != nil {
+		var countErr error
+		pageCount, countErr = s.crawlDB.PageCount()
+		if countErr != nil {
+			return nil, fmt.Errorf("count persisted crawl pages: %w", countErr)
+		}
+	} else if s.writer != nil {
+		pageCount = s.writer.Count()
+	}
+	if s.config.StoreOnly {
+		if s.crawlDB != nil {
+			var countErr error
+			changedPages, unchangedPages, countErr = countStoredChanges(s.crawlDB)
+			if countErr != nil {
+				return nil, fmt.Errorf("count persisted content changes: %w", countErr)
+			}
+		} else {
+			changedPages = int(s.changedPages.Load())
+			unchangedPages = int(s.unchangedPages.Load())
+		}
+	}
 	result := &CrawlResult{
 		Coverage:              coverage,
 		Pages:                 s.pages,
+		PageCount:             pageCount,
 		Duration:              time.Since(s.startTime),
 		Errors:                int(s.errorCount.Load()),
 		StopReason:            stopReason,
@@ -317,8 +346,34 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 	if s.intLinksDisk != nil {
 		result.InternalLinksIter = s.intLinksDisk.Iterate
 		result.InternalLinksClose = s.intLinksDisk.Close
+		s.intLinksDisk = nil // ownership now belongs to the result's consumer
 	}
 	return result, nil
+}
+
+// countStoredChanges counts final rows after the sink has drained. A resumed
+// URL may be written again, so adding restored rows to emissions double-counts
+// replacements. Prefer a flag-only projection; custom stores can stream pages.
+func countStoredChanges(store CrawlStore) (changed, unchanged int, err error) {
+	if counter, ok := store.(interface {
+		ContentChangeCounts() (int, int, error)
+	}); ok {
+		return counter.ContentChangeCounts()
+	}
+	err = store.StreamPages(func(p *types.PageData, _ int) error {
+		if p.ContentChanged != nil {
+			if *p.ContentChanged {
+				changed++
+			} else {
+				unchanged++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return changed, unchanged, nil
 }
 
 func (s *crawlSession) loadExternalLinks() map[string][]string {
@@ -364,6 +419,9 @@ func (s *crawlSession) loadResourceRefs() map[string][]types.ResourceEntry {
 
 // runBatchIntegrations fetches GSC, GA4, CrUX, and Plausible data for all crawled pages.
 func runBatchIntegrations(ctx context.Context, pages []*types.PageData, config types.CrawlConfig) {
+	if !(config.GSC && config.GSCKeyFile != "" || config.GSCBqDataset != "" && !config.GSC || config.GA4 || config.CrUX || config.Plausible) {
+		return
+	}
 	var urls []string
 	for _, p := range pages {
 		if p.StatusCode == 200 {

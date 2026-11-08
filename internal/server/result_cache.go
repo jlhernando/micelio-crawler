@@ -86,6 +86,54 @@ func (l *resultLoads) acquire(ctx context.Context) bool {
 
 func (l *resultLoads) release() { <-l.sem }
 
+// prepareResultLoad evicts other histories before the next full decode, rather
+// than waiting until both the old and new page sets are resident. The incoming
+// placeholder is already estimated at its full size: do not count it twice or
+// cancel its load. A single oversized result remains supported by the UI.
+func (m *CrawlManager) prepareResultLoad(ctx context.Context, id string, pageCount int, expected *CrawlResults) (evicted, allowed bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ctx.Err() != nil || expected != nil && m.results[id] != expected {
+		return false, false
+	}
+	budget := cacheMemoryBudget()
+	var total = estimatedResultBytes(pageCount)
+	count := 1
+	for _, old := range m.resultOrder {
+		if old != id {
+			total += m.resultSize[old]
+			count++
+		}
+	}
+	for _, old := range append([]string(nil), m.resultOrder...) {
+		if count <= maxCachedResults && (budget == 0 || total <= budget) {
+			break
+		}
+		if old == id {
+			continue
+		}
+		total -= m.resultSize[old]
+		count--
+		m.removeCachedResultLocked(old)
+		evicted = true
+	}
+	return evicted, true
+}
+
+func (m *CrawlManager) removeCachedResultLocked(id string) {
+	if old := m.results[id]; old != nil && old.loadCancel != nil {
+		old.loadCancel()
+	}
+	delete(m.results, id)
+	delete(m.resultSize, id)
+	for i, old := range m.resultOrder {
+		if old == id {
+			m.resultOrder = append(m.resultOrder[:i], m.resultOrder[i+1:]...)
+			break
+		}
+	}
+}
+
 // cacheResultLocked stores r under id (replacing any previous entry, which
 // moves to the newest position) and evicts old results over the count or
 // memory limits. The entry just stored is never evicted. Caller holds m.mu.

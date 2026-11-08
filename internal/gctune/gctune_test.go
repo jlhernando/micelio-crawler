@@ -141,3 +141,16 @@ func TestHoldConcurrent(t *testing.T) {
 		t.Fatalf("GOGC = %d after concurrent holds, want 100", got)
 	}
 }
+
+func TestHoldPreservesStricterUserGC(t *testing.T) {
+	defer debug.SetGCPercent(debug.SetGCPercent(10))
+	release := Hold(50, 0)
+	defer release()
+	if got := readGC(); got != 10 {
+		t.Fatalf("user GOGC10 relaxed to%d", got)
+	}
+	release()
+	if got := readGC(); got != 10 {
+		t.Fatalf("restored GOGC=%d", got)
+	}
+}

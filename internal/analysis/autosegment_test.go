@@ -345,3 +345,16 @@ func TestAuthorityTiesStayMedium(t *testing.T) {
 		t.Errorf("buckets = %v, want 6 medium, 2 high, 1 low", got)
 	}
 }
+
+func TestAutoSegmentsHighCardinalityKeepsLabels(t *testing.T) {
+	pages := make([]*types.PageData, maxSegmentInternValues+20)
+	for i := range pages {
+		pages[i] = &types.PageData{URL: fmt.Sprintf("https://ex.com/catalog/%d/item", i), StatusCode: 200}
+	}
+	AssignAutoSegments(pages, nil, AutoSegmentOptions{})
+	for i, p := range pages {
+		if p.AutoSegments == nil || p.AutoSegments.Dir2 != fmt.Sprintf("/catalog/%d/", i) {
+			t.Fatalf("directory label lost at %d: %+v", i, p.AutoSegments)
+		}
+	}
+}

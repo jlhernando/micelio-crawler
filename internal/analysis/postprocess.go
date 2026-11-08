@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/micelio/micelio/internal/gctune"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -64,6 +65,10 @@ func RunCoreAnalysis(ctx context.Context, pages []*types.PageData, cfg PostProce
 // built by the reporter. Pass it as PostProcessConfig.Graph to
 // RunDeferredAnalysis to avoid rebuilding it.
 func RunCoreAnalysisWithGraph(ctx context.Context, pages []*types.PageData, cfg PostProcessConfig) (types.CrawlStats, *AdjacencyGraph) {
+	// Large reports allocate temporary indexes alongside the retained pages.
+	// Collect them before the heap doubles; the process's soft limit is preserved.
+	restoreGC := gctune.Hold(50, 0)
+	defer restoreGC()
 	// Parse segment rules
 	var segments []Segment
 	for _, rule := range cfg.SegmentRules {

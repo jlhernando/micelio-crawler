@@ -17,6 +17,7 @@ import (
 	"github.com/micelio/micelio/internal/alerts"
 	"github.com/micelio/micelio/internal/analysis"
 	"github.com/micelio/micelio/internal/crawler"
+	"github.com/micelio/micelio/internal/gctune"
 	"github.com/micelio/micelio/internal/logs"
 	"github.com/micelio/micelio/internal/scheduler"
 	"github.com/micelio/micelio/internal/secrets"
@@ -782,6 +783,19 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 			},
 		})
 	}, storeArg, pauseFn, func(phase string, loaded, total int) {
+		if phase == "analysis_loading" && loaded == 0 {
+			// Make room before the crawler materializes its result, not only
+			// when the final report is inserted into the cache.
+			reserveCtx := ctx
+			m.mu.RLock()
+			if m.active != nil && m.active.ID == crawlID && m.active.Stopping {
+				reserveCtx = m.ctx // graceful stop still analyzes the saved rows
+			}
+			m.mu.RUnlock()
+			if evicted, _ := m.prepareResultLoad(reserveCtx, crawlID, total, nil); evicted {
+				debug.FreeOSMemory()
+			}
+		}
 		m.emit(ProgressEvent{
 			CrawlID: crawlID, Type: "progress",
 			Data: map[string]interface{}{
@@ -943,6 +957,11 @@ type analysisRun struct {
 // analyzeAndCache runs core analysis, persists stats, caches the results and
 // starts deferred analysis (link intelligence, embeddings) when configured.
 func (m *CrawlManager) analyzeAndCache(r analysisRun) {
+	restoreGC := gctune.Hold(50, 0)
+	defer restoreGC()
+	if evicted, _ := m.prepareResultLoad(r.ctx, r.crawlID, len(r.pages), nil); evicted {
+		debug.FreeOSMemory()
+	}
 	analysisCtx, crawlID, job, crawlConfig := r.ctx, r.crawlID, r.job, r.config
 	pages, postCfg, crawlStore := r.pages, r.postCfg, r.crawlStore
 	intLinksClose, elapsed, pageCount := r.closeLinks, r.elapsed, len(r.pages)
@@ -1374,17 +1393,22 @@ func (m *CrawlManager) publishStats(crawlID string, crawlStats types.CrawlStats)
 	if err := m.store.SaveCrawlStats(crawlID, data); err != nil {
 		log.Printf("store: persist stats for crawl %s: %v", crawlID, err)
 	}
+	m.mu.RLock()
+	res := m.results[crawlID]
+	m.mu.RUnlock()
+	if res == nil {
+		return // persistence is sufficient; a future reload reads the latest stats
+	}
 	var statsMap map[string]interface{}
 	if err := json.Unmarshal(data, &statsMap); err != nil {
 		return
 	}
+	res.mu.Lock()
+	defer res.mu.Unlock()
 	m.mu.RLock()
-	res := m.results[crawlID]
-	m.mu.RUnlock()
-	if res != nil {
-		res.mu.Lock()
+	defer m.mu.RUnlock()
+	if m.results[crawlID] == res {
 		res.Stats = statsMap
-		res.mu.Unlock()
 	}
 }
 
@@ -1394,13 +1418,7 @@ func (m *CrawlManager) evictOldestResult() {
 	if len(m.resultOrder) == 0 {
 		return
 	}
-	oldest := m.resultOrder[0]
-	m.resultOrder = m.resultOrder[1:]
-	if old := m.results[oldest]; old != nil && old.loadCancel != nil {
-		old.loadCancel()
-	}
-	delete(m.results, oldest)
-	delete(m.resultSize, oldest)
+	m.removeCachedResultLocked(m.resultOrder[0])
 }
 
 func (m *CrawlManager) emit(event ProgressEvent) {
@@ -1474,6 +1492,13 @@ func (m *CrawlManager) loadResults(crawlID string) *CrawlResults {
 	if job.DBPath != "" {
 		m.loads.acquire(context.Background())
 		defer m.loads.release()
+		// Quick-stats may have inserted a placeholder while this waited.
+		if existing := m.GetCachedResults(crawlID); existing != nil {
+			return existing
+		}
+		if evicted, _ := m.prepareResultLoad(context.Background(), crawlID, job.PageCount, nil); evicted {
+			debug.FreeOSMemory()
+		}
 		cs, csErr := storage.NewCrawlStore(job.DBPath)
 		if csErr == nil {
 			var loadErr error
@@ -1598,6 +1623,13 @@ func (m *CrawlManager) loadPagesInBackground(ctx context.Context, crawlID string
 		return // evicted while waiting
 	}
 	defer m.loads.release()
+	evicted, allowed := m.prepareResultLoad(ctx, crawlID, result.PageCount, result)
+	if !allowed {
+		return
+	}
+	if evicted {
+		debug.FreeOSMemory()
+	}
 
 	cs, csErr := storage.NewCrawlStore(result.DBPath)
 	if csErr != nil {

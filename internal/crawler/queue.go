@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -60,15 +59,13 @@ type ExcludedStats struct {
 
 // CrawlQueue manages the URL frontier with dedup, depth control, and filtering.
 // Thread-safe for concurrent access from multiple goroutines.
-// Uses a bloom filter for visited URL dedup (~240 KB for 100K URLs vs ~10 MB map).
+// Deduplicates normalized URLs exactly: a probabilistic match must never drop a page.
 // Dequeues by priority: shallower pages first (min-heap on depth, FIFO tiebreak).
 // When the pending queue exceeds 50K entries, overflow spills to a temp file
 // and is loaded back in batches as the in-memory buffer drains.
 type CrawlQueue struct {
 	exclusions        map[string]*types.ExclusionReason
-	visited           *bloom.BloomFilter
-	visitedFull       []*bloom.BloomFilter // filled filters kept after a limit raise
-	visitedCap        int                  // URLs visited was sized for
+	visited           map[string]struct{}
 	visitedCount      int
 	excludedByPattern []int // per-pattern counts (same order as excludePatterns)
 	excludedByInclude int   // URLs rejected for not matching any include pattern
@@ -108,11 +105,10 @@ func NewCrawlQueue(seedURL string, maxDepth, maxPages int, opts *QueueOptions) *
 	}
 
 	q := &CrawlQueue{
-		visited:         bloom.NewWithEstimates(uint(maxPages), 0.0001),
+		visited:         make(map[string]struct{}),
 		seedDomain:      domain,
 		maxDepth:        maxDepth,
 		maxPages:        maxPages,
-		visitedCap:      maxPages,
 		enforceInternal: true,
 	}
 
@@ -128,32 +124,17 @@ func NewCrawlQueue(seedURL string, maxDepth, maxPages int, opts *QueueOptions) *
 	return q
 }
 
-// SetMaxPages changes the page limit of a running crawl. A bloom filter
-// sized for 1K URLs would match almost every URL after 100K, so a raise
-// past its size starts a new filter and keeps the old one for lookups.
+// SetMaxPages changes the limit without resetting already admitted URLs.
 func (q *CrawlQueue) SetMaxPages(n int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.maxPages = n
-	if n > q.visitedCap {
-		q.visitedFull = append(q.visitedFull, q.visited)
-		q.visited = bloom.NewWithEstimates(uint(n), 0.0001)
-		q.visitedCap = n
-	}
 }
 
-// seenLocked reports whether normalized is in any dedup filter. Caller must
-// hold mu.
+// seenLocked checks exact membership. Caller must hold mu.
 func (q *CrawlQueue) seenLocked(normalized string) bool {
-	if q.visited.TestString(normalized) {
-		return true
-	}
-	for _, f := range q.visitedFull {
-		if f.TestString(normalized) {
-			return true
-		}
-	}
-	return false
+	_, seen := q.visited[normalized]
+	return seen
 }
 
 // Enqueue adds a URL to the queue if it passes all filters.
@@ -193,7 +174,7 @@ func (q *CrawlQueue) Enqueue(rawURL string, depth int, referrer *string) bool {
 		Referrer: referrer,
 	}
 	q.enqueueEntry(entry)
-	q.visited.AddString(normalized)
+	q.visited[normalized] = struct{}{}
 	q.visitedCount++
 	return true
 }
@@ -227,7 +208,7 @@ func (q *CrawlQueue) EnqueueEntry(entry types.QueueEntry) bool {
 		return false
 	}
 	q.enqueueEntry(entry)
-	q.visited.AddString(normalized)
+	q.visited[normalized] = struct{}{}
 	q.visitedCount++
 	return true
 }
@@ -334,12 +315,12 @@ func (q *CrawlQueue) MarkVisited(rawURL string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if !q.seenLocked(normalized) {
-		q.visited.AddString(normalized)
+		q.visited[normalized] = struct{}{}
 		q.visitedCount++
 	}
 }
 
-// MarkSeen adds a URL to the dedup filter without counting it toward the
+// MarkSeen adds a URL to the dedup set without counting it toward the
 // page limit. Used for redirect targets that were already fetched as part of
 // another entry, so they are not fetched again when linked directly.
 func (q *CrawlQueue) MarkSeen(rawURL string) {
@@ -349,7 +330,7 @@ func (q *CrawlQueue) MarkSeen(rawURL string) {
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.visited.AddString(normalized)
+	q.visited[normalized] = struct{}{}
 }
 
 // UpdateSeedDomain changes the seed domain (e.g., after www redirect).

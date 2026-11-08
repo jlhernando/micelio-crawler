@@ -480,8 +480,8 @@ func (s *CrawlStore) GetAllPagesWithProgress(ctx context.Context, onProgress fun
 				} else {
 					jsonData = []byte(stmt.ColumnText(0))
 				}
-				var page types.PageData
-				if err := json.Unmarshal(jsonData, &page); err != nil {
+				page, err := decodeAnalysisPage(jsonData)
+				if err != nil {
 					return err
 				}
 				page.BodyText = ""
@@ -505,7 +505,7 @@ func (s *CrawlStore) GetAllPagesWithProgress(ctx context.Context, onProgress fun
 				// SchemaValidationStats / RenderCompareStats. RunCoreAnalysis
 				// and stripPagesForCache release them after the report.
 				page.CustomExtractions = nil
-				pages = append(pages, &page)
+				pages = append(pages, page)
 				loaded++
 				if onProgress != nil && loaded%500 == 0 {
 					onProgress(loaded)

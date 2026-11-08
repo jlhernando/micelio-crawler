@@ -547,3 +547,30 @@ func TestQueuePriorityWithMixedDepths(t *testing.T) {
 		}
 	}
 }
+
+// A Bloom filter used as final membership used to reject valid unseen URLs
+// in this fixture. Audit coverage requires every unique URL to be admitted.
+func TestQueueExactCoverageAtScale(t *testing.T) {
+	const count = 50000
+	q := NewCrawlQueue("https://benchmark.example", 1, count, nil)
+	defer q.Close()
+	for i := 0; i < count; i++ {
+		u := "https://benchmark.example/p/" + strconv.Itoa(i)
+		if !q.Enqueue(u, 1, nil) {
+			t.Fatalf("unique URL %d rejected", i)
+		}
+		if q.Dequeue() == nil {
+			t.Fatalf("URL %d missing from frontier", i)
+		}
+	}
+	if q.Enqueue("https://benchmark.example/p/46998", 1, nil) {
+		t.Fatal("duplicate accepted")
+	}
+	q.SetMaxPages(count + 1)
+	if !q.Enqueue("https://benchmark.example/p/new", 1, nil) {
+		t.Fatal("limit increase lost capacity")
+	}
+	if q.Enqueue("https://benchmark.example/p/0", 1, nil) {
+		t.Fatal("limit increase lost history")
+	}
+}

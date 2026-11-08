@@ -34,6 +34,7 @@ type hold struct {
 //
 // With several holds the one that collects most wins: the lowest percent
 // that is not negative, and -1 (GC off) only when every hold asks for it.
+// A stricter nonnegative user GOGC is preserved when a hold enables GC.
 // Memory safety beats speed: a crawl asking for GOGC=50 keeps GC on even
 // while a log analysis would like it off.
 //
@@ -88,6 +89,8 @@ func applyLocked() {
 	}
 	if pct == math.MaxInt {
 		pct = -1 // every hold wants GC off
+	} else if baseGC >= 0 && baseGC < pct {
+		pct = baseGC // never relax a user's stricter positive GC policy
 	}
 	debug.SetGCPercent(pct)
 	if baseMem == math.MaxInt64 {

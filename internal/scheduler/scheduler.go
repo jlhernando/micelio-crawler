@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/url"
 	"os"
@@ -469,7 +471,10 @@ func (s *Scheduler) CheckNow(ctx context.Context) PrecheckResult {
 type directRunner struct{}
 
 func (directRunner) Run(ctx context.Context, sc Config, ctl *RunControl) RunResult {
-	outputFile := buildOutputFilename(sc.URL, sc.OutputDir, sc.CrawlConfig.OutputFormat)
+	outputFile, err := reserveOutputFile(buildOutputFilename(sc.URL, sc.OutputDir, sc.CrawlConfig.OutputFormat))
+	if err != nil {
+		return RunResult{Status: "failed", Reason: err.Error()}
+	}
 	cfg := sc.CrawlConfig
 	cfg.OutputPath = outputFile
 	if cfg.SeedURL == "" {
@@ -499,10 +504,13 @@ func (directRunner) Run(ctx context.Context, sc Config, ctl *RunControl) RunResu
 		fmt.Fprintf(os.Stderr, "\r  [%d/%d] %.1f p/s — %s", p.Crawled, p.TotalSeen, p.Rate, p.CurrentURL)
 	})
 	res := RunResult{Status: "success", Output: outputFile}
+	if removeEmptyOutput(outputFile) {
+		res.Output = "" // failed or stopped before writing: no empty file for diff/import
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if result != nil {
-		res.Pages = len(result.Pages)
+		res.Pages = result.PageCount
 	}
 	switch {
 	case stopReason != "":
@@ -622,12 +630,45 @@ func buildOutputFilename(siteURL, outputDir string, format types.OutputFormat) s
 	if parsed, err := url.Parse(siteURL); err == nil && parsed.Host != "" {
 		hostname = strings.ReplaceAll(parsed.Hostname(), ".", "-")
 	}
-	ts := time.Now().UTC().Format("2006-01-02T15-04")
+	ts := time.Now().UTC().Format("2006-01-02T15-04-05")
 	ext := "jsonl"
 	if format == types.FormatCSV {
 		ext = "csv"
 	}
 	return filepath.Join(outputDir, fmt.Sprintf("%s-%s.%s", hostname, ts, ext))
+}
+
+// removeEmptyOutput deletes an unused output reservation.
+func removeEmptyOutput(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() != 0 {
+		return false
+	}
+	return os.Remove(path) == nil
+}
+
+// reserveOutputFile reserves a distinct output name; failure must stop the run.
+func reserveOutputFile(path string) (string, error) {
+	ext := filepath.Ext(path)
+	stem := strings.TrimSuffix(path, ext)
+	for i := 1; i <= 1000; i++ {
+		candidate := path
+		if i > 1 {
+			candidate = fmt.Sprintf("%s-%d%s", stem, i, ext)
+		}
+		f, err := os.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			if err := f.Close(); err != nil {
+				os.Remove(candidate)
+				return "", fmt.Errorf("reserve crawl output %q: %w", candidate, err)
+			}
+			return candidate, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return "", fmt.Errorf("reserve crawl output %q: %w", candidate, err)
+		}
+	}
+	return "", fmt.Errorf("reserve crawl output %q: no unused filename after 1000 attempts", path)
 }
 
 // DescribeCron returns a human-readable description of a cron expression.

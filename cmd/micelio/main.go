@@ -1382,10 +1382,14 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
 	go func() {
-		<-sigCh
-		fmt.Fprintf(os.Stderr, "\nInterrupted — finishing in-flight requests...\n")
-		cancel()
+		select {
+		case <-sigCh:
+			fmt.Fprintf(os.Stderr, "\nInterrupted — finishing in-flight requests...\n")
+			cancel()
+		case <-ctx.Done():
+		}
 	}()
 
 	// Auto-create crawl store if not provided and not disabled
@@ -1413,6 +1417,7 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 		storeArg = append(storeArg, crawlStore)
 	}
 
+	config.StoreOnly = ppCfg == nil
 	result, err := crawler.Crawl(ctx, config, func(p crawler.CrawlProgress) {
 		fmt.Fprintf(os.Stderr, "\r  [%d/%d] %.1f p/s — %s",
 			p.Crawled, p.TotalSeen, p.Rate, truncate(termsafe.String(p.CurrentURL), 60))
@@ -1420,9 +1425,12 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 	if err != nil {
 		return fmt.Errorf("crawl failed: %w", err)
 	}
+	if result.InternalLinksClose != nil {
+		defer result.InternalLinksClose()
+	}
 
 	fmt.Fprintf(os.Stderr, "\n\n  Done! %d pages crawled in %s (%d errors)\n",
-		len(result.Pages), result.Duration.Round(time.Millisecond), result.Errors)
+		result.PageCount, result.Duration.Round(time.Millisecond), result.Errors)
 
 	// Post-crawl: External link check
 	var brokenExternal []types.ExternalLinkResult
@@ -1484,9 +1492,6 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 		ppCfg.AgentReadiness = result.AgentReadiness
 		if result.InternalLinksIter != nil {
 			ppCfg.InternalLinksIter = result.InternalLinksIter
-		}
-		if result.InternalLinksClose != nil {
-			defer result.InternalLinksClose()
 		}
 		stats, _ = analysis.RunPostCrawlAnalysis(postCtx, result.Pages, *ppCfg)
 	}

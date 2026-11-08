@@ -83,6 +83,8 @@ type crawlSession struct {
 	pagesMu           sync.Mutex
 	errorCount        atomic.Int32
 	crawled           atomic.Int32
+	changedPages      atomic.Int64
+	unchangedPages    atomic.Int64
 	resumeOffset      int32
 	rateStart         time.Time
 	onProgress        OnProgress
@@ -118,6 +120,7 @@ func newCrawlSession(ctx context.Context, config types.CrawlConfig, onProgress O
 	}
 
 	s.applyConfigDefaults()
+	s.config.StoreOnly = s.config.StoreOnly && !s.config.NeedsPostCrawlPages()
 
 	ok := false
 	defer func() {
@@ -144,10 +147,15 @@ func newCrawlSession(ctx context.Context, config types.CrawlConfig, onProgress O
 	if err := s.setupWriter(); err != nil {
 		return nil, err
 	}
+	if s.config.StoreOnly && s.writer == nil && s.crawlDB == nil {
+		return nil, fmt.Errorf("store-only crawl requires an output file or crawl database")
+	}
 	s.setupBrowser()
 	s.setupIntegrationClients()
-	s.setupNgrams()
-	s.anchorAgg = analysis.NewAnchorAggregator()
+	if !s.config.StoreOnly {
+		s.setupNgrams()
+		s.anchorAgg = analysis.NewAnchorAggregator()
+	}
 	// robots.txt must be read before the first request. Sitemap discovery
 	// and the soft-404 probe run alongside the crawl (startBackground): on a
 	// news site the sitemaps alone took 111 s before the first page.
@@ -352,6 +360,7 @@ func (s *crawlSession) setupResumption() error {
 			// internal-domain check would drop the restored cross-domain URLs.
 			nonSpiderSeedSet := s.queue.SeedDomain() != ""
 			streamErr := s.crawlDB.StreamPages(func(rp *types.PageData, idx int) error {
+				s.recordChange(rp)
 				if s.config.Mode == types.ModeSpider || s.config.Mode == "" {
 					for _, link := range rp.InternalLinks {
 						ref := rp.URL
@@ -540,9 +549,9 @@ func (s *crawlSession) setupDiskAccumulators() {
 			fmt.Fprintf(os.Stderr, "  [warn] resrefs disk failed: %v — page-weight disabled\n", err)
 		}
 	}
-	// Always stream internal links to disk to avoid holding InternalLinks slices in memory.
+	// Stream internal links for analysis; store-only already persists them in page rows.
 	// Saves ~5GB for 1M pages. Used by BuildAdjacencyList post-crawl.
-	{
+	if !s.config.StoreOnly {
 		var err error
 		s.intLinksDisk, err = newInternalLinksDisk()
 		if err != nil {
@@ -865,6 +874,9 @@ func (s *crawlSession) abortReason() string {
 }
 
 func (s *crawlSession) cleanup() {
+	if s.intLinksDisk != nil {
+		s.intLinksDisk.Close()
+	}
 	if s.queue != nil {
 		s.queue.Close()
 	}

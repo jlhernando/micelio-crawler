@@ -508,8 +508,10 @@ interface GraphResponse {
 
 const EDGE_SAMPLING_THRESHOLD = 5000;
 const MAX_EDGES_PER_NODE = 15;
+// Maximum edges retained in one visualization response.
+export const MAX_GRAPH_EDGES = 100_000;
 
-function buildGraphResponse(pages: PageData[]): GraphResponse {
+export function buildGraphResponse(pages: PageData[]): GraphResponse {
   const nodeMap = new Map<string, GraphNode>();
   const nodes: GraphNode[] = [];
 
@@ -532,23 +534,35 @@ function buildGraphResponse(pages: PageData[]): GraphResponse {
     nodes.push(node);
   }
 
-  // Build edges with optional sampling for large crawls
-  const shouldSample = pages.length > EDGE_SAMPLING_THRESHOLD;
+  // Count the links first (no copies), then sample when the crawl is large
+  // or the link count is: each page keeps its first links (MAX_EDGES_PER_NODE,
+  // fewer when pages x 15 > MAX_GRAPH_EDGES) and the response never holds
+  // more than MAX_GRAPH_EDGES edges.
+  let totalEdgesBeforeSampling = 0;
+  for (const p of pages) {
+    for (const url of p.internalLinks || []) if (nodeMap.has(url)) totalEdgesBeforeSampling++;
+  }
+  const shouldSample = pages.length > EDGE_SAMPLING_THRESHOLD || totalEdgesBeforeSampling > MAX_GRAPH_EDGES;
+  // Spread the edge budget over every page, so the pages late in the list
+  // keep their links too (the hard cap below is only a safety net).
+  const perNode = shouldSample
+    ? Math.min(MAX_EDGES_PER_NODE, Math.max(1, Math.floor(MAX_GRAPH_EDGES / Math.max(1, pages.length))))
+    : Infinity;
   const edgeSet = new Set<string>();
   const edges: GraphEdge[] = [];
-  let totalEdgesBeforeSampling = 0;
 
-  for (const p of pages) {
-    const internalLinks = (p.internalLinks || []).filter(url => nodeMap.has(url));
-    totalEdgesBeforeSampling += internalLinks.length;
-
-    const links = shouldSample ? internalLinks.slice(0, MAX_EDGES_PER_NODE) : internalLinks;
-    for (const targetUrl of links) {
+  outer: for (const p of pages) {
+    let kept = 0;
+    for (const targetUrl of p.internalLinks || []) {
+      if (kept >= perNode) break;
+      if (!nodeMap.has(targetUrl)) continue;
       if (targetUrl === p.url) continue; // skip self-links
       const key = `${p.url}\t${targetUrl}`;
       if (!edgeSet.has(key)) {
+        if (edges.length >= MAX_GRAPH_EDGES) break outer;
         edgeSet.add(key);
         edges.push({ source: p.url, target: targetUrl });
+        kept++;
       }
     }
   }

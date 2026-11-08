@@ -16,10 +16,10 @@ micelio crawl https://example.com \
   --no-analysis --db-only --db example.db --memlimit 512MiB
 ```
 
-- `--no-analysis` skips the post-crawl analysis. `micelio import` runs it later.
+- `--no-analysis` skips the post-crawl analysis and avoids loading all saved pages into memory, unless an explicitly requested post-crawl feature needs them. `micelio import` runs the analysis later.
 - `--db-only` writes only the crawl database (`example.db`), no JSONL.
 - `--full-anchors` keeps link anchor texts, so the import can build the anchor reports. It makes the file bigger.
-- `--memlimit` sets a soft memory cap.
+- `--memlimit` sets a soft Go memory limit, not a hard limit on the whole process.
 
 For recurring crawls, run it from cron or use `micelio schedule`.
 
@@ -75,4 +75,4 @@ Some data is collected during the crawl and not stored page by page:
 
 - **Anchor reports:** need `--full-anchors` on the server.
 - **N-grams:** need the page text, which is not stored. Not available on imported crawls.
-- **Page weight, external link checks and integrations** (Search Console, GA4, PageSpeed): they run after the crawl, so `--no-analysis` skips them. Not available on imported crawls yet.
+- **Page weight, external link checks and integrations** (Search Console, GA4, CrUX, Plausible): explicitly requesting these can still require loading all pages even with `--no-analysis`. Import does not rerun external services; it can only use data already saved in the crawl.

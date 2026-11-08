@@ -1,7 +1,8 @@
+import type { PageData } from './types.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   validateSettings, applyEnvFallbacks, maskSecrets, redactConfig, unmaskConfig, validateCrawlRequest,
-  MASKED_SECRET, BadRequestError,
+  MASKED_SECRET, BadRequestError, buildGraphResponse, MAX_GRAPH_EDGES,
 } from './ui-api.js';
 import { setTrustedProxy } from './net-guard.js';
 
@@ -291,5 +292,66 @@ describe('proxy from the API (trusted proxy only)', () => {
     const cfg = unmaskConfig(redactConfig({ proxy: 'http://user:pw@proxy.example.com:8080' }), {});
     expect(cfg.proxy).toBe('http://user:pw@proxy.example.com:8080');
     expect(() => unmaskConfig(redactConfig({ proxy: 'http://user:pw@other:1' }), {})).toThrow(BadRequestError);
+  });
+});
+
+describe('buildGraphResponse', () => {
+  const pagesWithLinks = (n: number, linksOf: (i: number, urls: string[]) => string[]) => {
+    const urls = Array.from({ length: n }, (_, i) => `https://a.test/${i}`);
+    return urls.map((url, i) => ({ url, internalLinks: linksOf(i, urls) }) as unknown as PageData);
+  };
+
+  it('keeps every edge of a small sparse crawl', () => {
+    const pages = pagesWithLinks(10, (i, urls) => [urls[(i + 1) % 10], urls[i]]);
+    const g = buildGraphResponse(pages);
+    expect(g.edges).toHaveLength(10); // self-links skipped
+    expect(g.meta.samplingApplied).toBe(false);
+  });
+
+  it('caps the edges of a small but dense crawl', () => {
+    // 1,500 pages, every page links to every page: 2.25M candidate edges
+    const n = 1500;
+    const pages = pagesWithLinks(n, (_, urls) => urls);
+    const g = buildGraphResponse(pages);
+    expect(g.meta.totalEdgesBeforeSampling).toBe(n * n);
+    expect(g.meta.samplingApplied).toBe(true);
+    expect(g.edges.length).toBeLessThanOrEqual(MAX_GRAPH_EDGES);
+    expect(g.edges.length).toBeLessThanOrEqual(n * 15);
+    expect(g.nodes).toHaveLength(n);
+  });
+
+  it('spreads the edge budget so the last pages keep links too', () => {
+    // 20,000 pages x 20 links: 15 per page would hit the cap after 6,667 pages
+    const n = 20_000;
+    const pages = pagesWithLinks(n, (i, urls) => Array.from({ length: 20 }, (_, k) => urls[(i + k + 1) % n]));
+    const g = buildGraphResponse(pages);
+    expect(g.edges.length).toBeLessThanOrEqual(MAX_GRAPH_EDGES);
+    const perSource = new Map<string, number>();
+    for (const e of g.edges) perSource.set(e.source, (perSource.get(e.source) ?? 0) + 1);
+    expect(perSource.size).toBe(n); // every page keeps outgoing edges
+    expect(perSource.get(`https://a.test/${n - 1}`)).toBe(Math.floor(MAX_GRAPH_EDGES / n));
+  });
+
+  it('keeps real edges when self-links precede a one-edge sampling budget', () => {
+    const n = 50_001;
+    const pages = pagesWithLinks(n, (i, urls) => [urls[i], urls[(i + 1) % n]]);
+    const g = buildGraphResponse(pages);
+    expect(g.meta.samplingApplied).toBe(true);
+    expect(g.edges).toHaveLength(n);
+    expect(new Set(g.edges.map((e) => e.source)).size).toBe(n);
+    expect(g.edges.every((e) => e.source !== e.target)).toBe(true);
+    expect(g.edges.length).toBeLessThanOrEqual(MAX_GRAPH_EDGES);
+  });
+
+  it('does not spend the sampling budget on duplicate links', () => {
+    const n = 6000;
+    const pages = pagesWithLinks(n, (i, urls) => [
+      ...Array(15).fill(urls[(i + 1) % n]),
+      urls[(i + 2) % n],
+    ]);
+    const g = buildGraphResponse(pages);
+    expect(g.meta.samplingApplied).toBe(true);
+    expect(g.edges).toHaveLength(2 * n);
+    expect(new Set(g.edges.map((e) => `${e.source}\t${e.target}`)).size).toBe(2 * n);
   });
 });

@@ -27,6 +27,9 @@ const (
 	minUnnamedGroupSize = 5
 	// maxSegmentValues caps the values reported per dimension in stats.
 	maxSegmentValues = 100
+	// Unique SKU directories should not turn the interning cache into another
+	// full-crawl map. Existing common labels remain shared after this fills.
+	maxSegmentInternValues = 8192
 )
 
 var (
@@ -164,7 +167,9 @@ func AssignAutoSegments(pages []*types.PageData, groupLabels map[string]string, 
 		if c, ok := pool[v]; ok {
 			return c
 		}
-		pool[v] = v
+		if len(pool) < maxSegmentInternValues {
+			pool[v] = v
+		}
 		return v
 	}
 	for _, p := range pages {

@@ -275,7 +275,7 @@ func (s *crawlSession) handleRobotsBlocked(e types.QueueEntry) {
 		CrawledAt:     time.Now().UTC(),
 	}
 	s.pagesMu.Lock()
-	if !s.canReloadFromDisk {
+	if !s.canReloadFromDisk && !s.config.StoreOnly {
 		s.pages = append(s.pages, &page)
 	}
 	s.pagesMu.Unlock()
@@ -286,10 +286,22 @@ func (s *crawlSession) handleRobotsBlocked(e types.QueueEntry) {
 // Encoding and compression run here, in the calling worker; out must not be
 // modified afterwards.
 func (s *crawlSession) emitPage(out *types.PageData, sourceHTML, renderedHTML string) {
+	s.recordChange(out)
 	if s.sink == nil {
 		return
 	}
 	s.sink.put(s.sink.encode(out, sourceHTML, renderedHTML))
+}
+
+func (s *crawlSession) recordChange(page *types.PageData) {
+	if page.ContentChanged == nil {
+		return
+	}
+	if *page.ContentChanged {
+		s.changedPages.Add(1)
+	} else {
+		s.unchangedPages.Add(1)
+	}
 }
 
 // isSpiderSeed reports whether u is the start URL of a spider crawl, whose
@@ -355,7 +367,7 @@ func (s *crawlSession) handle304(e types.QueueEntry, result types.FetchResult) {
 	}
 	n := s.crawled.Add(1)
 	s.pagesMu.Lock()
-	if !s.canReloadFromDisk {
+	if !s.canReloadFromDisk && !s.config.StoreOnly {
 		s.pages = append(s.pages, &page)
 	}
 	s.pagesMu.Unlock()
@@ -617,7 +629,9 @@ func (s *crawlSession) collectPostCrawlData(e types.QueueEntry, result types.Fet
 
 func (s *crawlSession) storePage(e types.QueueEntry, page *types.PageData, sourceHTML, renderedHTML string) {
 	// Aggregate anchor stats while Anchors still exist (has its own lock).
-	s.anchorAgg.AddPage(page.URL, page.StatusCode, page.Anchors)
+	if s.anchorAgg != nil {
+		s.anchorAgg.AddPage(page.URL, page.StatusCode, page.Anchors)
+	}
 
 	// Create stripped shallow copy for output
 	stripped := *page
@@ -639,7 +653,7 @@ func (s *crawlSession) storePage(e types.QueueEntry, page *types.PageData, sourc
 	}
 
 	s.pagesMu.Lock()
-	if !s.canReloadFromDisk {
+	if !s.canReloadFromDisk && !s.config.StoreOnly {
 		s.pages = append(s.pages, page)
 	}
 	s.pagesMu.Unlock()

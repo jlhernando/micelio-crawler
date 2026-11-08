@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -180,7 +181,15 @@ func (m *CrawlManager) runImport(ctx context.Context, p *pendingImport) error {
 		cs.Close()
 		return fail(fmt.Errorf("scrub config: %w", err))
 	}
-	pages, err := cs.GetAllPages()
+	storedCount, err := cs.PageCount()
+	if err != nil {
+		cs.Close()
+		return fail(fmt.Errorf("count imported pages: %w", err))
+	}
+	if evicted, _ := m.prepareResultLoad(ctx, job.ID, storedCount, nil); evicted {
+		debug.FreeOSMemory()
+	}
+	pages, err := cs.GetAllPagesWithProgress(ctx, nil)
 	if err != nil {
 		cs.Close()
 		return fail(fmt.Errorf("read pages: %w", err))

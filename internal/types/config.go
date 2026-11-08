@@ -136,10 +136,18 @@ type CrawlConfig struct {
 	TorPassword         string  `json:"torPassword"`
 	TorRotateEvery      int     `json:"torRotateEvery"`
 	NoDB                bool    `json:"-"`
-	SkipSSRF            bool    `json:"-"`
+	// StoreOnly persists crawl rows without materializing them for analysis.
+	// Callers requesting post-crawl enrichments still receive full results.
+	StoreOnly bool `json:"-"`
+	SkipSSRF  bool `json:"-"`
 	// PlausibleHostTrusted lets PlausibleHost be a private or loopback
 	// address (self-hosted Plausible). Set only by the CLI, never from JSON.
 	PlausibleHostTrusted bool `json:"-"`
+}
+
+// NeedsPostCrawlPages reports features that still require materialized pages.
+func (c CrawlConfig) NeedsPostCrawlPages() bool {
+	return c.CheckExternal || c.PageWeight || c.GSC || c.GSCBqDataset != "" || c.GA4 || c.CrUX || c.Plausible
 }
 
 // DefaultRetries is used when CrawlConfig.Retries is not set.

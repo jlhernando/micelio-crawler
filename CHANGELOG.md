@@ -4,6 +4,12 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+### Dependency security
+
+- Update glob/minimatch, undici, qs, gRPC and CIRCL beyond their reported affected ranges.
+- Use a documented local deepmerge patch for the dashboard build plugin; returned objects no longer inherit attacker-controlled properties from JSON prototype keys.
+- Add Node.js CI audits, clean installs and compatibility/security regressions.
+
 ### Fixed
 
 - Crawls block additional non-global address ranges, including IPv4 addresses hidden in IPv6 transition formats. Fake-IP proxies have an explicit, limited opt-in.

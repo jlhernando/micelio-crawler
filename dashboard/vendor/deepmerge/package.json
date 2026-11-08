@@ -1,0 +1,9 @@
+{
+  "name": "@micelio/deepmerge-safe",
+  "version": "4.3.1-micelio.1",
+  "private": true,
+  "description": "Local security-patched deepmerge 4.3.1 for the Svelte build plugin",
+  "main": "index.cjs",
+  "types": "index.d.ts",
+  "license": "MIT"
+}

@@ -2,6 +2,7 @@ package crawler
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/csv"
 	"fmt"
 	"github.com/micelio/micelio/internal/storage"
@@ -175,7 +176,9 @@ func TestStoreOnlyCancellationAndResumeChangeCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.PageCount != 3 || r.ChangedPages != 1 || r.UnchangedPages != 1 || r.Pages != nil {
+	// The seed is replaced without a previous hash to compare: its old true
+	// flag no longer belongs to the saved rows. The untouched /good stays false.
+	if r.PageCount != 3 || r.ChangedPages != 0 || r.UnchangedPages != 1 || r.Pages != nil {
 		t.Fatalf("resume count=%d changed=%d unchanged=%d pages=%d", r.PageCount, r.ChangedPages, r.UnchangedPages, len(r.Pages))
 	}
 	other, err := storage.NewCrawlStore(filepath.Join(t.TempDir(), "partial.db"))
@@ -197,5 +200,78 @@ func TestStoreOnlyCancellationAndResumeChangeCounts(t *testing.T) {
 	count, err := other.PageCount()
 	if err != nil || count < 1 || partial.PageCount != count || partial.Pages != nil {
 		t.Fatalf("partial=%d db=%d err=%v", partial.PageCount, count, err)
+	}
+}
+
+func TestStoreOnlyResumeReplacementChangeCounts(t *testing.T) {
+	const body = "stable body"
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, "<html><body>%s</body></html>", body)
+	}))
+	defer site.Close()
+	changed, unchanged := true, false
+	sameHash := fmt.Sprintf("%x", md5.Sum([]byte(body)))
+	for _, tc := range []struct {
+		name      string
+		previous  *bool
+		hash      string
+		changed   int
+		unchanged int
+	}{
+		{"changed_to_changed", &changed, "previoushash", 1, 0},
+		{"changed_to_unchanged", &changed, sameHash, 0, 1},
+		{"unchanged_to_changed", &unchanged, "previoushash", 1, 0},
+		{"unchanged_to_unchanged", &unchanged, sameHash, 0, 1},
+		{"changed_to_unknown", &changed, "", 0, 0},
+		{"unknown_to_changed", nil, "previoushash", 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, storeOnly := range []bool{true, false} {
+				t.Run(fmt.Sprintf("store_only_%t", storeOnly), func(t *testing.T) {
+					db, err := storage.NewCrawlStore(filepath.Join(t.TempDir(), "resume.db"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer db.Close()
+					if err := db.InsertPage(&types.PageData{URL: site.URL, StatusCode: 200, ContentHash: tc.hash, ContentChanged: tc.previous}); err != nil {
+						t.Fatal(err)
+					}
+					spy := &reloadSpyStore{CrawlStore: db}
+					cfg := storeOnlyConfig(site.URL)
+					cfg.Resume, cfg.StoreOnly = true, storeOnly
+					r, err := Crawl(context.Background(), cfg, nil, spy)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if r.InternalLinksClose != nil {
+						defer r.InternalLinksClose()
+					}
+					if r.PageCount != 1 || r.ChangedPages != tc.changed || r.UnchangedPages != tc.unchanged {
+						t.Fatalf("count=%d changed=%d unchanged=%d; want 1/%d/%d", r.PageCount, r.ChangedPages, r.UnchangedPages, tc.changed, tc.unchanged)
+					}
+					var rows, changedRows, unchangedRows int
+					if err := db.StreamPages(func(p *types.PageData, _ int) error {
+						rows++
+						if p.ContentChanged != nil {
+							if *p.ContentChanged {
+								changedRows++
+							} else {
+								unchangedRows++
+							}
+						}
+						return nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+					if rows != r.PageCount || changedRows != r.ChangedPages || unchangedRows != r.UnchangedPages {
+						t.Fatal("result counts differ from final stored rows")
+					}
+					if storeOnly && (r.Pages != nil || spy.loads != 0) {
+						t.Fatal("counting changes materialized all pages")
+					}
+				})
+			}
+		})
 	}
 }

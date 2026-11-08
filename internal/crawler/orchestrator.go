@@ -311,8 +311,16 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 		pageCount = s.writer.Count()
 	}
 	if s.config.StoreOnly {
-		changedPages = int(s.changedPages.Load())
-		unchangedPages = int(s.unchangedPages.Load())
+		if s.crawlDB != nil {
+			var countErr error
+			changedPages, unchangedPages, countErr = countStoredChanges(s.crawlDB)
+			if countErr != nil {
+				return nil, fmt.Errorf("count persisted content changes: %w", countErr)
+			}
+		} else {
+			changedPages = int(s.changedPages.Load())
+			unchangedPages = int(s.unchangedPages.Load())
+		}
 	}
 	result := &CrawlResult{
 		Coverage:              coverage,
@@ -341,6 +349,31 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 		s.intLinksDisk = nil // ownership now belongs to the result's consumer
 	}
 	return result, nil
+}
+
+// countStoredChanges counts final rows after the sink has drained. A resumed
+// URL may be written again, so adding restored rows to emissions double-counts
+// replacements. Prefer a flag-only projection; custom stores can stream pages.
+func countStoredChanges(store CrawlStore) (changed, unchanged int, err error) {
+	if counter, ok := store.(interface {
+		ContentChangeCounts() (int, int, error)
+	}); ok {
+		return counter.ContentChangeCounts()
+	}
+	err = store.StreamPages(func(p *types.PageData, _ int) error {
+		if p.ContentChanged != nil {
+			if *p.ContentChanged {
+				changed++
+			} else {
+				unchanged++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return changed, unchanged, nil
 }
 
 func (s *crawlSession) loadExternalLinks() map[string][]string {

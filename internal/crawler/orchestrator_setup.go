@@ -360,7 +360,6 @@ func (s *crawlSession) setupResumption() error {
 			// internal-domain check would drop the restored cross-domain URLs.
 			nonSpiderSeedSet := s.queue.SeedDomain() != ""
 			streamErr := s.crawlDB.StreamPages(func(rp *types.PageData, idx int) error {
-				s.recordChange(rp)
 				if s.config.Mode == types.ModeSpider || s.config.Mode == "" {
 					for _, link := range rp.InternalLinks {
 						ref := rp.URL

@@ -286,7 +286,9 @@ func (s *crawlSession) handleRobotsBlocked(e types.QueueEntry) {
 // Encoding and compression run here, in the calling worker; out must not be
 // modified afterwards.
 func (s *crawlSession) emitPage(out *types.PageData, sourceHTML, renderedHTML string) {
-	s.recordChange(out)
+	if s.config.StoreOnly && s.crawlDB == nil {
+		s.recordChange(out)
+	}
 	if s.sink == nil {
 		return
 	}

@@ -83,3 +83,36 @@ func TestStatsConcurrentRequests(t *testing.T) {
 		t.Error("cached stats were mutated (totalChains added)")
 	}
 }
+
+// TestStatsLinkAnalysisPending: the dashboard offers "Stop external link
+// check" only when link intelligence or embeddings still run afterwards.
+func TestStatsLinkAnalysisPending(t *testing.T) {
+	api, _, m := newTestAPI(t)
+	cases := []struct {
+		id              string
+		pending, linkAn bool
+		want            bool
+	}{
+		{"li-running", true, true, true},
+		{"network-only", true, false, false},
+		{"done", false, true, false},
+	}
+	m.mu.Lock()
+	for _, c := range cases {
+		m.results[c.id] = &CrawlResults{Stats: map[string]interface{}{}, PagesReady: true, AnalysisPending: c.pending, linkAnalysis: c.linkAn}
+	}
+	m.mu.Unlock()
+	for _, c := range cases {
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, httptest.NewRequest("GET", "/api/crawl/"+c.id+"/stats", nil))
+		var resp struct {
+			LinkAnalysisPending bool `json:"linkAnalysisPending"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("%s: decode: %v", c.id, err)
+		}
+		if resp.LinkAnalysisPending != c.want {
+			t.Errorf("%s: linkAnalysisPending = %v, want %v", c.id, resp.LinkAnalysisPending, c.want)
+		}
+	}
+}

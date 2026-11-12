@@ -47,7 +47,10 @@ type CrawlResults struct {
 	PageCount       int                      `json:"pageCount"`
 	AnalysisPending bool                     `json:"analysisPending"` // true while deferred analysis (link intel, embeddings) is running
 	PagesReady      bool                     `json:"pagesReady"`      // false while pages are loading from DB in background
-	loadingProgress atomic.Int32             // 0-100 progress of background page loading (lock-free)
+	// linkAnalysis: the deferred analysis runs link intelligence or
+	// embeddings, so it goes on after Stop ends the network checks.
+	linkAnalysis    bool
+	loadingProgress atomic.Int32 // 0-100 progress of background page loading (lock-free)
 	// Background external link check: URLs done / total (total 0 = not running).
 	externalChecked atomic.Int64
 	externalTotal   atomic.Int64
@@ -1259,6 +1262,7 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 		PageCount:       pageCount,
 		AnalysisPending: needsDeferred,
 		PagesReady:      true,
+		linkAnalysis:    crawlConfig.LinkIntelligence || (crawlConfig.Embeddings && crawlConfig.EmbeddingKey != ""),
 	}
 	newResult.loadingProgress.Store(100)
 

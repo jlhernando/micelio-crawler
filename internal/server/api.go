@@ -515,8 +515,11 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			"stats":           stats,
 			"pageCount":       results.PageCount,
 			"analysisPending": results.AnalysisPending,
-			"pagesReady":      results.PagesReady,
-			"loadingProgress": int(results.loadingProgress.Load()),
+			// Link intelligence / embeddings still to come: Stop (network
+			// checks only) leaves work running, so the dashboard offers it.
+			"linkAnalysisPending": results.AnalysisPending && results.linkAnalysis,
+			"pagesReady":          results.PagesReady,
+			"loadingProgress":     int(results.loadingProgress.Load()),
 		}
 		if total := results.externalTotal.Load(); total > 0 {
 			resp["externalCheck"] = map[string]int64{"loaded": results.externalChecked.Load(), "total": total}

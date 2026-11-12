@@ -86,6 +86,7 @@ type PageData struct {
 	AutoSegments       *PageSegments           `json:"autoSegments,omitempty"`
 	LinkZones          *LinkZoneCounts         `json:"linkZones,omitempty"`
 	HTMLLang           string                  `json:"htmlLang,omitempty"`
+	ContentType        string                  `json:"contentType,omitempty"`    // Content-Type header as served; empty in crawls before Nov 2026 (see IsHTMLPage)
 	DOMFingerprint     uint64                  `json:"domFingerprint,omitempty"` // simhash of the main-content tag/class skeleton
 	RedirectChain      []RedirectHop           `json:"redirectChain,omitempty"`
 	StructuredData     []StructuredDataEntry   `json:"structuredData,omitempty"`

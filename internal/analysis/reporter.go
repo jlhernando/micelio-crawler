@@ -100,21 +100,19 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 		stats.StatusCodes[p.StatusCode]++
 		stats.DepthDistribution[p.Depth]++
 
-		// Title
-		if p.Title == nil || p.Title.Text == "" {
-			stats.PagesWithoutTitle++
-		}
-		// Meta description
-		if p.MetaDescription == nil || p.MetaDescription.Text == "" {
-			stats.PagesWithoutDescription++
-		}
-		// H1
-		if len(p.Headings.H1) == 0 {
-			stats.PagesWithoutH1++
-		}
-
-		// SEO issue counters (only for 200 pages)
-		if p.StatusCode == 200 {
+		// On-page checks (title, meta description, H1, lengths, duplicates)
+		// only for 2xx HTML pages: images, PDFs, redirects and errors never
+		// have these tags (types.PageData.IsHTMLPage).
+		if p.IsHTMLPage() {
+			if p.Title == nil || p.Title.Text == "" {
+				stats.PagesWithoutTitle++
+			}
+			if p.MetaDescription == nil || p.MetaDescription.Text == "" {
+				stats.PagesWithoutDescription++
+			}
+			if len(p.Headings.H1) == 0 {
+				stats.PagesWithoutH1++
+			}
 			if len(p.Headings.H1) > 1 {
 				stats.MultipleH1Count++
 			}

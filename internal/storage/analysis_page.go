@@ -292,5 +292,6 @@ func (in pageInterner) compact(p *types.PageData) {
 	}
 	p.TemplateType = in.str(p.TemplateType)
 	p.HTMLLang = in.str(p.HTMLLang)
+	p.ContentType = in.str(p.ContentType)
 	p.URLClassification = in.str(p.URLClassification)
 }

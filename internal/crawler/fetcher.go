@@ -410,7 +410,8 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 
 		// Read body
 		contentType := resp.Header.Get("Content-Type")
-		isHTML := strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml")
+		lowerCT := strings.ToLower(contentType) // media types are case-insensitive
+		isHTML := strings.Contains(lowerCT, "text/html") || strings.Contains(lowerCT, "application/xhtml+xml")
 
 		if isHTML && probe != probeNone {
 			// An image-looking URL that serves a page: fetch it as a page.

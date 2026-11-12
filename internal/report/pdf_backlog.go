@@ -408,7 +408,7 @@ func affectedURLs(id string, s *types.CrawlStats, pages []*types.PageData) []str
 		}
 		return list
 	}
-	ok := func(p *types.PageData) bool { return p.StatusCode >= 200 && p.StatusCode < 300 && !p.RobotsBlocked }
+	ok := func(p *types.PageData) bool { return p.IsHTMLPage() } // 2xx HTML, not blocked
 	switch id {
 	case "server-errors":
 		out = fromPages(func(p *types.PageData) bool { return p.StatusCode >= 500 })

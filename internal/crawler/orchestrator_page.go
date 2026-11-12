@@ -381,6 +381,7 @@ func (s *crawlSession) extractPageWithRefs(e types.QueueEntry, result types.Fetc
 	page.RedirectChain = result.RedirectChain
 	page.ResponseTimeMs = result.ResponseTimeMs
 	page.BodySize = result.BodySize
+	page.ContentType = result.ContentType
 	page.CrawledAt = time.Now().UTC()
 
 	// Capture caching headers for conditional re-crawl

@@ -54,8 +54,9 @@ func TestGenerateReportBasicStats(t *testing.T) {
 	if stats.CrawlDurationMs != 5000 {
 		t.Errorf("CrawlDurationMs = %d, want 5000", stats.CrawlDurationMs)
 	}
-	if stats.PagesWithoutDescription != 2 {
-		t.Errorf("PagesWithoutDescription = %d, want 2", stats.PagesWithoutDescription)
+	// The 404 is not a 2xx HTML page: only /about counts.
+	if stats.PagesWithoutDescription != 1 {
+		t.Errorf("PagesWithoutDescription = %d, want 1", stats.PagesWithoutDescription)
 	}
 }
 

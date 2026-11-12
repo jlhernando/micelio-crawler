@@ -36,6 +36,55 @@ func testSite(t *testing.T, pageCount int) *httptest.Server {
 	}))
 }
 
+// Pages keep the served Content-Type so on-page checks skip files
+// (jlhernando/micelio-crawler#82).
+func TestCrawlStoresContentType(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/doc.pdf":
+			w.Header().Set("Content-Type", "application/pdf")
+			fmt.Fprint(w, "%PDF-1.4")
+		case "/photo":
+			w.Header().Set("Content-Type", "image/png")
+			fmt.Fprint(w, "png")
+		default:
+			w.Header().Set("Content-Type", "TEXT/HTML; charset=UTF-8")
+			fmt.Fprint(w, `<html><head><title>Home</title></head><body><a href="/doc.pdf">d</a><a href="/photo">p</a></body></html>`)
+		}
+	}))
+	defer srv.Close()
+
+	result, err := Crawl(context.Background(), types.CrawlConfig{
+		SeedURL: srv.URL, Mode: types.ModeSpider, MaxDepth: 2, MaxPages: 10,
+		Concurrency: 1, UserAgent: "TestBot/1.0", SkipSSRF: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+	html := map[string]bool{}
+	for _, p := range result.Pages {
+		if p.ContentType == "" {
+			t.Errorf("%s: empty ContentType", p.URL)
+		}
+		path := strings.TrimPrefix(p.URL, srv.URL)
+		if path == "" {
+			path = "/"
+		}
+		html[path] = p.IsHTMLPage()
+		if path == "/" && (p.Title == nil || p.Title.Text != "Home") {
+			t.Errorf("upper-case Content-Type page not parsed: title %+v", p.Title)
+		}
+	}
+	for path, want := range map[string]bool{"/": true, "/doc.pdf": false, "/photo": false} {
+		got, ok := html[path]
+		if !ok {
+			t.Errorf("%s not crawled (got %v)", path, html)
+		} else if got != want {
+			t.Errorf("%s: IsHTMLPage = %v, want %v", path, got, want)
+		}
+	}
+}
+
 func TestCrawlBasic(t *testing.T) {
 	srv := testSite(t, 5)
 	defer srv.Close()

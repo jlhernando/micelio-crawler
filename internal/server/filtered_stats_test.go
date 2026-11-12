@@ -100,9 +100,9 @@ func TestComputeTemplateFilteredStats_DoesNotMutateAndCounts(t *testing.T) {
 	wantNums := map[string]float64{
 		"totalPages":                3,
 		"robotsBlockedCount":        1,
-		"pagesWithoutTitle":         1,
-		"pagesWithoutDescription":   2,
-		"pagesWithoutH1":            1,
+		"pagesWithoutTitle":         0, // the 404 (p/3) is not a 2xx HTML page
+		"pagesWithoutDescription":   1,
+		"pagesWithoutH1":            0,
 		"multipleH1Count":           1,
 		"duplicateTitleCount":       2,
 		"duplicateDescriptionCount": 1, // "d1" is shared with the category page

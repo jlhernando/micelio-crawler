@@ -4,6 +4,22 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+Target version: 1.15.0. Results open sooner, crawls use less CPU and memory, and you can stop the slow work that runs after a crawl.
+
+### Added
+
+- **Stop or cancel background work from Results.** After a crawl, the external link check, page weight and link intelligence run in the background. Results now shows them in one strip with two buttons: **Stop external link check** (link analysis still finishes) and **Cancel background analysis** (the results you see stay, with a note that the analysis was interrupted).
+- **Images are not downloaded by default.** JS rendering blocks image requests, and links to image files are not crawled (Crawl coverage lists them as `linked_image`). Turn it on in **Settings → Images**, the New Crawl checkbox or `--download-images`; image URLs are then checked with HEAD, never downloaded in full. Page weight still sizes every `<img>`.
+- **New issue `html-over-2mb`**: pages whose HTML is bigger than Googlebot's 2 MB fetch limit. Shown in Issues, the HTML and PDF reports (backlog ticket) and MCP `crawl_summary`.
+- Crawl coverage settings show as compact tiles.
+
+### Changed
+
+- **Page weight runs in the background with polite per-host pacing.** Results show first. Each host gets its own queue; the crawled site keeps the crawl's delay, other hosts (image CDNs) get up to 10 requests per second, and a host that answers 429/503 is slowed down instead of losing sizes. On 10,000 Wikipedia articles the page-weight step went from 1 h 52 min to 39 min with the same resources sized.
+- **Image entries are smaller.** Each image keeps only `src`, `alt`, `width`, `height` (and `inlineBytes` for long `data:` images). `src` is the URL the page serves; `data-src` wins over placeholders. Old crawls still load. See the user guide, section 8, if your scripts read the JSONL.
+- **Less CPU and memory per page**: faster text matching, one HTML parse per page, shared strings when results reload, a zstd-compressed internal-links temp file (about 10 times smaller), lighter results loading. Replay of 25,000 Wikipedia pages (crawl phase, 1.14.1 → 1.15.0): wall time -33%, CPU time -34%, peak RAM -21% ([chart](docs/img/release-1.15-resources.png)).
+
+
 ### Dependency security
 
 - Update glob/minimatch, undici, qs, gRPC and CIRCL beyond their reported affected ranges.
@@ -12,6 +28,8 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ### Fixed
 
+- **Cancel and Stop & Analyze reach post-crawl work.** Before, once fetching ended they answered "crawl has finished" while page weight, the external check and link intelligence kept running.
+- **Same crawl data, same results.** Lists with ties (top pages, n-grams, link suggestions, directory tree, crawl comparison, log top URLs and more) now have a fixed order, so the same crawl gives the same output every time.
 - Crawls block additional non-global address ranges, including IPv4 addresses hidden in IPv6 transition formats. Fake-IP proxies have an explicit, limited opt-in.
 - Search Console and GA4 retry oversized response pages with smaller batches and retain rows fetched before a later error.
 - Output rewrites preserve the original when flushing or closing fails. Failed log persistence is reported as a failed job.

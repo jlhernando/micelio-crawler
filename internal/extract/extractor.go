@@ -32,6 +32,14 @@ type ExtractionOptions struct {
 
 // ExtractPageData parses HTML and produces a PageData struct.
 func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
+	page, _ := ExtractPageDataWithRefs(html, opts, false)
+	return page
+}
+
+// ExtractPageDataWithRefs is ExtractPageData that, when withRefs is set, also
+// returns what ExtractResourceRefs(html, finalURL-or-pageURL) would, read
+// from the same parsed document so the HTML is parsed once instead of twice.
+func ExtractPageDataWithRefs(html string, opts ExtractionOptions, withRefs bool) (types.PageData, []types.ResourceEntry) {
 	baseURL := opts.FinalURL
 	if baseURL == "" {
 		baseURL = opts.PageURL
@@ -45,7 +53,21 @@ func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
 			StatusCode: opts.StatusCode,
 			Depth:      opts.Depth,
 			Error:      fmt.Sprintf("HTML parse error: %v", err),
-		}
+		}, nil
+	}
+	return extractFromDoc(doc, html, opts, baseURL, withRefs)
+}
+
+// extractFromDoc runs every extraction step on one parsed document. The steps
+// share it and must only read it: body text and EEAT walk the live tree (no
+// Clone since the resource loop, Nov 2026), so a step that removed or edited
+// nodes would change the text, word count, n-grams and simhash of every
+// later step. TestExtractionDoesNotMutateDocument guards this.
+func extractFromDoc(doc *goquery.Document, html string, opts ExtractionOptions, baseURL string, withRefs bool) (types.PageData, []types.ResourceEntry) {
+	// Refs first, so they are exactly those of a fresh parse.
+	var refs []types.ResourceEntry
+	if withRefs {
+		refs = resourceRefsFromDoc(doc, baseURL)
 	}
 
 	page := types.PageData{
@@ -213,7 +235,7 @@ func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
 		page.CustomSearches = runCustomSearches(html, opts.CustomSearches)
 	}
 
-	return page
+	return page, refs
 }
 
 // --- Headings ---

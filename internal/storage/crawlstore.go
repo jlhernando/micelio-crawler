@@ -463,6 +463,7 @@ func (s *CrawlStore) GetAllPagesWithProgress(ctx context.Context, onProgress fun
 	defer s.mu.Unlock()
 	var pages []*types.PageData
 	loaded := 0
+	intern := newPageInterner()
 	err := sqlitex.Execute(s.conn,
 		`SELECT data FROM pages ORDER BY rowid`,
 		&sqlitex.ExecOptions{
@@ -505,6 +506,7 @@ func (s *CrawlStore) GetAllPagesWithProgress(ctx context.Context, onProgress fun
 				// SchemaValidationStats / RenderCompareStats. RunCoreAnalysis
 				// and stripPagesForCache release them after the report.
 				page.CustomExtractions = nil
+				intern.compact(page)
 				pages = append(pages, page)
 				loaded++
 				if onProgress != nil && loaded%500 == 0 {

@@ -98,7 +98,8 @@ func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
 	}
 
 	// Extract page data
-	page := s.extractPage(e, result)
+	// Page-weight resource refs come from the same parse as the page data.
+	page, refs, refsDone := s.extractPageWithRefs(e, result, s.resRefsDisk != nil)
 
 	// Content change detection (compare with previous crawl's hash)
 	if s.prevContentHashes != nil && page.ContentHash != "" {
@@ -125,7 +126,7 @@ func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
 	}
 
 	// Collect post-crawl data to disk accumulators
-	s.collectPostCrawlData(e, result, &page)
+	s.collectPostCrawlData(e, result, &page, refs, refsDone)
 
 	// HTML source and/or rendered DOM to store (if configured and DB
 	// available). Compressed by storePage and written with the page row.
@@ -348,9 +349,16 @@ func (s *crawlSession) handle304(e types.QueueEntry, result types.FetchResult) {
 }
 
 func (s *crawlSession) extractPage(e types.QueueEntry, result types.FetchResult) types.PageData {
-	var page types.PageData
+	page, _, _ := s.extractPageWithRefs(e, result, false)
+	return page
+}
+
+// extractPageWithRefs also returns the page's resource refs when withRefs is
+// set; refsDone reports whether the HTML was parsed so refs are final.
+func (s *crawlSession) extractPageWithRefs(e types.QueueEntry, result types.FetchResult, withRefs bool) (page types.PageData, refs []types.ResourceEntry, refsDone bool) {
 	if result.HTML != "" && result.Error == "" {
-		page = extract.ExtractPageData(result.HTML, extract.ExtractionOptions{
+		refsDone = withRefs
+		page, refs = extract.ExtractPageDataWithRefs(result.HTML, extract.ExtractionOptions{
 			PageURL:           e.URL,
 			FinalURL:          result.FinalURL,
 			StatusCode:        result.StatusCode,
@@ -358,7 +366,7 @@ func (s *crawlSession) extractPage(e types.QueueEntry, result types.FetchResult)
 			Depth:             e.Depth,
 			CustomExtractions: s.config.CustomExtractions,
 			CustomSearches:    s.config.CustomSearches,
-		})
+		}, withRefs)
 	} else {
 		page = types.PageData{
 			URL:            e.URL,
@@ -384,7 +392,7 @@ func (s *crawlSession) extractPage(e types.QueueEntry, result types.FetchResult)
 			page.LastModified = lm
 		}
 	}
-	return page
+	return page, refs, refsDone
 }
 
 func (s *crawlSession) enrichPage(ctx context.Context, e types.QueueEntry, result types.FetchResult, page *types.PageData) string {
@@ -537,10 +545,10 @@ func (s *crawlSession) enqueueLinks(e types.QueueEntry, page *types.PageData) {
 	}
 }
 
-func (s *crawlSession) collectPostCrawlData(e types.QueueEntry, result types.FetchResult, page *types.PageData) {
-	// Extract resource refs outside the lock (CPU-bound HTML parsing).
-	var refs []types.ResourceEntry
-	if s.resRefsDisk != nil && result.HTML != "" {
+func (s *crawlSession) collectPostCrawlData(e types.QueueEntry, result types.FetchResult, page *types.PageData, refs []types.ResourceEntry, refsDone bool) {
+	// Extract resource refs outside the lock (CPU-bound HTML parsing), unless
+	// extractPageWithRefs already read them from its parse.
+	if s.resRefsDisk != nil && result.HTML != "" && !refsDone {
 		pageURL := e.URL
 		if result.FinalURL != "" {
 			pageURL = result.FinalURL

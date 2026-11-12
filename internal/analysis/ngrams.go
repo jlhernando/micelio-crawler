@@ -139,20 +139,26 @@ func (a *NgramAnalyzer) AddPrepared(pn *PageNgrams) {
 	defer a.mu.Unlock()
 	a.totalPages++
 	a.totalTokens += pn.tokens
-	mergeNgrams(a.unigrams, pn.unigrams)
-	mergeNgrams(a.bigrams, pn.bigrams)
-	mergeNgrams(a.trigrams, pn.trigrams)
+	// Unigram keys are substrings of the page's whole cleaned text: copy
+	// new ones so the totals do not pin every page's text. Bigram and
+	// trigram keys are already built as exact-size strings.
+	mergeNgrams(a.unigrams, pn.unigrams, true)
+	mergeNgrams(a.bigrams, pn.bigrams, false)
+	mergeNgrams(a.trigrams, pn.trigrams, false)
 	pruneIfNeeded(a.unigrams)
 	pruneIfNeeded(a.bigrams)
 	pruneIfNeeded(a.trigrams)
 }
 
-func mergeNgrams(dst map[string]*ngramData, page map[string]int) {
+func mergeNgrams(dst map[string]*ngramData, page map[string]int, clone bool) {
 	for term, c := range page {
 		if d, ok := dst[term]; ok {
 			d.count += c
 			d.pages++
 		} else {
+			if clone {
+				term = strings.Clone(term)
+			}
 			dst[term] = &ngramData{count: c, pages: 1}
 		}
 	}

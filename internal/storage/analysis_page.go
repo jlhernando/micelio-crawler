@@ -3,6 +3,8 @@ package storage
 import (
 	"bytes"
 	"encoding/json"
+
+	"github.com/micelio/micelio/internal/intern"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -92,4 +94,71 @@ func decodeAnalysisPage(data []byte) (*types.PageData, error) {
 		page.ExternalLinkCount = int(projection.ExternalLinks)
 	}
 	return page, nil
+}
+
+// pageInterner shares the string data that repeats across reloaded pages
+// (menu and footer anchors, logo images, hreflang sets, Open Graph values)
+// and trims the spare capacity encoding/json leaves on decoded slices. Only
+// memory changes: every field keeps its value, nil and empty slices stay as
+// they are. One interner per load, dropped with it. The table is capped
+// (intern.DefaultMax) so mostly-unique strings such as content links and
+// per-product JSON-LD cannot make it grow with the crawl size.
+type pageInterner struct{ t *intern.Table }
+
+func newPageInterner() pageInterner { return pageInterner{intern.New(0)} }
+
+func (in pageInterner) str(s string) string { return in.t.Str(s) }
+
+func clip[T any](s []T) []T { return intern.Clip(s) }
+
+func (in pageInterner) compact(p *types.PageData) {
+	p.Anchors = clip(p.Anchors)
+	for i := range p.Anchors {
+		a := &p.Anchors[i]
+		a.Href = in.str(a.Href)
+		a.Text = in.str(a.Text)
+		a.Position = types.LinkPosition(in.str(string(a.Position)))
+	}
+	p.Images = clip(p.Images)
+	for i := range p.Images {
+		p.Images[i].Src = in.str(p.Images[i].Src)
+	}
+	p.Hreflang = clip(p.Hreflang)
+	for i := range p.Hreflang {
+		h := &p.Hreflang[i]
+		h.Lang = in.str(h.Lang)
+		h.Href = in.str(h.Href)
+		h.Source = in.str(h.Source)
+	}
+	p.StructuredData = clip(p.StructuredData)
+	for i := range p.StructuredData {
+		d := &p.StructuredData[i]
+		d.Type = in.str(d.Type)
+		d.Format = types.StructuredDataFormat(in.str(string(d.Format)))
+		d.Raw = in.str(d.Raw)
+	}
+	p.SchemaValidation = clip(p.SchemaValidation)
+	for i := range p.SchemaValidation {
+		v := &p.SchemaValidation[i]
+		v.Type = in.str(v.Type)
+		v.Format = types.StructuredDataFormat(in.str(string(v.Format)))
+		v.Issues = clip(v.Issues)
+	}
+	p.Segments = clip(p.Segments)
+	for i, s := range p.Segments {
+		p.Segments[i] = in.str(s)
+	}
+	p.URLIssues = clip(p.URLIssues)
+	p.RedirectChain = clip(p.RedirectChain)
+	p.RenderDiffs = clip(p.RenderDiffs)
+	p.TruncatedElements = clip(p.TruncatedElements)
+	for k, v := range p.OpenGraph {
+		p.OpenGraph[k] = in.str(v)
+	}
+	for k, v := range p.TwitterCard {
+		p.TwitterCard[k] = in.str(v)
+	}
+	p.TemplateType = in.str(p.TemplateType)
+	p.HTMLLang = in.str(p.HTMLLang)
+	p.URLClassification = in.str(p.URLClassification)
 }

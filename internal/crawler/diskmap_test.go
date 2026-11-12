@@ -7,8 +7,11 @@ import (
 	"os"
 	"reflect"
 	"testing"
+	"unsafe"
 
 	"github.com/klauspost/compress/zstd"
+
+	"github.com/micelio/micelio/internal/types"
 )
 
 func TestInternalLinksDiskRoundTrip(t *testing.T) {
@@ -194,5 +197,51 @@ func BenchmarkInternalLinksDiskAddPage(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		d.AddPage("https://www.example.com/source/page", links)
+	}
+}
+
+func TestResourceRefsDiskRoundTripInterned(t *testing.T) {
+	d, err := newResourceRefsDisk()
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := int64(1234)
+	want := map[string][]types.ResourceEntry{}
+	for i := 0; i < 50; i++ {
+		page := fmt.Sprintf("https://ex.com/p/%d", i)
+		refs := []types.ResourceEntry{
+			{URL: "https://ex.com/app.css", Type: types.ResourceType("css")},
+			{URL: fmt.Sprintf("https://ex.com/img/%d.jpg", i), Type: types.ResourceType("image"), SizeBytes: &size},
+			{URL: "https://ex.com/app.js", Type: types.ResourceType("js")},
+		}
+		want[page] = refs
+		d.Add(page, refs)
+	}
+	want["https://ex.com/empty"] = []types.ResourceEntry{}
+	d.Add("https://ex.com/empty", []types.ResourceEntry{})
+	want["https://ex.com/nil"] = nil
+	d.Add("https://ex.com/nil", nil)
+	name := d.file.Name()
+
+	got, err := d.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("round trip differs:\n got %+v\nwant %+v", got, want)
+	}
+	a, b := got["https://ex.com/p/1"], got["https://ex.com/p/2"]
+	if unsafe.StringData(a[0].URL) != unsafe.StringData(b[0].URL) {
+		t.Error("shared resource URL not interned")
+	}
+	if cap(a) != len(a) {
+		t.Errorf("cap %d != len %d", cap(a), len(a))
+	}
+	*a[1].SizeBytes = 1
+	if *b[1].SizeBytes != 1234 {
+		t.Error("SizeBytes pointers shared across pages")
+	}
+	if _, err := os.Stat(name); !os.IsNotExist(err) {
+		t.Errorf("temp file not removed: %v", err)
 	}
 }

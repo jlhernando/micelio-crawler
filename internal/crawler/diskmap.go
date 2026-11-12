@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/micelio/micelio/internal/intern"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -146,11 +147,10 @@ func (d *resourceRefsDisk) Load() (map[string][]types.ResourceEntry, error) {
 	}
 
 	result := make(map[string][]types.ResourceEntry)
+	// Most pages link the same stylesheets, scripts and images: share one
+	// copy of each URL and type string instead of one per page.
+	strs := intern.New(0)
 	dec := json.NewDecoder(bufio.NewReaderSize(d.file, 64*1024))
-	// The same stylesheet, script or logo is on most pages: decoding gives
-	// each page its own copy of the URL string. Keep one copy per URL; the
-	// refs live until page weight is done (hours on big crawls).
-	urls := make(map[string]string)
 	var decErr error
 	for dec.More() {
 		var entry resourceRefsEntry
@@ -158,15 +158,7 @@ func (d *resourceRefsDisk) Load() (map[string][]types.ResourceEntry, error) {
 			decErr = fmt.Errorf("decode resrefs entry: %w", err)
 			break
 		}
-		for i := range entry.Refs {
-			u := entry.Refs[i].URL
-			if s, ok := urls[u]; ok {
-				entry.Refs[i].URL = s
-			} else {
-				urls[u] = u
-			}
-		}
-		result[entry.PageURL] = entry.Refs
+		result[entry.PageURL] = compactRefs(entry.Refs, strs)
 	}
 
 	d.cleanup()
@@ -174,6 +166,18 @@ func (d *resourceRefsDisk) Load() (map[string][]types.ResourceEntry, error) {
 		return result, decErr
 	}
 	return result, nil
+}
+
+// compactRefs returns refs in an exact-size slice (the decoder grows it by
+// doubling) with URL and Type strings interned. nil and empty stay as they are.
+func compactRefs(refs []types.ResourceEntry, strs *intern.Table) []types.ResourceEntry {
+	refs = intern.Clip(refs)
+	for i := range refs {
+		r := &refs[i]
+		r.URL = strs.Str(r.URL)
+		r.Type = types.ResourceType(strs.Str(string(r.Type)))
+	}
+	return refs
 }
 
 func (d *resourceRefsDisk) cleanup() {

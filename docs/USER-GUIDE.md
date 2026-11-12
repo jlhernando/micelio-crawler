@@ -156,6 +156,13 @@ does not create or supply API keys.
   1000 / delay pages per second whatever the concurrency: 200 ms allows up to
   5 pages/s, 1,000 ms allows 1 page/s. New Crawl shows the cap for the chosen
   delay.
+- **Download images** is off by default. Off: JS rendering blocks image
+  requests and links to image files (`<a href="photo.jpg">`) are not
+  requested (Crawl coverage lists them as `linked_image`). On: linked images
+  are checked with a HEAD request (then a 1-byte range request), never
+  downloaded in full. Set the default in **Settings → Images**; the CLI flag is
+  `--download-images`. Page weight sizes every `<img>` either way, so its totals
+  stay comparable with Lighthouse.
 
 ### Device
 
@@ -319,6 +326,13 @@ Available controls:
   appear in seconds: external links are checked afterwards, in the background.
   Results shows "Checking external links n / total" and adds the broken ones
   when done.
+- **Background work** (external link check, page weight, link intelligence)
+  shows as one strip at the top of Results. **Stop external link check** ends
+  only the network checks; link analysis still finishes. **Cancel background
+  analysis** stops all of it: the results you already see stay, and a note
+  says the analysis was interrupted. Cancel and Stop & Analyze also work
+  while this post-crawl work runs (before, they answered "crawl has
+  finished" and the work kept going).
 
 Running and paused crawls also appear in the sidebar, so concurrent jobs can be
 opened directly. Persisted crawls can be resumed after an app restart with their

@@ -45,6 +45,22 @@ queue, served in turn; 20 checks run at once, at most 2 per site (6 for large
 platforms). A site that answers 429 is checked one URL at a time with growing
 pauses, and URLs it never answers are left unchecked, not broken.
 
+Page weight sizes resources in the same background step
+(`internal/server/pageweight.go`, `internal/crawler/pageweight_sizer.go`): one
+HEAD per unique resource, a queue per host served in turn, the crawl's own
+rate limit for the crawled site and a shared slow pace for other hosts, and
+growing pauses after 429/503.
+
+Post-crawl work runs on a per-job `deferredRun` with two contexts: `ctx` for
+all of it and `net` for network work only. Cancel before results are cached
+ends the job as cancelled; after, the background work stops, the job stays
+completed and `stats.analysisInterrupted` says so. Stop & Analyze during this
+phase cancels only `net` (page weight, external check).
+
+The internal-links temp file (`internal/crawler/diskmap.go`) is
+zstd-compressed TSV: menu links repeat on every page, so it is about 10x
+smaller on disk.
+
 Dashboard crawls and imported crawls (`internal/server/import.go`) share the
 same analysis code (`analyzeAndCache`).
 

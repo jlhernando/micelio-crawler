@@ -154,10 +154,18 @@ func buildLifecycleSummary(
 
 	// Sort by traffic (clicks desc)
 	sort.Slice(ls.DisappearedWithTraffic, func(i, j int) bool {
-		return ls.DisappearedWithTraffic[i].Clicks > ls.DisappearedWithTraffic[j].Clicks
+		a, b := ls.DisappearedWithTraffic[i], ls.DisappearedWithTraffic[j]
+		if a.Clicks != b.Clicks {
+			return a.Clicks > b.Clicks
+		}
+		return a.URL < b.URL
 	})
 	sort.Slice(ls.NewWithTraffic, func(i, j int) bool {
-		return ls.NewWithTraffic[i].Clicks > ls.NewWithTraffic[j].Clicks
+		a, b := ls.NewWithTraffic[i], ls.NewWithTraffic[j]
+		if a.Clicks != b.Clicks {
+			return a.Clicks > b.Clicks
+		}
+		return a.URL < b.URL
 	})
 
 	return ls
@@ -299,7 +307,12 @@ func PrintDiffSummary(w io.Writer, diff *DiffResult) {
 		for k, v := range diff.FieldSummary {
 			sorted = append(sorted, kv{k, v})
 		}
-		sort.Slice(sorted, func(i, j int) bool { return sorted[i].v > sorted[j].v })
+		sort.Slice(sorted, func(i, j int) bool {
+			if sorted[i].v != sorted[j].v {
+				return sorted[i].v > sorted[j].v
+			}
+			return sorted[i].k < sorted[j].k
+		})
 		for _, s := range sorted {
 			fmt.Fprintf(w, "  %-20s %d\n", s.k, s.v)
 		}
@@ -317,7 +330,12 @@ func PrintDiffSummary(w io.Writer, diff *DiffResult) {
 			for k, v := range diff.Lifecycle.DisappearedReasons {
 				rsorted = append(rsorted, rkv{k, v})
 			}
-			sort.Slice(rsorted, func(i, j int) bool { return rsorted[i].v > rsorted[j].v })
+			sort.Slice(rsorted, func(i, j int) bool {
+				if rsorted[i].v != rsorted[j].v {
+					return rsorted[i].v > rsorted[j].v
+				}
+				return rsorted[i].k < rsorted[j].k
+			})
 			for _, s := range rsorted {
 				fmt.Fprintf(w, "  %-20s %d\n", s.k, s.v)
 			}

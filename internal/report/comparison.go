@@ -289,6 +289,7 @@ func ComputeComparison(
 			persisted = append(persisted, url)
 		}
 	}
+	sort.Strings(persisted) // newMap is a map
 
 	report.HealthScore = compareHealthScore(oldStats, newStats)
 	report.Coverage = compareCoverage(oldStats, newStats, diff)
@@ -321,7 +322,14 @@ func ComputeComparison(
 		if si != sj {
 			return si < sj
 		}
-		return report.Findings[i].Impact > report.Findings[j].Impact
+		a, b := report.Findings[i], report.Findings[j]
+		if a.Impact != b.Impact {
+			return a.Impact > b.Impact
+		}
+		if a.Section != b.Section {
+			return a.Section < b.Section
+		}
+		return a.Message < b.Message
 	})
 
 	return report
@@ -606,6 +614,7 @@ func compareHTTPStatus(oldStats, newStats *types.CrawlStats, oldMap, newMap map[
 	}
 
 	for key, urls := range migMap {
+		sort.Strings(urls) // collected from a map: same sample every run
 		sample := urls
 		if len(sample) > 10 {
 			sample = sample[:10]
@@ -618,7 +627,14 @@ func compareHTTPStatus(oldStats, newStats *types.CrawlStats, oldMap, newMap map[
 		})
 	}
 	sort.Slice(migrations, func(i, j int) bool {
-		return migrations[i].Count > migrations[j].Count
+		a, b := migrations[i], migrations[j]
+		if a.Count != b.Count {
+			return a.Count > b.Count
+		}
+		if a.From != b.From {
+			return a.From < b.From
+		}
+		return a.To < b.To
 	})
 
 	return HTTPStatusSection{
@@ -767,7 +783,11 @@ func compareLinks(oldStats, newStats *types.CrawlStats, oldMap, newMap map[strin
 
 		// Sort by absolute delta descending
 		sort.Slice(changes, func(i, j int) bool {
-			return math.Abs(changes[i].Delta) > math.Abs(changes[j].Delta)
+			di, dj := math.Abs(changes[i].Delta), math.Abs(changes[j].Delta)
+			if di != dj {
+				return di > dj
+			}
+			return changes[i].URL < changes[j].URL
 		})
 
 		for _, c := range changes {
@@ -950,7 +970,10 @@ func compareVisibility(oldStats, newStats *types.CrawlStats, oldMap, newMap map[
 
 	// Sort descending by delta: winners at front, losers at back
 	sort.Slice(changes, func(i, j int) bool {
-		return changes[i].Delta > changes[j].Delta
+		if changes[i].Delta != changes[j].Delta {
+			return changes[i].Delta > changes[j].Delta
+		}
+		return changes[i].URL < changes[j].URL
 	})
 
 	// Winners: take from the front (positive deltas)
@@ -1022,12 +1045,8 @@ func compareNgrams(oldStats, newStats *types.CrawlStats) *NgramSection {
 		}
 	}
 
-	sort.Slice(section.EmergingTopics, func(i, j int) bool {
-		return section.EmergingTopics[i].Count > section.EmergingTopics[j].Count
-	})
-	sort.Slice(section.DecliningTopics, func(i, j int) bool {
-		return section.DecliningTopics[i].Count > section.DecliningTopics[j].Count
-	})
+	sortNgramChanges(section.EmergingTopics)
+	sortNgramChanges(section.DecliningTopics)
 
 	// Limit
 	if len(section.EmergingTopics) > 30 {
@@ -1095,7 +1114,10 @@ func compareSegments(oldStats, newStats *types.CrawlStats) []SegmentComparison {
 	}
 
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].Pages.New > result[j].Pages.New
+		if result[i].Pages.New != result[j].Pages.New {
+			return result[i].Pages.New > result[j].Pages.New
+		}
+		return result[i].Name < result[j].Name
 	})
 
 	return result
@@ -1384,3 +1406,14 @@ func metricDelta(old, new float64) MetricDelta {
 	}
 }
 
+
+// sortNgramChanges orders topics by count (highest first), then term: they
+// are collected from maps, so ties must not depend on map order.
+func sortNgramChanges(s []NgramChange) {
+	sort.Slice(s, func(i, j int) bool {
+		if s[i].Count != s[j].Count {
+			return s[i].Count > s[j].Count
+		}
+		return s[i].Term < s[j].Term
+	})
+}

@@ -429,6 +429,7 @@ func buildSitemapComparisonStats(pages []*types.PageData, cfg ReportConfig) *typ
 			ss.UncrawledSitemapURLs = append(ss.UncrawledSitemapURLs, u)
 		}
 	}
+	sort.Strings(ss.UncrawledSitemapURLs) // sitemapURLs is a map
 
 	crawledAndInSitemap := 0
 	for u := range crawledURLs {
@@ -489,7 +490,10 @@ func buildPageWeightStats(pages []*types.PageData) *types.PageWeightStats {
 	}
 
 	sort.Slice(heaviest, func(i, j int) bool {
-		return heaviest[i].TotalBytes > heaviest[j].TotalBytes
+		if heaviest[i].TotalBytes != heaviest[j].TotalBytes {
+			return heaviest[i].TotalBytes > heaviest[j].TotalBytes
+		}
+		return heaviest[i].URL < heaviest[j].URL
 	})
 	if len(heaviest) > 20 {
 		heaviest = heaviest[:20]
@@ -662,7 +666,10 @@ func buildAIVisibilityStats(pages []*types.PageData) *types.AIVisibilityStats {
 
 	// Sort entries by clicks desc
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].AIClicks > entries[j].AIClicks
+		if entries[i].AIClicks != entries[j].AIClicks {
+			return entries[i].AIClicks > entries[j].AIClicks
+		}
+		return entries[i].URL < entries[j].URL
 	})
 	if len(entries) > 50 {
 		entries = entries[:50]
@@ -677,7 +684,11 @@ func buildAIVisibilityStats(pages []*types.PageData) *types.AIVisibilityStats {
 		topQueries = append(topQueries, *q)
 	}
 	sort.Slice(topQueries, func(i, j int) bool {
-		return topQueries[i].Clicks > topQueries[j].Clicks
+		// allQueries is a map: break click ties by query text.
+		if topQueries[i].Clicks != topQueries[j].Clicks {
+			return topQueries[i].Clicks > topQueries[j].Clicks
+		}
+		return topQueries[i].Query < topQueries[j].Query
 	})
 	if len(topQueries) > 50 {
 		topQueries = topQueries[:50]
@@ -1015,7 +1026,10 @@ func sortedURLCounts(freq map[string]int, n int) []types.URLCountEntry {
 		items = append(items, kv{k, v})
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].count > items[j].count
+		if items[i].count != items[j].count {
+			return items[i].count > items[j].count
+		}
+		return items[i].url < items[j].url
 	})
 	if n > 0 && len(items) > n {
 		items = items[:n]

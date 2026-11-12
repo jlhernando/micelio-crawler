@@ -468,7 +468,12 @@ func (a *aggregator) finalize() *LogStats {
 		for k, v := range a.urlHits {
 			items = append(items, kv{k, v})
 		}
-		sort.Slice(items, func(i, j int) bool { return items[i].u.hits > items[j].u.hits })
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].u.hits != items[j].u.hits {
+				return items[i].u.hits > items[j].u.hits
+			}
+			return items[i].path < items[j].path
+		})
 		if len(items) > maxTopURLs {
 			items = items[:maxTopURLs]
 		}
@@ -534,9 +539,9 @@ func (a *aggregator) analyzeWasteFromAllURLs(totalBotHits int64) *WasteAnalysis 
 		e.Hits += u.hits
 		e.BotHits += u.botHits
 		e.URLs++
-		if len(e.TopURLs) < 5 {
-			e.TopURLs = append(e.TopURLs, path)
-		}
+		// urlHits is a map, so "the first 5 seen" changed run to run: keep
+		// the 5 most hit paths (ties by path) instead.
+		e.TopURLs = keepTopWasteURL(e.TopURLs, path, u.hits, a.urlHits, 5)
 		wa.WasteHits += u.botHits
 	}
 	if totalBotHits > 0 {
@@ -555,7 +560,12 @@ func (a *aggregator) buildBotHeatmaps() map[string][7][24]int64 {
 	for name, bs := range a.stats.BotHits {
 		bots = append(bots, botHit{name, bs.Hits})
 	}
-	sort.Slice(bots, func(i, j int) bool { return bots[i].hits > bots[j].hits })
+	sort.Slice(bots, func(i, j int) bool {
+		if bots[i].hits != bots[j].hits {
+			return bots[i].hits > bots[j].hits
+		}
+		return bots[i].name < bots[j].name
+	})
 	if len(bots) > 5 {
 		bots = bots[:5]
 	}
@@ -998,4 +1008,29 @@ func statusGroup(code int) string {
 	default:
 		return "other"
 	}
+}
+
+// keepTopWasteURL inserts path into top (at most n paths, most hits first,
+// ties by path) and returns the updated list.
+func keepTopWasteURL(top []string, path string, hits int64, urlHits map[string]*urlAccum, n int) []string {
+	better := func(h int64, p string, q string) bool {
+		qh := urlHits[q].hits
+		if h != qh {
+			return h > qh
+		}
+		return p < q
+	}
+	pos := len(top)
+	for pos > 0 && better(hits, path, top[pos-1]) {
+		pos--
+	}
+	if pos >= n {
+		return top
+	}
+	if len(top) < n {
+		top = append(top, "")
+	}
+	copy(top[pos+1:], top[pos:len(top)-1])
+	top[pos] = path
+	return top
 }

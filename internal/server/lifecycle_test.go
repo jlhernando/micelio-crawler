@@ -54,8 +54,9 @@ func TestRestartRefusedLeavesJobUntouched(t *testing.T) {
 }
 
 // Once the crawl loop has returned (job "completed", analysis running),
-// resume, cancel, stop and tune are refused: they would overwrite the
-// status or cancel the analysis.
+// resume, cancel, stop and tune do not touch the crawl loop: they would
+// overwrite the status. Cancel and stop reach the post-crawl run instead
+// (cancel_analysis_test.go); with none registered they are refused.
 func TestLifecycleRefusedDuringPostCrawlAnalysis(t *testing.T) {
 	s := newTestStore(t)
 	m := newTestManager(t, s)

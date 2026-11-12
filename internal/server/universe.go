@@ -929,7 +929,12 @@ func registerUniverseRoutes(mux *http.ServeMux, store *UiStore, manager *CrawlMa
 						ranked = append(ranked, k)
 					}
 				}
-				sort.Slice(ranked, func(a, b int) bool { return vals[ranked[a]] < vals[ranked[b]] })
+				sort.Slice(ranked, func(a, b int) bool {
+					if vals[ranked[a]] != vals[ranked[b]] {
+						return vals[ranked[a]] < vals[ranked[b]]
+					}
+					return ranked[a] < ranked[b]
+				})
 				for r, k := range ranked {
 					out[universeHeaderBytes+k] = byte(1 + math.Round(254*float64(r)/math.Max(1, float64(len(ranked)-1))))
 				}
@@ -1348,7 +1353,12 @@ func universeLinkPositions(results *CrawlResults, l *universeLayout, pageCluster
 		if m == 0 {
 			return
 		}
-		sort.Slice(ch, func(a, b int) bool { return size[ch[a]] > size[ch[b]] })
+		sort.Slice(ch, func(a, b int) bool {
+			if size[ch[a]] != size[ch[b]] {
+				return size[ch[a]] > size[ch[b]]
+			}
+			return ch[a] < ch[b]
+		})
 		total := float64(size[u] - 1)
 		au := cone[u]
 		A := [3]float64{axis[u*3], axis[u*3+1], axis[u*3+2]}

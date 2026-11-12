@@ -159,22 +159,26 @@ func RunCoreAnalysisWithGraph(ctx context.Context, pages []*types.PageData, cfg 
 
 // RunDeferredAnalysis runs link intelligence and embeddings on already-analyzed pages.
 // Call after RunCoreAnalysis. Returns the AdjacencyGraph and updates stats in place.
+// A cancelled ctx stops link intelligence between phases (the phases done so
+// far stay in stats) and skips what has not started.
 func RunDeferredAnalysis(ctx context.Context, pages []*types.PageData, cfg PostProcessConfig, stats *types.CrawlStats) *AdjacencyGraph {
 	// Link Intelligence (optional)
 	var graph *AdjacencyGraph
-	if cfg.LinkIntelligence {
+	if cfg.LinkIntelligence && ctx.Err() == nil {
 		var liStats *types.LinkIntelligenceStats
-		liStats, graph = runLinkIntelligence(pages, cfg, stats)
+		liStats, graph = runLinkIntelligence(ctx, pages, cfg, stats)
 		stats.LinkIntelligenceStats = liStats
 
 		// Anchor enrichment: compute anchor-title relevance now that the graph is available.
 		// This adds the anchor sub-signal to the topicality score computed at extraction.
 		// Source: Patent US7260573. Heuristic; validate with GSC data.
-		EnrichTopicalityAnchors(pages, graph, cfg.AnchorAggregator)
+		if ctx.Err() == nil {
+			EnrichTopicalityAnchors(pages, graph, cfg.AnchorAggregator)
+		}
 	}
 
 	// Embeddings (optional)
-	if cfg.Embeddings && cfg.EmbeddingKey != "" {
+	if cfg.Embeddings && cfg.EmbeddingKey != "" && ctx.Err() == nil {
 		provider := EmbeddingOpenAI
 		if strings.ToLower(cfg.EmbeddingProvider) == "ollama" {
 			provider = EmbeddingOllama
@@ -213,7 +217,7 @@ func RunPostCrawlAnalysis(ctx context.Context, pages []*types.PageData, cfg Post
 	return stats, graph
 }
 
-func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *types.CrawlStats) (*types.LinkIntelligenceStats, *AdjacencyGraph) {
+func runLinkIntelligence(ctx context.Context, pages []*types.PageData, cfg PostProcessConfig, stats *types.CrawlStats) (*types.LinkIntelligenceStats, *AdjacencyGraph) {
 	const topN = 20 // top-N limit for authorities, hubs, bridges
 	emitPhase := func(phase string) {
 		if cfg.OnLIPhase != nil {
@@ -225,11 +229,6 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 			cfg.OnPersist()
 		}
 	}
-	type urlScore struct {
-		url   string
-		score float64
-	}
-
 	// --- Phase: building_graph ---
 	emitPhase("building_graph")
 	graph := cfg.Graph
@@ -438,6 +437,9 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 	fillLinkStructureStats(liStats, pages, graph, inDegree)
 
 	persist()
+	if ctx.Err() != nil {
+		return liStats, graph // cancelled: keep the phases done so far
+	}
 
 	// --- Phase: hits ---
 	emitPhase("hits")
@@ -479,8 +481,8 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 		authorities = append(authorities, urlScore{u, scores.AuthorityScore})
 		hubs = append(hubs, urlScore{u, scores.HubScore})
 	}
-	sort.Slice(authorities, func(i, j int) bool { return authorities[i].score > authorities[j].score })
-	sort.Slice(hubs, func(i, j int) bool { return hubs[i].score > hubs[j].score })
+	sortURLScores(authorities)
+	sortURLScores(hubs)
 	if len(authorities) > topN {
 		authorities = authorities[:topN]
 	}
@@ -496,6 +498,9 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 	hitsScores = nil
 
 	persist()
+	if ctx.Err() != nil {
+		return liStats, graph
+	}
 
 	// --- Phase: centrality ---
 	emitPhase("centrality")
@@ -514,7 +519,9 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 		fmt.Fprintf(os.Stderr, "\n  [link-intel] Skipping centrality: %s\n", liStats.CentralitySkipReason)
 	} else {
 		betweenness = ComputeBetweennessCentrality(5000, graph)
-		closeness = ComputeClosenessCentrality(5000, graph)
+		if ctx.Err() == nil {
+			closeness = ComputeClosenessCentrality(5000, graph)
+		}
 	}
 
 	// Per-page: centrality scores
@@ -537,7 +544,7 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 		for u, b := range betweenness {
 			bridges = append(bridges, urlScore{u, b})
 		}
-		sort.Slice(bridges, func(i, j int) bool { return bridges[i].score > bridges[j].score })
+		sortURLScores(bridges)
 		if len(bridges) > topN {
 			bridges = bridges[:topN]
 		}
@@ -549,6 +556,9 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 	closeness = nil
 
 	persist()
+	if ctx.Err() != nil {
+		return liStats, graph
+	}
 
 	// --- Phase: suggestions ---
 	emitPhase("suggestions")
@@ -617,4 +627,22 @@ func convertNgrams(entries []NgramEntry) []types.NgramEntry {
 		}
 	}
 	return result
+}
+
+// urlScore pairs a URL with a link-intelligence score.
+type urlScore struct {
+	url   string
+	score float64
+}
+
+// sortURLScores orders by score (highest first), then URL, so a top-N cut
+// through tied scores keeps the same URLs on every run (the input comes from
+// map iteration).
+func sortURLScores(s []urlScore) {
+	sort.Slice(s, func(i, j int) bool {
+		if s[i].score != s[j].score {
+			return s[i].score > s[j].score
+		}
+		return s[i].url < s[j].url
+	})
 }

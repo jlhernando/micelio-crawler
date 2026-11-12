@@ -355,12 +355,15 @@ func sampleSourceNodes(n, maxNodes int) []int {
 
 	sourceNodes := make([]int, sampleSize)
 	if useSampling {
+		// Fixed seed: the same graph samples the same source nodes, so
+		// betweenness/closeness (and topBridges) repeat run to run.
+		rng := rand.New(rand.NewSource(int64(n)))
 		indices := make([]int, n)
 		for i := range indices {
 			indices[i] = i
 		}
 		for i := n - 1; i > 0 && i >= n-sampleSize; i-- {
-			j := rand.Intn(i + 1)
+			j := rng.Intn(i + 1)
 			indices[i], indices[j] = indices[j], indices[i]
 		}
 		copy(sourceNodes, indices[n-sampleSize:])

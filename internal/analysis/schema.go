@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/micelio/micelio/internal/types"
@@ -711,13 +712,13 @@ func BuildSchemaValidationStats(pages []*types.PageData) *types.SchemaValidation
 	for msg, count := range issueCounts {
 		sorted = append(sorted, kv{msg, count})
 	}
-	for i := 0; i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].count > sorted[i].count {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
+	// issueCounts is a map: break count ties by message.
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].count != sorted[j].count {
+			return sorted[i].count > sorted[j].count
 		}
-	}
+		return sorted[i].msg < sorted[j].msg
+	})
 	if len(sorted) > 20 {
 		sorted = sorted[:20]
 	}

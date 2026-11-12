@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -300,22 +301,24 @@ func compareEmbeddings(urls []string, vectors map[string][]float32, threshold fl
 		close(results)
 	}()
 
-	var kept []simEdge
+	// Workers finish rows in any order, so neither the kept set nor the top
+	// list may depend on arrival: kept holds the maxEdges lowest (i, j)
+	// pairs (what a single worker walking the rows in order would keep) and
+	// top the most similar pairs under a total order.
+	kept := &edgeMaxHeap{}
 	top := make([]simEdge, 0, maxSimilarPairs+1)
 	for res := range results {
 		for _, e := range res.edges {
 			out.pairsTotal++
-			if len(kept) < lim.maxEdges {
-				kept = append(kept, e)
-			}
+			kept.keepLowest(e, lim.maxEdges)
 			top = pushTopEdge(top, e)
 		}
 	}
-	sort.Slice(top, func(a, b int) bool { return top[a].sim > top[b].sim })
+	sort.Slice(top, func(a, b int) bool { return moreSimilar(top[a], top[b]) })
 	for _, e := range top {
 		out.pairs = append(out.pairs, types.SimilarPair{URL1: urls[e.i], URL2: urls[e.j], Similarity: e.sim})
 	}
-	out.groups = groupsFromEdges(urls, kept)
+	out.groups = groupsFromEdges(urls, *kept)
 	if len(out.groups) > maxCanniGroups {
 		out.groups = out.groups[:maxCanniGroups]
 	}
@@ -328,21 +331,66 @@ type simEdge struct {
 	sim  float64
 }
 
+// lessEdgeIndex orders edges by (i, j).
+func lessEdgeIndex(a, b simEdge) bool {
+	if a.i != b.i {
+		return a.i < b.i
+	}
+	return a.j < b.j
+}
+
+// moreSimilar is a total order: higher similarity first, then lower (i, j).
+func moreSimilar(a, b simEdge) bool {
+	if a.sim != b.sim {
+		return a.sim > b.sim
+	}
+	return lessEdgeIndex(a, b)
+}
+
 // pushTopEdge keeps the maxSimilarPairs most similar edges (unordered).
+// Ties are broken by (i, j), so the kept set does not depend on the order
+// in which edges arrive.
 func pushTopEdge(top []simEdge, e simEdge) []simEdge {
 	if len(top) < maxSimilarPairs {
 		return append(top, e)
 	}
-	minIdx := 0
+	worst := 0
 	for k := 1; k < len(top); k++ {
-		if top[k].sim < top[minIdx].sim {
-			minIdx = k
+		if moreSimilar(top[worst], top[k]) {
+			worst = k
 		}
 	}
-	if e.sim > top[minIdx].sim {
-		top[minIdx] = e
+	if moreSimilar(e, top[worst]) {
+		top[worst] = e
 	}
 	return top
+}
+
+// edgeMaxHeap is a max-heap by (i, j): the root is the highest pair kept.
+type edgeMaxHeap []simEdge
+
+func (h edgeMaxHeap) Len() int           { return len(h) }
+func (h edgeMaxHeap) Less(a, b int) bool { return lessEdgeIndex(h[b], h[a]) }
+func (h edgeMaxHeap) Swap(a, b int)      { h[a], h[b] = h[b], h[a] }
+func (h *edgeMaxHeap) Push(x any)        { *h = append(*h, x.(simEdge)) }
+func (h *edgeMaxHeap) Pop() any {
+	old := *h
+	e := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return e
+}
+
+// keepLowest adds e while fewer than max edges are held, else swaps it for
+// the highest held pair when e is lower.
+func (h *edgeMaxHeap) keepLowest(e simEdge, max int) {
+	if h.Len() < max {
+		heap.Push(h, e)
+		return
+	}
+	if max > 0 && lessEdgeIndex(e, (*h)[0]) {
+		(*h)[0] = e
+		heap.Fix(h, 0)
+	}
 }
 
 // normalize32 returns v scaled to unit length as float32 (zero stays zero).
@@ -485,8 +533,12 @@ func buildCannibalizationGroups(urls []string, simMap map[indexPair]float64) []t
 		})
 	}
 
+	// groupMap is a map: order equal-sized groups by their first URL.
 	sort.Slice(groups, func(i, j int) bool {
-		return len(groups[i].URLs) > len(groups[j].URLs)
+		if len(groups[i].URLs) != len(groups[j].URLs) {
+			return len(groups[i].URLs) > len(groups[j].URLs)
+		}
+		return groups[i].URLs[0] < groups[j].URLs[0]
 	})
 	return groups
 }

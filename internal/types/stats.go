@@ -204,8 +204,12 @@ type CrawlStats struct {
 	ExternalLinksUnchecked   int                    `json:"externalLinksUnchecked,omitempty"` // unique external URLs skipped (cap or cancellation)
 	// External URLs left unchecked because their site kept answering 429
 	// Too Many Requests (part of ExternalLinksUnchecked), and those sites.
-	ExternalLinksRateLimited  int                `json:"externalLinksRateLimited,omitempty"`
-	ExternalRateLimitedHosts  []string           `json:"externalRateLimitedHosts,omitempty"`
+	ExternalLinksRateLimited int      `json:"externalLinksRateLimited,omitempty"`
+	ExternalRateLimitedHosts []string `json:"externalRateLimitedHosts,omitempty"`
+	// AnalysisInterrupted says which post-crawl work a user cancel or Stop
+	// & Analyze cut short (empty = everything ran), e.g. "external link
+	// check cancelled by user after 120 of 2,400 URLs".
+	AnalysisInterrupted       string             `json:"analysisInterrupted,omitempty"`
 	PagesWithStructuredData   int                `json:"pagesWithStructuredData"`
 	TotalInternalLinks        int                `json:"totalInternalLinks"`
 	TotalImages               int                `json:"totalImages"`

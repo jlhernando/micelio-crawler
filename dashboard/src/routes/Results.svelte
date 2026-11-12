@@ -273,6 +273,11 @@
         <span class="text-xs text-fg-2">Broken external links appear in Issues when done.</span>
       </div>
     {/if}
+    {#if typeof stats.analysisInterrupted === 'string' && stats.analysisInterrupted}
+      <p class="rounded-md border border-yellow-500/30 bg-yellow-500/5 px-4 py-2 text-xs text-fg-1" role="status" data-testid="analysis-interrupted">
+        Analysis cut short: {stats.analysisInterrupted}. Results show what finished.
+      </p>
+    {/if}
 
     <div class="section-tabs">
       {#each [

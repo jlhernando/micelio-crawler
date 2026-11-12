@@ -1,6 +1,8 @@
 package analysis
 
 import (
+	"context"
+	"slices"
 	"testing"
 
 	"github.com/micelio/micelio/internal/types"
@@ -82,6 +84,35 @@ func TestFillLinkStructureStats_UnknownZonesAreConservative(t *testing.T) {
 	}
 	if li.LinkPositionDistribution["navigation"] != 1 {
 		t.Errorf("distribution = %v", li.LinkPositionDistribution)
+	}
+}
+
+// A cancelled context (user cancel during post-crawl work) skips link
+// intelligence, or stops it between phases keeping the ones done.
+func TestRunDeferredAnalysis_StopsWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	stats := &types.CrawlStats{}
+	if g := RunDeferredAnalysis(ctx, linkStructurePages(), PostProcessConfig{LinkIntelligence: true, SeedURL: "https://ex.com/"}, stats); g != nil || stats.LinkIntelligenceStats != nil {
+		t.Fatalf("link intelligence ran on a cancelled context: %+v", stats.LinkIntelligenceStats)
+	}
+
+	ctx, cancel = context.WithCancel(t.Context())
+	defer cancel()
+	var phases []string
+	cfg := PostProcessConfig{LinkIntelligence: true, SeedURL: "https://ex.com/", OnLIPhase: func(p string) {
+		phases = append(phases, p)
+		if p == "click_depth" {
+			cancel()
+		}
+	}}
+	stats = &types.CrawlStats{}
+	RunDeferredAnalysis(ctx, linkStructurePages(), cfg, stats)
+	if stats.LinkIntelligenceStats == nil || len(stats.LinkIntelligenceStats.ClickDepthDistribution) == 0 {
+		t.Fatal("click depth phase lost")
+	}
+	if slices.Contains(phases, "hits") || slices.Contains(phases, "suggestions") {
+		t.Errorf("phases after cancel ran: %v", phases)
 	}
 }
 

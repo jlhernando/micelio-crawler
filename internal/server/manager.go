@@ -491,11 +491,16 @@ func (m *CrawlManager) RestartCrawl(oldJobID string, configOverride map[string]i
 	return oldJobID, nil
 }
 
-// CancelCrawl cancels the active crawl.
+// CancelCrawl cancels the active crawl. Once its pages are fetched it
+// cancels the post-crawl work instead (cancelPostCrawlLocked).
 func (m *CrawlManager) CancelCrawl(crawlID string) error {
 	m.mu.Lock()
 	if err := m.liveCrawlLocked(crawlID); err != nil {
+		ok := m.cancelPostCrawlLocked(crawlID)
 		m.mu.Unlock()
+		if ok {
+			return nil
+		}
 		return err
 	}
 	active := m.active
@@ -524,11 +529,26 @@ func (m *CrawlManager) CancelCrawl(crawlID string) error {
 
 // StopCrawl gracefully stops the active crawl and runs post-crawl analysis
 // on whatever pages have been crawled so far.
+//
+// Once the pages are fetched, Stop & Analyze stops the network work left
+// (page weight, external link check) and lets the analysis finish with what
+// it has.
 func (m *CrawlManager) StopCrawl(crawlID string) error {
 	m.mu.Lock()
 	if err := m.liveCrawlLocked(crawlID); err != nil {
+		run := m.deferred[crawlID]
+		if run == nil || run.ctx.Err() != nil {
+			m.mu.Unlock()
+			return err
+		}
+		first := run.net.Err() == nil
+		run.stopNet(errAnalysisStopped)
 		m.mu.Unlock()
-		return err
+		if first {
+			m.store.AddCrawlEvent(crawlID, "stopping", "network checks stopped; analysing what was fetched")
+			m.emit(ProgressEvent{CrawlID: crawlID, Type: "stopping", Data: map[string]interface{}{"crawlId": crawlID, "postCrawl": true}})
+		}
+		return nil
 	}
 	m.active.Stopping = true
 	m.active.stopAt = time.Now()
@@ -923,10 +943,24 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		// Time for in-flight requests to finish and pages to load back.
 		timer.parts = append(timer.parts, fmt.Sprintf("stop→crawl end %s", time.Since(m.active.stopAt).Round(time.Millisecond)))
 	}
+	// The post-crawl work (page weight, analysis, background checks) gets
+	// its own context now, in the same lock as finished: from here cancel
+	// and stop reach it instead of the crawl loop.
+	var run *deferredRun
+	runDone := func() {}
 	if m.active != nil && m.active.ID == crawlID {
 		m.active.finished = true // a later pause must not mark it "paused"
+		if ctx.Err() == nil || stopping {
+			run, runDone = m.startPostCrawlLocked(crawlID)
+		}
 	}
 	m.mu.Unlock()
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			runDone()
+		}
+	}()
 
 	if ctx.Err() == context.Canceled && !stopping {
 		log.Printf("crawl %s cancelled by user", crawlID)
@@ -970,6 +1004,9 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 	}
 
 	// Cache results for successful crawls and graceful stops
+	if success && run == nil {
+		run, runDone = m.startPostCrawl(crawlID)
+	}
 	if success {
 		// Run core analysis (fast: reporter + n-grams + field stripping)
 		postCfg := analysis.PostProcessConfigFromCrawl(crawlConfig)
@@ -984,9 +1021,14 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		postCfg.SitemapHreflang = result.SitemapHreflang
 		postCfg.AgentReadiness = result.AgentReadiness
 		intLinksClose := result.InternalLinksClose
-		// Compute page weight before releasing CrawlResult
+		// Compute page weight before releasing CrawlResult. Its requests
+		// use the post-crawl network context: cancel and stop abort them.
+		var interrupted string
 		if crawlConfig.PageWeight && len(result.ResourceRefs) > 0 {
-			analysis.ComputePageWeight(ctx, pages, result.ResourceRefs, result.TransferSizes, crawlConfig.Concurrency, result.ResourceSizer)
+			analysis.ComputePageWeight(run.net, pages, result.ResourceRefs, result.TransferSizes, crawlConfig.Concurrency, result.ResourceSizer)
+			if errors.Is(context.Cause(run.net), errAnalysisStopped) {
+				interrupted = "page weight stopped by user (resource sizes partial)"
+			}
 		} else if len(result.ResourceRefs) > 0 {
 			// Even without full page weight mode, populate from available data
 			analysis.AssignPageWeightFromRefs(pages, result.ResourceRefs, result.TransferSizes)
@@ -1002,16 +1044,14 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		// Release CrawlResult (external links, resource refs, transfer sizes)
 		// before post-crawl analysis to reduce peak RSS overlap.
 		result = nil
-		// When stopping, the original context is cancelled — use a fresh one for analysis.
-		analysisCtx := ctx
-		if stopping {
-			analysisCtx = m.ctx
-		}
+		// The crawl context is cancelled by Stop & Analyze; the post-crawl
+		// context is cancelled only by cancel, delete or restart.
+		handedOff = true
 		m.analyzeAndCache(analysisRun{
-			ctx: analysisCtx, crawlID: crawlID, job: job, config: crawlConfig,
+			ctx: run.ctx, crawlID: crawlID, job: job, config: crawlConfig,
 			pages: pages, postCfg: postCfg, crawlStore: crawlStore, externalLinks: externalLinks,
 			closeLinks: intLinksClose, elapsed: elapsed, beforeComplete: clearActive,
-			timer: timer,
+			timer: timer, run: run, runDone: runDone, interrupted: interrupted,
 		})
 		return
 	}
@@ -1041,17 +1081,41 @@ type analysisRun struct {
 	beforeComplete func()      // runs before the "complete" event; may be nil
 	skipNotify     bool        // imports evaluate alerts but send no webhooks
 	timer          *phaseTimer // may be nil
+	// run is the post-crawl run cancel and stop reach; runDone ends it.
+	// nil: analyzeAndCache starts one.
+	run         *deferredRun
+	runDone     func()
+	interrupted string // work already cut short by the user (stats note)
 }
 
 // analyzeAndCache runs core analysis, persists stats, caches the results and
 // starts deferred analysis (link intelligence, embeddings) when configured.
+//
+// Cancel (CancelCrawl) before the results are cached ends the run with the
+// job "cancelled" and nothing cached; after, the background work stops and
+// keeps what it has done (runDeferredAnalysis).
 func (m *CrawlManager) analyzeAndCache(r analysisRun) {
+	run, runDone := r.run, r.runDone
+	if run == nil {
+		run, runDone = m.startPostCrawl(r.crawlID)
+	}
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			runDone()
+		}
+	}()
+	// r.ctx (an import's request) or the run: either one cancels the analysis.
+	analysisCtx, stopMerge := context.WithCancelCause(r.ctx)
+	defer stopMerge(nil)
+	defer context.AfterFunc(run.ctx, func() { stopMerge(context.Cause(run.ctx)) })()
+
 	restoreGC := gctune.Hold(50, 0)
 	defer restoreGC()
-	if evicted, _ := m.prepareResultLoad(r.ctx, r.crawlID, len(r.pages), nil); evicted {
+	if evicted, _ := m.prepareResultLoad(analysisCtx, r.crawlID, len(r.pages), nil); evicted {
 		debug.FreeOSMemory()
 	}
-	analysisCtx, crawlID, job, crawlConfig := r.ctx, r.crawlID, r.job, r.config
+	crawlID, job, crawlConfig := r.crawlID, r.job, r.config
 	pages, postCfg, crawlStore := r.pages, r.postCfg, r.crawlStore
 	intLinksClose, elapsed, pageCount := r.closeLinks, r.elapsed, len(r.pages)
 	clearActive := r.beforeComplete
@@ -1062,8 +1126,29 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 	if timer == nil {
 		timer = newPhaseTimer(crawlID)
 	}
+	// cancelled ends a run cancelled (user, delete, restart) before its
+	// results were cached. At shutdown the analysis goes on as before, so
+	// a "completed" job does not lose its stats.
+	cancelled := func() bool {
+		if run.ctx.Err() == nil || m.ctx.Err() != nil {
+			return false
+		}
+		if intLinksClose != nil {
+			intLinksClose()
+		}
+		m.endCancelledAnalysis(crawlID, run, pageCount)
+		clearActive()
+		return true
+	}
+	if cancelled() {
+		return
+	}
 	crawlStats, coreGraph := analysis.RunCoreAnalysisWithGraph(analysisCtx, pages, postCfg)
+	crawlStats.AnalysisInterrupted = r.interrupted
 	timer.mark("report")
+	if cancelled() {
+		return // no alerts, emails or stats for a cancelled analysis
+	}
 	// Link intelligence reuses the reporter's graph instead of re-reading
 	// every edge from disk.
 	postCfg.Graph = coreGraph
@@ -1118,7 +1203,8 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 	if len(r.externalLinks) > 0 {
 		links := r.externalLinks
 		checkExternal = func(ctx context.Context) *crawler.ExternalCheckSummary {
-			return m.checkExternalLinks(ctx, crawlID, crawlConfig, links)
+			// Network work: Stop & Analyze ends it too (netContext).
+			return m.checkExternalLinks(netContext(ctx), crawlID, crawlConfig, links)
 		}
 	}
 
@@ -1173,9 +1259,15 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 		m.testBeforeCache(crawlID)
 	}
 	m.mu.Lock()
+	if run.ctx.Err() != nil && m.ctx.Err() == nil {
+		m.mu.Unlock()
+		cancelled()
+		return
+	}
 	// Replaces (and cancels the background load of) any older entry.
 	m.cacheResultLocked(crawlID, newResult, pageCount)
 	delete(m.analyzing, crawlID)
+	run.shown = true // from now a cancel keeps the results (same lock as CancelCrawl)
 	m.mu.Unlock()
 
 	// Clear active before emitting complete so listeners see no active crawl.
@@ -1200,7 +1292,8 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 		// crawl context is not used, Stop & Analyze has already cancelled it.
 		// A soft hold keeps the crawl DB until it ends, without making
 		// DeleteCrawl wait (see DeleteCrawl).
-		deferCtx, deferDone := m.startDeferred(crawlID)
+		deferCtx, deferDone := run.ctx, runDone
+		handedOff = true
 		release := m.retainSoft(crawlID)
 		m.background.Add(1)
 		go func() {
@@ -1232,28 +1325,71 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 
 }
 
-// deferredRun is the background analysis of one crawl run.
-type deferredRun struct{ cancel context.CancelFunc }
+// deferredRun is the post-crawl work of one crawl run, from the end of the
+// crawl loop to the end of its background analysis: page weight, core
+// analysis, external link check, link intelligence, embeddings. Cancel,
+// Stop & Analyze, delete and restart reach it through m.deferred.
+type deferredRun struct {
+	// ctx ends all of it. Cause errAnalysisCancelled: the user cancelled,
+	// the work done so far is kept. Other causes (delete, restart, end):
+	// nothing more is published.
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+	// net is ctx for the network work (page weight, external link check);
+	// Stop & Analyze ends only it, with errAnalysisStopped.
+	net     context.Context
+	stopNet context.CancelCauseFunc
+	// shown is set when the results are cached. A cancel before that ends
+	// the job "cancelled"; after, the job stays "completed". Guarded by m.mu.
+	shown bool
+}
 
-// startDeferred returns the context of a crawl's background analysis and a
-// func to call when it ends. A previous run of the same crawl is cancelled.
+var (
+	errAnalysisCancelled = errors.New("cancelled by user")
+	errAnalysisStopped   = errors.New("stopped by user")
+)
+
+type deferredRunKey struct{}
+
+// netContext returns the network context of the run ctx belongs to, or ctx.
+func netContext(ctx context.Context) context.Context {
+	if run, ok := ctx.Value(deferredRunKey{}).(*deferredRun); ok {
+		return run.net
+	}
+	return ctx
+}
+
+// startDeferred returns the context of a crawl's post-crawl work and a func
+// to call when it ends. A previous run of the same crawl is cancelled.
 func (m *CrawlManager) startDeferred(crawlID string) (context.Context, func()) {
-	ctx, cancel := context.WithCancel(m.ctx)
-	run := &deferredRun{cancel: cancel}
+	run, done := m.startPostCrawl(crawlID)
+	return run.ctx, done
+}
+
+func (m *CrawlManager) startPostCrawl(crawlID string) (*deferredRun, func()) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.startPostCrawlLocked(crawlID)
+}
+
+// startPostCrawlLocked registers the post-crawl run of a crawl. Caller holds m.mu.
+func (m *CrawlManager) startPostCrawlLocked(crawlID string) (*deferredRun, func()) {
+	run := &deferredRun{}
+	base, cancel := context.WithCancelCause(m.ctx)
+	run.ctx, run.cancel = context.WithValue(base, deferredRunKey{}, run), cancel
+	run.net, run.stopNet = context.WithCancelCause(run.ctx)
 	m.cancelDeferredLocked(crawlID)
 	if m.deferred == nil {
 		m.deferred = make(map[string]*deferredRun)
 	}
 	m.deferred[crawlID] = run
-	m.mu.Unlock()
-	return ctx, func() {
+	return run, func() {
 		m.mu.Lock()
 		if m.deferred[crawlID] == run {
 			delete(m.deferred, crawlID)
 		}
 		m.mu.Unlock()
-		cancel()
+		cancel(nil)
 	}
 }
 
@@ -1261,9 +1397,46 @@ func (m *CrawlManager) startDeferred(crawlID string) (context.Context, func()) {
 // deleted or started again. Caller holds m.mu.
 func (m *CrawlManager) cancelDeferredLocked(crawlID string) {
 	if run := m.deferred[crawlID]; run != nil {
-		run.cancel()
+		run.cancel(nil)
 		delete(m.deferred, crawlID)
 	}
+}
+
+// cancelPostCrawlLocked cancels the post-crawl work of a crawl whose pages
+// are fetched; false if none is running. Its owner records the outcome:
+// endCancelledAnalysis before the results are cached, runDeferredAnalysis
+// after. Caller holds m.mu.
+func (m *CrawlManager) cancelPostCrawlLocked(crawlID string) bool {
+	run := m.deferred[crawlID]
+	if run == nil {
+		return false
+	}
+	if run.ctx.Err() != nil {
+		// Already cancelled by the user: same answer. Ended by delete or
+		// restart: nothing of this run is left to cancel.
+		return errors.Is(context.Cause(run.ctx), errAnalysisCancelled)
+	}
+	run.cancel(errAnalysisCancelled)
+	return true
+}
+
+// endCancelledAnalysis records a post-crawl analysis cancelled before its
+// results were cached: the job ends "cancelled" (its pages stay in the
+// crawl DB; Resume runs it again). A run ended by delete or restart leaves
+// the job to them.
+func (m *CrawlManager) endCancelledAnalysis(crawlID string, run *deferredRun, pageCount int) {
+	m.mu.Lock()
+	delete(m.analyzing, crawlID)
+	m.mu.Unlock()
+	if !errors.Is(context.Cause(run.ctx), errAnalysisCancelled) {
+		return
+	}
+	log.Printf("crawl %s: analysis cancelled by user before results were ready", crawlID)
+	if err := m.store.UpdateCrawlJob(crawlID, map[string]interface{}{"status": "cancelled"}); err != nil {
+		log.Printf("store: update crawl %s status: %v", crawlID, err)
+	}
+	m.store.AddCrawlEvent(crawlID, "cancelled", fmt.Sprintf("%d pages fetched; analysis cancelled before results were ready", pageCount))
+	m.emit(ProgressEvent{CrawlID: crawlID, Type: "cancelled", Data: map[string]interface{}{"crawlId": crawlID}})
 }
 
 // deferredWork returns the pages deferred analysis works on, without
@@ -1311,7 +1484,10 @@ func releaseLinkData(pages []*types.PageData) {
 // Receives crawlStats directly from RunCoreAnalysis to avoid JSON round-trip.
 // own is the cached result holding the pages; they change only under its
 // write lock. ctx is cancelled when the crawl is deleted or restarted: the
-// run then stops without publishing anything.
+// run then stops without publishing anything. Cancelled by the user
+// (errAnalysisCancelled) it stops too, but publishes what it has done with a
+// note (stats.analysisInterrupted, a "cancelled" crawl event); Stop & Analyze
+// ends only the external check (netContext) and the analysis goes on.
 func (m *CrawlManager) runDeferredAnalysis(ctx context.Context, crawlID string, own *CrawlResults, cfg analysis.PostProcessConfig, crawlStats types.CrawlStats, dbPath string, checkExternal func(context.Context) *crawler.ExternalCheckSummary) {
 	pages := own.Pages
 	// finish strips the cached pages and clears the pending flag.
@@ -1337,13 +1513,19 @@ func (m *CrawlManager) runDeferredAnalysis(ctx context.Context, crawlID string, 
 			})
 		}
 	}()
+	userCancelled := func() bool { return errors.Is(context.Cause(ctx), errAnalysisCancelled) }
 	stale := func() bool {
-		if ctx.Err() == nil {
+		if ctx.Err() == nil || userCancelled() {
 			return false
 		}
 		log.Printf("deferred analysis for crawl %s cancelled (crawl deleted or restarted)", crawlID)
 		finish()
 		return true
+	}
+	// notes say what the user cut short, for the stats and the crawl events.
+	var notes []string
+	if crawlStats.AnalysisInterrupted != "" {
+		notes = append(notes, crawlStats.AnalysisInterrupted)
 	}
 
 	// External links first: their results are short and users wait for them.
@@ -1360,6 +1542,11 @@ func (m *CrawlManager) runDeferredAnalysis(ctx context.Context, crawlID string, 
 				}
 			}
 			applyExternalCheckSummary(&crawlStats, sum)
+			if net := netContext(ctx); net.Err() != nil && sum.Skipped > 0 {
+				notes = append(notes, fmt.Sprintf("external link check %v after %d of %d URLs (the rest left unchecked)",
+					context.Cause(net), sum.Checked, sum.Total))
+				crawlStats.AnalysisInterrupted = strings.Join(notes, "; ")
+			}
 			m.publishStats(crawlID, crawlStats)
 		}
 		m.mu.RLock()
@@ -1397,21 +1584,29 @@ func (m *CrawlManager) runDeferredAnalysis(ctx context.Context, crawlID string, 
 	}
 
 	// The cached pages drop now what link intelligence would drop, so
-	// memory peaks as before.
-	work := deferredWork(own, &cfg)
+	// memory peaks as before. Cancelled already: nothing more runs.
+	work := pages
+	if ctx.Err() == nil {
+		work = deferredWork(own, &cfg)
+	}
 
 	// Run deferred analysis (link intelligence + embeddings)
 	graph := analysis.RunDeferredAnalysis(ctx, work, cfg, &crawlStats)
 	// Link intelligence adds graph in-degree; refresh segment inlink
 	// averages on the stubs. Without it nothing changed since the core
 	// analysis did the same.
-	if cfg.LinkIntelligence {
+	if cfg.LinkIntelligence && graph != nil {
 		analysis.AssignAuthoritySegmentsShared(work, nil)
 		crawlStats.AutoSegmentStats = analysis.BuildAutoSegmentStats(work)
 	}
 	if stale() {
 		return
 	}
+	if ctx.Err() != nil && (cfg.LinkIntelligence || (cfg.Embeddings && cfg.EmbeddingKey != "")) {
+		notes = append(notes, "link intelligence and embeddings cancelled by user (finished phases kept)")
+	}
+	interrupted := strings.Join(notes, "; ")
+	crawlStats.AnalysisInterrupted = interrupted
 	// Store HITS scores with PageRank (the graph was stored after core analysis).
 	if dbPath != "" && graph != nil {
 		snapshotAnalysis(work, graph, false).save(dbPath)
@@ -1463,9 +1658,17 @@ func (m *CrawlManager) runDeferredAnalysis(ctx context.Context, crawlID string, 
 	// Release deferred analysis memory
 	debug.FreeOSMemory()
 
+	if interrupted != "" {
+		event := "stopped"
+		if userCancelled() {
+			event = "cancelled"
+		}
+		m.store.AddCrawlEvent(crawlID, event, interrupted)
+		log.Printf("crawl %s: background analysis %s: %s", crawlID, event, interrupted)
+	}
 	m.emit(ProgressEvent{
 		CrawlID: crawlID, Type: "analysis_complete",
-		Data: map[string]interface{}{"crawlId": crawlID},
+		Data: map[string]interface{}{"crawlId": crawlID, "interrupted": interrupted},
 	})
 
 	fmt.Fprintf(os.Stderr, "  [deferred] Analysis complete for crawl %s\n", crawlID)

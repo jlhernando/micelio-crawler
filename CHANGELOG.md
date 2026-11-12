@@ -4,7 +4,9 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
-Target version: 1.15.0. Results open sooner, crawls use less CPU and memory, and you can stop the slow work that runs after a crawl.
+## [1.15.0] - 2026-11-12
+
+Results open sooner, crawls use less CPU and memory, and you can stop the slow work that runs after a crawl.
 
 ### Added
 

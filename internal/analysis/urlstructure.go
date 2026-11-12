@@ -133,7 +133,10 @@ func sortedNamedCounts(freq map[string]int, n int) []types.NamedCount {
 		items = append(items, kv{k, v})
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].count > items[j].count
+		if items[i].count != items[j].count {
+			return items[i].count > items[j].count
+		}
+		return items[i].key < items[j].key
 	})
 	if n > 0 && len(items) > n {
 		items = items[:n]
@@ -155,7 +158,10 @@ func sortedExtCounts(freq map[string]int) []types.ExtensionCount {
 		items = append(items, kv{k, v})
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].count > items[j].count
+		if items[i].count != items[j].count {
+			return items[i].count > items[j].count
+		}
+		return items[i].ext < items[j].ext
 	})
 	result := make([]types.ExtensionCount, len(items))
 	for i, item := range items {

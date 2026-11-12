@@ -225,11 +225,6 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 			cfg.OnPersist()
 		}
 	}
-	type urlScore struct {
-		url   string
-		score float64
-	}
-
 	// --- Phase: building_graph ---
 	emitPhase("building_graph")
 	graph := cfg.Graph
@@ -479,8 +474,8 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 		authorities = append(authorities, urlScore{u, scores.AuthorityScore})
 		hubs = append(hubs, urlScore{u, scores.HubScore})
 	}
-	sort.Slice(authorities, func(i, j int) bool { return authorities[i].score > authorities[j].score })
-	sort.Slice(hubs, func(i, j int) bool { return hubs[i].score > hubs[j].score })
+	sortURLScores(authorities)
+	sortURLScores(hubs)
 	if len(authorities) > topN {
 		authorities = authorities[:topN]
 	}
@@ -537,7 +532,7 @@ func runLinkIntelligence(pages []*types.PageData, cfg PostProcessConfig, stats *
 		for u, b := range betweenness {
 			bridges = append(bridges, urlScore{u, b})
 		}
-		sort.Slice(bridges, func(i, j int) bool { return bridges[i].score > bridges[j].score })
+		sortURLScores(bridges)
 		if len(bridges) > topN {
 			bridges = bridges[:topN]
 		}
@@ -617,4 +612,22 @@ func convertNgrams(entries []NgramEntry) []types.NgramEntry {
 		}
 	}
 	return result
+}
+
+// urlScore pairs a URL with a link-intelligence score.
+type urlScore struct {
+	url   string
+	score float64
+}
+
+// sortURLScores orders by score (highest first), then URL, so a top-N cut
+// through tied scores keeps the same URLs on every run (the input comes from
+// map iteration).
+func sortURLScores(s []urlScore) {
+	sort.Slice(s, func(i, j int) bool {
+		if s[i].score != s[j].score {
+			return s[i].score > s[j].score
+		}
+		return s[i].url < s[j].url
+	})
 }

@@ -193,12 +193,22 @@ func computeTemplateFilteredStats(full map[string]interface{}, pages []*types.Pa
 			P99: subsetPercentile(responseTimes, 99),
 		}
 	}
-	sort.Slice(slowPages, func(i, j int) bool { return slowPages[i].ResponseTimeMs > slowPages[j].ResponseTimeMs })
+	sort.Slice(slowPages, func(i, j int) bool {
+		if slowPages[i].ResponseTimeMs != slowPages[j].ResponseTimeMs {
+			return slowPages[i].ResponseTimeMs > slowPages[j].ResponseTimeMs
+		}
+		return slowPages[i].URL < slowPages[j].URL
+	})
 	if len(slowPages) > 50 {
 		slowPages = slowPages[:50]
 	}
 	totalThin := len(thinPages)
-	sort.Slice(thinPages, func(i, j int) bool { return thinPages[i].WordCount < thinPages[j].WordCount })
+	sort.Slice(thinPages, func(i, j int) bool {
+		if thinPages[i].WordCount != thinPages[j].WordCount {
+			return thinPages[i].WordCount < thinPages[j].WordCount
+		}
+		return thinPages[i].URL < thinPages[j].URL
+	})
 	if len(thinPages) > 50 {
 		thinPages = thinPages[:50]
 	}

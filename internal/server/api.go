@@ -2271,6 +2271,15 @@ func buildSubgraphFromDB(dbPath string, rootURL string, depth, maxNodes int) map
 		}
 	}
 
+	// visited and edgePairs are maps: list nodes and edges in a fixed order.
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].Source != edges[j].Source {
+			return edges[i].Source < edges[j].Source
+		}
+		return edges[i].Target < edges[j].Target
+	})
+
 	// Estimate total nodes in graph
 	totalNodes := len(visited)
 	if idx, err := cs.GetPageIndex(); err == nil {
@@ -2556,7 +2565,12 @@ func finalizeDirNode(node *dirNode) {
 				}
 				return false
 			}
-			return node.Children[i].Pages > node.Children[j].Pages
+			if node.Children[i].Pages != node.Children[j].Pages {
+				return node.Children[i].Pages > node.Children[j].Pages
+			}
+			// childMap is a map: equal-sized siblings go by name, so the
+			// same children make the maxTreeChildren/maxTreeNodes cut.
+			return node.Children[i].Name < node.Children[j].Name
 		})
 	}
 	node.childMap = nil // release for GC

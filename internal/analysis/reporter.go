@@ -317,7 +317,11 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 
 	// Slow pages: sort by response time desc, top 50
 	sort.Slice(stats.SlowPages, func(i, j int) bool {
-		return stats.SlowPages[i].ResponseTimeMs > stats.SlowPages[j].ResponseTimeMs
+		a, b := stats.SlowPages[i], stats.SlowPages[j]
+		if a.ResponseTimeMs != b.ResponseTimeMs {
+			return a.ResponseTimeMs > b.ResponseTimeMs
+		}
+		return a.URL < b.URL
 	})
 	if len(stats.SlowPages) > 50 {
 		stats.SlowPages = stats.SlowPages[:50]
@@ -343,7 +347,8 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 		}
 	}
 
-	// Duplicate content groups
+	// Duplicate content groups. contentHashMap is a map, so order the groups
+	// (largest first, then by first URL) or the API cap keeps random ones.
 	for hash, urls := range contentHashMap {
 		if len(urls) > 1 {
 			stats.DuplicateContentGroups = append(stats.DuplicateContentGroups, types.HashDuplicateGroup{
@@ -352,6 +357,16 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 			})
 		}
 	}
+	sort.Slice(stats.DuplicateContentGroups, func(i, j int) bool {
+		a, b := stats.DuplicateContentGroups[i], stats.DuplicateContentGroups[j]
+		if len(a.URLs) != len(b.URLs) {
+			return len(a.URLs) > len(b.URLs)
+		}
+		if a.URLs[0] != b.URLs[0] {
+			return a.URLs[0] < b.URLs[0]
+		}
+		return a.Hash < b.Hash
+	})
 
 	// Near-duplicate groups (SimHash) — computed before originality so we can penalize near-dupes
 	var simHashItems []SimhashItem
@@ -540,7 +555,11 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 
 	// Thin content: sort and cap at 50
 	sort.Slice(stats.ThinContentPages, func(i, j int) bool {
-		return stats.ThinContentPages[i].WordCount < stats.ThinContentPages[j].WordCount
+		a, b := stats.ThinContentPages[i], stats.ThinContentPages[j]
+		if a.WordCount != b.WordCount {
+			return a.WordCount < b.WordCount
+		}
+		return a.URL < b.URL
 	})
 	if len(stats.ThinContentPages) > 50 {
 		stats.ThinContentPages = stats.ThinContentPages[:50]

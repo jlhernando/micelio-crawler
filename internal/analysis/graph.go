@@ -238,6 +238,14 @@ done:
 		}
 	}
 
+	// visited is a map: return nodes and edges in index order.
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Index < nodes[j].Index })
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i][0] != edges[j][0] {
+			return edges[i][0] < edges[j][0]
+		}
+		return edges[i][1] < edges[j][1]
+	})
 	return SubGraphResult{Nodes: nodes, Edges: edges}
 }
 

@@ -198,7 +198,10 @@ func buildEntries(m map[string]*ngramData, totalPages, totalTokens, topN int) []
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Count > entries[j].Count
+		if entries[i].Count != entries[j].Count {
+			return entries[i].Count > entries[j].Count
+		}
+		return entries[i].Term < entries[j].Term
 	})
 
 	if len(entries) > topN {
@@ -223,7 +226,10 @@ func pruneIfNeeded(m map[string]*ngramData) {
 		items = append(items, kv{k, v.count})
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].count > items[j].count
+		if items[i].count != items[j].count {
+			return items[i].count > items[j].count
+		}
+		return items[i].key < items[j].key
 	})
 
 	keepCount := maxEntries

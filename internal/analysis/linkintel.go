@@ -92,7 +92,10 @@ func DetectNearOrphans(
 		if nearOrphans[j].WorstSourceDepth != nil {
 			dj = *nearOrphans[j].WorstSourceDepth
 		}
-		return di > dj
+		if di != dj {
+			return di > dj
+		}
+		return nearOrphans[i].URL < nearOrphans[j].URL
 	})
 
 	return nearOrphans
@@ -106,10 +109,10 @@ func DetectNearOrphans(
 
 // LinkDilutionInfo describes a page with diluted outgoing link equity.
 type LinkDilutionInfo struct {
-	URL            string  `json:"url"`
-	Warning        string  `json:"warning"`
-	OutDegree      int     `json:"outDegree"`
-	EquityPerLink  float64 `json:"equityPerLink"`  // Estimated equity fraction per outlink (0-1)
+	URL           string  `json:"url"`
+	Warning       string  `json:"warning"`
+	OutDegree     int     `json:"outDegree"`
+	EquityPerLink float64 `json:"equityPerLink"` // Estimated equity fraction per outlink (0-1)
 }
 
 // ComputeLinkDilution finds pages with diluted outgoing link equity.
@@ -149,7 +152,10 @@ func ComputeLinkDilution(graph *AdjacencyGraph) []LinkDilutionInfo {
 		})
 	}
 	sort.Slice(warnings, func(i, j int) bool {
-		return warnings[i].OutDegree > warnings[j].OutDegree
+		if warnings[i].OutDegree != warnings[j].OutDegree {
+			return warnings[i].OutDegree > warnings[j].OutDegree
+		}
+		return warnings[i].URL < warnings[j].URL
 	})
 	return warnings
 }
@@ -240,13 +246,21 @@ func generateLinkSuggestions(
 	// Cap candidates for performance
 	if len(sourceCandidates) > 500 {
 		sort.Slice(sourceCandidates, func(i, j int) bool {
-			return pageRankOf(sourceCandidates[i].idx) > pageRankOf(sourceCandidates[j].idx)
+			pi, pj := pageRankOf(sourceCandidates[i].idx), pageRankOf(sourceCandidates[j].idx)
+			if pi != pj {
+				return pi > pj
+			}
+			return sourceCandidates[i].url < sourceCandidates[j].url
 		})
 		sourceCandidates = sourceCandidates[:500]
 	}
 	if len(targetCandidates) > 200 {
 		sort.Slice(targetCandidates, func(i, j int) bool {
-			return inDegree[targetCandidates[i].idx] < inDegree[targetCandidates[j].idx]
+			di, dj := inDegree[targetCandidates[i].idx], inDegree[targetCandidates[j].idx]
+			if di != dj {
+				return di < dj
+			}
+			return targetCandidates[i].url < targetCandidates[j].url
 		})
 		targetCandidates = targetCandidates[:200]
 	}
@@ -335,7 +349,14 @@ func generateLinkSuggestions(
 	}
 
 	sort.Slice(suggestions, func(i, j int) bool {
-		return suggestions[i].Score > suggestions[j].Score
+		a, b := suggestions[i], suggestions[j]
+		if a.Score != b.Score {
+			return a.Score > b.Score
+		}
+		if a.TargetURL != b.TargetURL {
+			return a.TargetURL < b.TargetURL
+		}
+		return a.SourceURL < b.SourceURL
 	})
 
 	if len(suggestions) > opts.MaxSuggestions {
@@ -442,10 +463,16 @@ func AnalyzeSemanticLinkDistance(
 	}
 
 	sort.Slice(weakLinks, func(i, j int) bool {
-		return weakLinks[i].Similarity < weakLinks[j].Similarity
+		if weakLinks[i].Similarity != weakLinks[j].Similarity {
+			return weakLinks[i].Similarity < weakLinks[j].Similarity
+		}
+		return lessLinkPair(weakLinks[i], weakLinks[j])
 	})
 	sort.Slice(strongLinks, func(i, j int) bool {
-		return strongLinks[i].Similarity > strongLinks[j].Similarity
+		if strongLinks[i].Similarity != strongLinks[j].Similarity {
+			return strongLinks[i].Similarity > strongLinks[j].Similarity
+		}
+		return lessLinkPair(strongLinks[i], strongLinks[j])
 	})
 
 	if len(weakLinks) > 50 {
@@ -468,4 +495,12 @@ func AnalyzeSemanticLinkDistance(
 		StrongLinks:      strongLinks,
 		StrongLinksCount: len(strongLinks),
 	}
+}
+
+// lessLinkPair is the tie-break for equally similar link pairs: source, then target.
+func lessLinkPair(a, b SemanticLinkPair) bool {
+	if a.Source != b.Source {
+		return a.Source < b.Source
+	}
+	return a.Target < b.Target
 }

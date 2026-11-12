@@ -1241,7 +1241,12 @@ Multiple files are merged into a single unified analysis.`,
 			for name, bs := range stats.BotHits {
 				bots = append(bots, botEntry{name, bs.Hits})
 			}
-			sort.Slice(bots, func(i, j int) bool { return bots[i].hits > bots[j].hits })
+			sort.Slice(bots, func(i, j int) bool {
+				if bots[i].hits != bots[j].hits {
+					return bots[i].hits > bots[j].hits
+				}
+				return bots[i].name < bots[j].name
+			})
 			fmt.Fprintf(os.Stderr, "\n── Top Bots ──\n")
 			for i, b := range bots {
 				if i >= 10 {

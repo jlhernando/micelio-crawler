@@ -459,8 +459,25 @@ func (s *CrawlStore) GetAllPages() ([]*types.PageData, error) {
 // and progress reporting. The callback receives the count of pages loaded so far,
 // called every 500 pages. Pass a cancellable context to abort early (e.g. on LRU eviction).
 func (s *CrawlStore) GetAllPagesWithProgress(ctx context.Context, onProgress func(loaded int)) ([]*types.PageData, error) {
+	return s.getAllPages(ctx, onProgress, nil, pageLoadOpts{})
+}
+
+// GetPagesForAnalysis loads every page for the dashboard's analysis and
+// result loads. each (optional) sees each page in rowid order right after it
+// is decoded and stripped, before it is kept: a caller that consumes a field
+// and then clears it (import aggregates and drops Anchors) never holds that
+// field for every page at once. Anchors stays nil when skipAnchors (result
+// loads whose stats already hold the Anchor Cloud), and structured data
+// entries keep Type and Format but not Raw (the JSON-LD text, read only by
+// crawl-time schema validation; the stripped pages never reach a writer).
+func (s *CrawlStore) GetPagesForAnalysis(ctx context.Context, onProgress func(loaded int), each func(*types.PageData), skipAnchors bool) ([]*types.PageData, error) {
+	return s.getAllPages(ctx, onProgress, each, pageLoadOpts{skipAnchors: skipAnchors, dropSchemaRaw: true})
+}
+
+func (s *CrawlStore) getAllPages(ctx context.Context, onProgress func(loaded int), each func(*types.PageData), opts pageLoadOpts) ([]*types.PageData, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var rowBuf blobScratch
 	var pages []*types.PageData
 	loaded := 0
 	intern := newPageInterner()
@@ -468,20 +485,11 @@ func (s *CrawlStore) GetAllPagesWithProgress(ctx context.Context, onProgress fun
 		`SELECT data FROM pages ORDER BY rowid`,
 		&sqlitex.ExecOptions{
 			ResultFunc: func(stmt *sqlite.Stmt) error {
-				var jsonData []byte
-				colType := stmt.ColumnType(0)
-				if colType == sqlite.TypeBlob {
-					blob := make([]byte, stmt.ColumnLen(0))
-					stmt.ColumnBytes(0, blob)
-					var err error
-					jsonData, err = decompressBlob(blob)
-					if err != nil {
-						return fmt.Errorf("decompress page data: %w", err)
-					}
-				} else {
-					jsonData = []byte(stmt.ColumnText(0))
+				jsonData, err := rowBuf.pageData(stmt)
+				if err != nil {
+					return err
 				}
-				page, err := decodeAnalysisPage(jsonData)
+				page, err := decodeAnalysisPageOpt(jsonData, opts)
 				if err != nil {
 					return err
 				}
@@ -506,6 +514,9 @@ func (s *CrawlStore) GetAllPagesWithProgress(ctx context.Context, onProgress fun
 				// SchemaValidationStats / RenderCompareStats. RunCoreAnalysis
 				// and stripPagesForCache release them after the report.
 				page.CustomExtractions = nil
+				if each != nil {
+					each(page)
+				}
 				intern.compact(page)
 				pages = append(pages, page)
 				loaded++
@@ -529,28 +540,17 @@ func (s *CrawlStore) GetAllPagesWithProgress(ctx context.Context, onProgress fun
 func (s *CrawlStore) IterateInternalLinks(fn func(source string, targets []string)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var rowBuf blobScratch
 	return sqlitex.Execute(s.conn,
 		`SELECT data FROM pages ORDER BY rowid`,
 		&sqlitex.ExecOptions{
 			ResultFunc: func(stmt *sqlite.Stmt) error {
-				var jsonData []byte
-				colType := stmt.ColumnType(0)
-				if colType == sqlite.TypeBlob {
-					blob := make([]byte, stmt.ColumnLen(0))
-					stmt.ColumnBytes(0, blob)
-					var err error
-					jsonData, err = decompressBlob(blob)
-					if err != nil {
-						return fmt.Errorf("decompress page data: %w", err)
-					}
-				} else {
-					jsonData = []byte(stmt.ColumnText(0))
+				jsonData, err := rowBuf.pageData(stmt)
+				if err != nil {
+					return err
 				}
-				var partial struct {
-					URL           string   `json:"url"`
-					InternalLinks []string `json:"internalLinks"`
-				}
-				if err := json.Unmarshal(jsonData, &partial); err != nil {
+				var partial pageLinks
+				if err := decodePageLinks(jsonData, &partial); err != nil {
 					return err
 				}
 				if len(partial.InternalLinks) > 0 {
@@ -569,23 +569,15 @@ func (s *CrawlStore) IterateInternalLinks(fn func(source string, targets []strin
 func (s *CrawlStore) StreamPages(fn func(page *types.PageData, index int) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var rowBuf blobScratch
 	idx := 0
 	return sqlitex.Execute(s.conn,
 		`SELECT data FROM pages ORDER BY rowid`,
 		&sqlitex.ExecOptions{
 			ResultFunc: func(stmt *sqlite.Stmt) error {
-				var jsonData []byte
-				colType := stmt.ColumnType(0)
-				if colType == sqlite.TypeBlob {
-					blob := make([]byte, stmt.ColumnLen(0))
-					stmt.ColumnBytes(0, blob)
-					var err error
-					jsonData, err = decompressBlob(blob)
-					if err != nil {
-						return fmt.Errorf("decompress page data: %w", err)
-					}
-				} else {
-					jsonData = []byte(stmt.ColumnText(0))
+				jsonData, err := rowBuf.pageData(stmt)
+				if err != nil {
+					return err
 				}
 				var page types.PageData
 				if err := json.Unmarshal(jsonData, &page); err != nil {
@@ -595,7 +587,7 @@ func (s *CrawlStore) StreamPages(fn func(page *types.PageData, index int) error)
 				if page.PageWeight != nil {
 					page.PageWeight.Resources = nil
 				}
-				err := fn(&page, idx)
+				err = fn(&page, idx)
 				idx++
 				return err
 			},
@@ -1098,16 +1090,25 @@ func zstdCompressBlob(data []byte) ([]byte, error) {
 // decompressBlob detects the compression format and decompresses accordingly.
 // Supports zstd (magic: 0x28B52FFD), zlib (magic: 0x78), and uncompressed data.
 func decompressBlob(data []byte) ([]byte, error) {
+	return decompressBlobInto(data, nil)
+}
+
+// decompressBlobInto is decompressBlob writing a zstd frame into dst[:0]
+// (a fresh buffer when dst is nil). Zlib and plain data ignore dst.
+func decompressBlobInto(data, dst []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return data, nil
 	}
 	// Zstd frame magic: 0xFD2FB528 (little-endian) → bytes: 0x28 0xB5 0x2F 0xFD
-	if len(data) >= 4 && data[0] == 0x28 && data[1] == 0xB5 && data[2] == 0x2F && data[3] == 0xFD {
+	if isZstdFrame(data) {
 		initZstdCodecs()
 		if zstdInitErr != nil {
 			return nil, zstdInitErr
 		}
-		return zstdDec.DecodeAll(data, make([]byte, 0, len(data)*4))
+		if dst == nil {
+			dst = make([]byte, 0, len(data)*4)
+		}
+		return zstdDec.DecodeAll(data, dst[:0])
 	}
 	// Zlib magic byte: 0x78
 	if data[0] == 0x78 {
@@ -1115,6 +1116,40 @@ func decompressBlob(data []byte) ([]byte, error) {
 	}
 	// Uncompressed (plain JSON)
 	return data, nil
+}
+
+// blobScratch reuses one raw and one decompressed buffer across the rows of
+// a page scan, so reading 100K pages does not allocate two fresh buffers per
+// row (~6.6 GB per full scan of a 100K-page crawl). The returned bytes are
+// only valid until the next call: callers must decode them (encoding/json
+// copies every string and slice) before reading the next row.
+type blobScratch struct{ raw, out []byte }
+
+// pageData returns the JSON of column 0, decompressed like decompressBlob.
+func (b *blobScratch) pageData(stmt *sqlite.Stmt) ([]byte, error) {
+	if stmt.ColumnType(0) != sqlite.TypeBlob {
+		return []byte(stmt.ColumnText(0)), nil
+	}
+	n := stmt.ColumnLen(0)
+	if cap(b.raw) < n {
+		b.raw = make([]byte, n)
+	}
+	raw := b.raw[:n]
+	stmt.ColumnBytes(0, raw)
+	data, err := decompressBlobInto(raw, b.out)
+	if err != nil {
+		return nil, fmt.Errorf("decompress page data: %w", err)
+	}
+	// Keep only a zstd output: zlib gives a fresh buffer and plain data is
+	// b.raw itself, which must never become the next frame's destination.
+	if isZstdFrame(raw) {
+		b.out = data
+	}
+	return data, nil
+}
+
+func isZstdFrame(data []byte) bool {
+	return len(data) >= 4 && data[0] == 0x28 && data[1] == 0xB5 && data[2] == 0x2F && data[3] == 0xFD
 }
 
 // zlibDecompress decompresses zlib-compressed data (legacy format, capped at 10MB).

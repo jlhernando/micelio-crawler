@@ -51,3 +51,27 @@ func TestPageInternerSharesStrings(t *testing.T) {
 		t.Fatal("values changed")
 	}
 }
+
+// Headings keep their values, order and nil/empty shape; repeated headings
+// share one copy and slices lose spare capacity.
+func TestPageInternerSharesHeadings(t *testing.T) {
+	raw := []byte(`{"headings":{"h1":["Title"],"h2":["Related","Reviews","Related"],"h3":[],"h4":["Footer","About","Contact","Legal","Help"]}}`)
+	want, _ := decodeAnalysisPage(raw)
+	in := newPageInterner()
+	p1, _ := decodeAnalysisPage(raw)
+	p2, _ := decodeAnalysisPage(raw)
+	in.compact(p1)
+	in.compact(p2)
+	if !reflect.DeepEqual(p1, want) || !reflect.DeepEqual(p2, want) {
+		t.Fatalf("compact changed headings: %+v", p1.Headings)
+	}
+	if p1.Headings.H3 == nil || p1.Headings.H5 != nil {
+		t.Fatal("empty must stay empty, nil must stay nil")
+	}
+	if unsafe.StringData(p1.Headings.H2[0]) != unsafe.StringData(p2.Headings.H2[2]) {
+		t.Fatal("repeated heading not shared")
+	}
+	if h := p1.Headings.H4; cap(h) != len(h) {
+		t.Fatalf("h4 cap %d len %d", cap(h), len(h))
+	}
+}

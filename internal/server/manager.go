@@ -1835,7 +1835,7 @@ func (m *CrawlManager) loadResults(crawlID string) *CrawlResults {
 		cs, csErr := storage.NewCrawlStore(job.DBPath)
 		if csErr == nil {
 			var loadErr error
-			pages, loadErr = cs.GetAllPages()
+			pages, loadErr = cs.GetPagesForAnalysis(context.Background(), nil, nil, storedAnchorCloud(statsMap) != nil)
 			cs.Close()
 			if loadErr != nil {
 				log.Printf("lazy load pages for crawl %s: %v", crawlID, loadErr)
@@ -1975,12 +1975,18 @@ func (m *CrawlManager) loadPagesInBackground(ctx context.Context, crawlID string
 	}
 
 	total := result.PageCount
-	pages, loadErr := cs.GetAllPagesWithProgress(ctx, func(loaded int) {
+	onProgress := func(loaded int) {
 		if total > 0 {
 			progress := (loaded * 100) / total
 			result.loadingProgress.Store(int32(progress))
 		}
-	})
+	}
+	result.mu.RLock()
+	skipAnchors := storedAnchorCloud(result.Stats) != nil
+	result.mu.RUnlock()
+	var pages []*types.PageData
+	var loadErr error
+	pages, loadErr = cs.GetPagesForAnalysis(ctx, onProgress, nil, skipAnchors)
 	cs.Close()
 
 	// If context was cancelled (LRU eviction), stop early

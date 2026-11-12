@@ -2369,10 +2369,20 @@ func anchorCloudToMap(c *types.AnchorCloudStats) map[string]interface{} {
 // anchorStatsFor returns persisted Anchor Cloud stats (collected during the
 // crawl, stored in the stats JSON) or rebuilds them from page Anchors.
 func anchorStatsFor(statsMap map[string]interface{}, pages []*types.PageData) map[string]interface{} {
-	if cloud, ok := statsMap["anchorCloud"].(map[string]interface{}); ok && cloud != nil {
+	if cloud := storedAnchorCloud(statsMap); cloud != nil {
 		return cloud
 	}
 	return buildAnchorStats(pages)
+}
+
+// storedAnchorCloud returns the Anchor Cloud persisted in stats, or nil.
+// When it is set a result load needs no page Anchors (anchorStatsFor is
+// their only reader before stripPagesForCache drops them).
+func storedAnchorCloud(statsMap map[string]interface{}) map[string]interface{} {
+	if cloud, ok := statsMap["anchorCloud"].(map[string]interface{}); ok && cloud != nil {
+		return cloud
+	}
+	return nil
 }
 
 // ── Directory Tree ──

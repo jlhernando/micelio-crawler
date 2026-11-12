@@ -189,7 +189,20 @@ func (m *CrawlManager) runImport(ctx context.Context, p *pendingImport) error {
 	if evicted, _ := m.prepareResultLoad(ctx, job.ID, storedCount, nil); evicted {
 		debug.FreeOSMemory()
 	}
-	pages, err := cs.GetAllPagesWithProgress(ctx, nil)
+	// Anchor stats are aggregated during a crawl; stored pages keep anchors
+	// only when it ran with --full-anchors. Each page's anchors are added
+	// as it is read (same rowid order) and dropped, so the anchors of every
+	// page are never in memory at once.
+	var anchors *analysis.AnchorAggregator
+	pages, err := cs.GetPagesForAnalysis(ctx, nil, func(pg *types.PageData) {
+		if len(pg.Anchors) > 0 {
+			if anchors == nil {
+				anchors = analysis.NewAnchorAggregator()
+			}
+			anchors.AddPage(pg.URL, pg.StatusCode, pg.Anchors)
+			pg.Anchors = nil
+		}
+	}, false)
 	if err != nil {
 		cs.Close()
 		return fail(fmt.Errorf("read pages: %w", err))
@@ -229,18 +242,6 @@ func (m *CrawlManager) runImport(ctx context.Context, p *pendingImport) error {
 
 	postCfg := analysis.PostProcessConfigFromCrawl(*p.cfg)
 	postCfg.CrawlDurationMs = durationMs
-	// Anchor stats are aggregated during a crawl; stored pages keep anchors
-	// only when it ran with --full-anchors.
-	var anchors *analysis.AnchorAggregator
-	for _, pg := range pages {
-		if len(pg.Anchors) > 0 {
-			if anchors == nil {
-				anchors = analysis.NewAnchorAggregator()
-			}
-			anchors.AddPage(pg.URL, pg.StatusCode, pg.Anchors)
-			pg.Anchors = nil
-		}
-	}
 	if anchors != nil {
 		postCfg.AnchorAggregator = anchors
 	}

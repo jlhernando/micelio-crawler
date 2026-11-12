@@ -1912,20 +1912,21 @@ func pageMatchesIssue(p *types.PageData, issue string, dupSet map[string]bool) b
 	switch issue {
 	case "5xx":
 		return p.StatusCode >= 500
+	// On-page checks: 2xx HTML pages only, same rule as the reporter counts.
 	case "missing-title":
-		return p.Title == nil || p.Title.Text == ""
+		return p.IsHTMLPage() && (p.Title == nil || p.Title.Text == "")
 	case "missing-description":
-		return p.MetaDescription == nil || p.MetaDescription.Text == ""
+		return p.IsHTMLPage() && (p.MetaDescription == nil || p.MetaDescription.Text == "")
 	case "missing-h1":
-		return len(p.Headings.H1) == 0
+		return p.IsHTMLPage() && len(p.Headings.H1) == 0
 	case "multiple-h1":
-		return len(p.Headings.H1) > 1
+		return p.IsHTMLPage() && len(p.Headings.H1) > 1
 	case "title-too-long":
-		return p.Title != nil && p.Title.Length > 60
+		return p.IsHTMLPage() && p.Title != nil && p.Title.Length > 60
 	case "title-too-short":
-		return p.Title != nil && p.Title.Length > 0 && p.Title.Length < 30
+		return p.IsHTMLPage() && p.Title != nil && p.Title.Length > 0 && p.Title.Length < 30
 	case "desc-too-long":
-		return p.MetaDescription != nil && p.MetaDescription.Length > 160
+		return p.IsHTMLPage() && p.MetaDescription != nil && p.MetaDescription.Length > 160
 	case "deep":
 		return p.Depth > 4
 	case "missing-canonical":
@@ -1953,6 +1954,9 @@ func pageMatchesIssue(p *types.PageData, issue string, dupSet map[string]bool) b
 func computeDuplicateSet(pages []*types.PageData, issue string) map[string]bool {
 	valMap := make(map[string][]string, len(pages)/2)
 	for _, p := range pages {
+		if !p.IsHTMLPage() {
+			continue
+		}
 		var text string
 		if issue == "duplicate-titles" && p.Title != nil {
 			text = p.Title.Text

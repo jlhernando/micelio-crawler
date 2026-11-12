@@ -51,7 +51,7 @@ func computeTemplateFilteredStats(full map[string]interface{}, pages []*types.Pa
 	titleCounts := make(map[string]int)
 	descCounts := make(map[string]int)
 	for _, p := range pages {
-		if p == nil || p.RobotsBlocked || p.StatusCode != 200 {
+		if !p.IsHTMLPage() {
 			continue
 		}
 		if p.Title != nil && p.Title.Text != "" {
@@ -102,16 +102,16 @@ func computeTemplateFilteredStats(full map[string]interface{}, pages []*types.Pa
 		statusCodes[p.StatusCode]++
 		depthDist[p.Depth]++
 
-		if p.Title == nil || p.Title.Text == "" {
-			withoutTitle++
-		}
-		if p.MetaDescription == nil || p.MetaDescription.Text == "" {
-			withoutDesc++
-		}
-		if len(p.Headings.H1) == 0 {
-			withoutH1++
-		}
-		if p.StatusCode == 200 {
+		if p.IsHTMLPage() {
+			if p.Title == nil || p.Title.Text == "" {
+				withoutTitle++
+			}
+			if p.MetaDescription == nil || p.MetaDescription.Text == "" {
+				withoutDesc++
+			}
+			if len(p.Headings.H1) == 0 {
+				withoutH1++
+			}
 			if len(p.Headings.H1) > 1 {
 				multipleH1++
 			}
@@ -133,9 +133,9 @@ func computeTemplateFilteredStats(full map[string]interface{}, pages []*types.Pa
 					descTooLong++
 				}
 			}
-			if p.WordCount > 0 && p.WordCount < 200 {
-				thinPages = append(thinPages, types.URLWordCount{URL: p.URL, WordCount: p.WordCount})
-			}
+		}
+		if p.StatusCode == 200 && p.WordCount > 0 && p.WordCount < 200 {
+			thinPages = append(thinPages, types.URLWordCount{URL: p.URL, WordCount: p.WordCount})
 		}
 
 		if len(p.InternalLinks) > 0 {

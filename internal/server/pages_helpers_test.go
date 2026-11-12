@@ -91,7 +91,7 @@ func TestFilterAndSortPages_IssueFilter(t *testing.T) {
 	result = filterAndSortPages(pages, "", "", "", "", "", "missing-title", "", "", "asc")
 	count := 0
 	for _, p := range pages {
-		if p.Title == nil {
+		if p.Title == nil && p.IsHTMLPage() { // 2xx HTML only (#82)
 			count++
 		}
 	}
@@ -221,6 +221,60 @@ func TestPageMatchesIssue_HTMLOver2MB(t *testing.T) {
 		p := &types.PageData{URL: "https://example.com/", StatusCode: c.status, BodySize: c.size}
 		if got := pageMatchesIssue(p, "html-over-2mb", nil); got != c.want {
 			t.Errorf("status %d size %d: got %v", c.status, c.size, got)
+		}
+	}
+}
+
+// Missing title/description/H1 filters list only 2xx HTML pages
+// (jlhernando/micelio-crawler#82).
+func TestPageMatchesIssue_OnPageHTMLOnly(t *testing.T) {
+	long := &types.TextLength{Text: "This is a very long title that exceeds sixty characters easily", Length: 62}
+	pages := map[string]*types.PageData{
+		"image":   {URL: "https://ex.com/a.jpg", StatusCode: 200, ContentType: "image/jpeg"},
+		"pdf":     {URL: "https://ex.com/a.pdf", StatusCode: 200, ContentType: "application/pdf"},
+		"301":     {URL: "https://ex.com/old", StatusCode: 301, ContentType: "text/html", Title: long},
+		"404":     {URL: "https://ex.com/gone", StatusCode: 404, ContentType: "text/html", Title: long},
+		"blocked": {URL: "https://ex.com/b", StatusCode: 200, ContentType: "text/html", RobotsBlocked: true},
+		"html":    {URL: "https://ex.com/h", StatusCode: 200, ContentType: "text/html"},
+		"xhtml":   {URL: "https://ex.com/x", StatusCode: 200, ContentType: "application/xhtml+xml"},
+		"charset": {URL: "https://ex.com/c", StatusCode: 200, ContentType: "text/html; charset=utf-8", Title: long},
+	}
+	want := map[string][]string{
+		"missing-title":       {"html", "xhtml"},
+		"missing-description": {"html", "xhtml", "charset"},
+		"missing-h1":          {"html", "xhtml", "charset"},
+		"title-too-long":      {"charset"},
+	}
+	for issue, names := range want {
+		got := map[string]bool{}
+		for name, p := range pages {
+			if pageMatchesIssue(p, issue, nil) {
+				got[name] = true
+			}
+		}
+		if len(got) != len(names) {
+			t.Errorf("%s: matched %v, want %v", issue, got, names)
+			continue
+		}
+		for _, n := range names {
+			if !got[n] {
+				t.Errorf("%s: %s not matched (got %v)", issue, n, got)
+			}
+		}
+	}
+}
+
+func TestTemplateFilteredStats_OnPageHTMLOnly(t *testing.T) {
+	pages := []*types.PageData{
+		{URL: "https://ex.com/a.jpg", StatusCode: 200, ContentType: "image/jpeg", TemplateType: "t"},
+		{URL: "https://ex.com/old", StatusCode: 301, ContentType: "text/html", TemplateType: "t"},
+		{URL: "https://ex.com/gone", StatusCode: 404, ContentType: "text/html", TemplateType: "t"},
+		{URL: "https://ex.com/h", StatusCode: 200, ContentType: "text/html", TemplateType: "t"},
+	}
+	res := computeTemplateFilteredStats(map[string]interface{}{}, pages, "t")
+	for _, k := range []string{"pagesWithoutTitle", "pagesWithoutDescription", "pagesWithoutH1"} {
+		if n := statNumber(res.Stats[k]); n != 1 {
+			t.Errorf("%s = %v, want 1", k, n)
 		}
 	}
 }

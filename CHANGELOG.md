@@ -4,6 +4,17 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+## [1.15.1] - 2026-11-12
+
+### Fixed
+
+- **Missing title, meta description and H1 now count only real pages.** These checks (and the too long, too short, duplicate and multiple H1 checks) now count only HTML pages with a 2xx status. Images, PDFs and other files linked from a site, redirects, errors and robots-blocked URLs no longer show up as pages without a title. Thanks to toppaw for the report (#82).
+- Pages are now stored with their content type, so later checks know what each URL served.
+- Old crawls: after a reload, 2xx URLs that end in an image, document or asset extension and have no title, description or H1 are skipped by these checks.
+- Pages served as upper-case `TEXT/HTML` are now parsed as HTML.
+
+Known limit: the percentages next to these issues still divide by all crawled URLs, not only HTML pages. That is a planned follow-up.
+
 ## [1.15.0] - 2026-11-12
 
 Results open sooner, crawls use less CPU and memory, and you can stop the slow work that runs after a crawl.

@@ -372,6 +372,14 @@ structured data, Open Graph/Twitter tags, security headers, redirects, soft 404s
 duplicate content, URL structure, image metadata, and Googlebot's 2 MB HTML
 truncation risk.
 
+**Title, description and H1 checks** (missing, too long/short, duplicate,
+multiple H1) count only HTML pages (`text/html` or `application/xhtml+xml`) that
+answer 2xx. Images, PDFs and other files, redirects, errors and URLs blocked by
+robots.txt never count. Crawls made before November 2026 did not store the
+Content-Type: there a 2xx URL counts as HTML unless it has no title, description
+or H1 and its path ends in an image, document or asset extension (`.jpg`,
+`.pdf`, `.css`...).
+
 **Soft-404 candidates** are pages that answer 200 (or redirect) but show no real
 content. At the start of a crawl Micelio requests one URL that cannot exist: if
 the site answers 200, pages that look like that "not found" page are flagged.

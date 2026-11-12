@@ -302,6 +302,7 @@ func runLinkIntelligence(ctx context.Context, pages []*types.PageData, cfg PostP
 			Freshness:         p.Freshness,
 			AnchorHealth:      p.AnchorHealth,
 			BodySize:          p.BodySize,
+			ContentType:       p.ContentType,
 			PageWeight:        p.PageWeight,
 			TemplateType:      p.TemplateType,
 			RobotsBlocked:     p.RobotsBlocked,

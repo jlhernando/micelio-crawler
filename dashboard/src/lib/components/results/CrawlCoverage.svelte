@@ -8,7 +8,7 @@
   let reasons = $derived(coverage?.reasons || []);
   let excluded = $derived(reasons.reduce((n, r) => n + r.count, 0));
   let maxExcluded = $derived(Math.max(...reasons.map(r => r.count), 1));
-  const labels: Record<string,string> = {depth:'Maximum depth',page_limit:'Page limit',domain:'Outside allowed domains',include_filter:'No include rule matched',exclude_filter:'Exclude rule matched',robots:'Blocked by robots.txt',path_budget:'Path budget',invalid_url:'Invalid URL'};
+  const labels: Record<string,string> = {depth:'Maximum depth',page_limit:'Page limit',domain:'Outside allowed domains',include_filter:'No include rule matched',exclude_filter:'Exclude rule matched',robots:'Blocked by robots.txt',path_budget:'Path budget',invalid_url:'Invalid URL',linked_image:'Linked image (not requested)'};
   let config = $derived((job?.config || {}) as Record<string, unknown>);
   const number = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
   let limit = $derived(number(config.maxPages ?? config.limit));

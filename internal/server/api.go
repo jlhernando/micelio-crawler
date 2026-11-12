@@ -76,6 +76,7 @@ var ValidSettings = map[string]string{
 	"alertEmailPassword": "string", "alertEmailFrom": "string", "alertEmailTo": "string",
 	"alertEmailSecurity": "string", "alertEmailAlways": "boolean", "dashboardUrl": "string",
 	"alertTelegramToken": "string", "alertTelegramChatId": "string", "alertAlways": "boolean",
+	"downloadImages": "boolean", // Settings → Images; see applyDownloadImagesDefault
 }
 
 // envFallbacks maps setting keys to environment variable names.
@@ -132,6 +133,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, "seed URL targets a private/loopback address", http.StatusBadRequest)
 			return
 		}
+		applyDownloadImagesDefault(store, config)
 		job, err := store.CreateCrawlJob(config)
 		if err != nil {
 			jsonError(w, err.Error(), http.StatusInternalServerError)

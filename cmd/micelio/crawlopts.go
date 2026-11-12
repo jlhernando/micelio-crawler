@@ -137,6 +137,7 @@ type crawlOptions struct {
 	torPassword         string
 	torRotateEvery      int
 	renderBlockRes      bool
+	downloadImages      bool
 	renderTimeout       int
 }
 
@@ -174,6 +175,7 @@ func registerCrawlFlags(cmd *cobra.Command, o *crawlOptions, d crawlDefaults) {
 	f.BoolVar(&o.jsRendering, "js", false, "Enable JS rendering with headless Chrome")
 	f.BoolVar(&o.renderBlockRes, "render-block-resources", true, "Block images/fonts/analytics during JS rendering")
 	f.IntVar(&o.renderTimeout, "render-timeout", 0, "JS render timeout in seconds (default 30)")
+	f.BoolVar(&o.downloadImages, "download-images", false, "Load images in JS rendering and check linked image URLs (<a href=x.jpg>). Off: Chrome blocks images and linked images are not requested. Page weight sizes images either way")
 	f.BoolVar(&o.ngrams, "ngrams", false, "Enable n-gram analysis")
 	f.StringVar(&o.language, "language", "en", "Language for n-gram stopword filtering")
 	f.BoolVar(&o.linkIntelligence, "link-intelligence", false, "Enable link graph analysis (click depth, centrality, suggestions)")
@@ -291,6 +293,7 @@ func (o *crawlOptions) buildConfig(cmd *cobra.Command) (types.CrawlConfig, error
 		ShowBlockedInternal: o.showBlockedInternal,
 		JSRendering:         o.jsRendering,
 		RenderBlockRes:      o.renderBlockRes,
+		DownloadImages:      o.downloadImages,
 		RenderTimeoutSec:    o.renderTimeout,
 		Ngrams:              o.ngrams,
 		Language:            o.language,

@@ -43,6 +43,7 @@ func (j jobRunner) Run(ctx context.Context, sc scheduler.Config, ctl *scheduler.
 		state["scheduleName"] = sc.Name
 	}
 	config["schedule"] = state
+	applyDownloadImagesDefault(j.store, config)
 
 	job, err := j.store.CreateCrawlJob(config)
 	if err != nil {

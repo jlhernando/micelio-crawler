@@ -136,6 +136,13 @@ type CrawlConfig struct {
 	TorPassword         string  `json:"torPassword"`
 	TorRotateEvery      int     `json:"torRotateEvery"`
 	NoDB                bool    `json:"-"`
+	// DownloadImages lets the crawl request image files: the JS renderer
+	// loads them and linked image URLs (<a href="x.jpg">) are checked (HEAD,
+	// never a full download). Off (the default): Chrome blocks image loads
+	// even without renderBlockResources and a linked image stays a reference
+	// (coverage reason "linked_image"). Page weight (PageWeight) sizes
+	// <img> files with HEAD either way, so its totals match Lighthouse.
+	DownloadImages bool `json:"downloadImages,omitempty"`
 	// StoreOnly persists crawl rows without materializing them for analysis.
 	// Callers requesting post-crawl enrichments still receive full results.
 	StoreOnly bool `json:"-"`

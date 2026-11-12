@@ -53,6 +53,10 @@ type RenderResult struct {
 type RenderConfig struct {
 	Timeout        time.Duration
 	BlockResources bool
+	// BlockImages fails every image request (resource type Image or an image
+	// file extension), with or without BlockResources. Crawls set it unless
+	// DownloadImages is on, so rendering never downloads image files.
+	BlockImages bool
 	// Pace, if set, is called before the browser sends a document request
 	// (iframes, JS navigations) and returns a func to call once it is sent:
 	// the crawler's per-host limiter, so Crawl-delay holds for the browser too.
@@ -137,6 +141,7 @@ func NewRenderer(proxy string, cfg ...RenderConfig) *Renderer {
 			rc.Timeout = c.Timeout
 		}
 		rc.BlockResources = c.BlockResources
+		rc.BlockImages = c.BlockImages
 		rc.Pace = c.Pace
 		rc.GuardNetwork = c.GuardNetwork
 		rc.Device = c.Device
@@ -204,10 +209,11 @@ func waitForDOMStability() chromedp.Action[chromedp.Void] {
 // setupInterception pauses every browser request. It serves pre for the
 // page's own URL (no second request to the server), paces other documents
 // through cfg.Pace and, with cfg.BlockResources, blocks images, fonts, media
-// and analytics. Without any of the three it does nothing.
+// and analytics; with cfg.BlockImages, images. Without any of these it does
+// nothing.
 func setupInterception(cfg RenderConfig, pageURL string, pre *Prefetched) chromedp.Action[chromedp.Void] {
 	return chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
-		if !cfg.BlockResources && pre == nil && cfg.Pace == nil {
+		if !cfg.BlockResources && !cfg.BlockImages && pre == nil && cfg.Pace == nil {
 			return nil
 		}
 		// Subscribe before enabling so no paused request is missed.
@@ -230,7 +236,7 @@ func setupInterception(cfg RenderConfig, pageURL string, pre *Prefetched) chrome
 					defer func() { recover() }()
 					isDoc := req.ResourceType == network.ResourceTypeDocument
 					switch {
-					case cfg.BlockResources && blockedResource(&req):
+					case cfg.BlockResources && blockedResource(&req), cfg.BlockImages && imageRequest(&req):
 						_, _ = cdp.Call(ctx, t, fetch.FailRequest, fetch.FailRequestParams{
 							RequestID: req.RequestID, ErrorReason: network.ErrorReasonBlockedByClient,
 						})
@@ -275,6 +281,19 @@ func blockedResource(req *fetch.EventRequestPaused) bool {
 		}
 	}
 	return false
+}
+
+// imageRequest reports an image load: Chrome's Image resource type (img,
+// CSS backgrounds, favicons) or a URL ending in an image extension
+// (preloads, fetches).
+func imageRequest(req *fetch.EventRequestPaused) bool {
+	switch req.ResourceType {
+	case network.ResourceTypeImage:
+		return true
+	case network.ResourceTypeDocument:
+		return false // the page itself, even at an image-looking URL
+	}
+	return types.HasImageExt(req.Request.URL)
 }
 
 // sameDocURL compares two URLs ignoring the fragment (never sent).

@@ -75,6 +75,8 @@
   let extractions = $state('');
   let searches = $state('');
   let pageWeight = $state(false);
+  // Off: Chrome blocks images, linked image URLs are not requested.
+  let downloadImages = $state(false);
 
   // AI
   let aiPrompt = $state('');
@@ -213,6 +215,7 @@
         jsRendering = b('defaultJsRendering') ?? jsRendering;
         respectRobots = b('defaultRespectRobots') ?? respectRobots;
         showBlockedInternal = b('defaultShowBlockedInternal') ?? showBlockedInternal;
+        downloadImages = b('downloadImages') ?? downloadImages;
         htmlReport = b('defaultHtmlReport') ?? htmlReport;
         sitemapOut = b('defaultSitemapOut') ?? sitemapOut;
         ngrams = b('defaultNgrams') ?? ngrams;
@@ -322,6 +325,7 @@
     if (c.renderBlockResources !== undefined) renderBlockResources = c.renderBlockResources as boolean;
     if (c.renderTimeoutSec !== undefined) renderTimeoutSec = c.renderTimeoutSec as number;
     if (c.pageWeight !== undefined) pageWeight = c.pageWeight as boolean;
+    downloadImages = c.downloadImages === true;
     if (c.psi !== undefined) psi = c.psi as boolean;
     if (c.psiKey) psiKey = c.psiKey as string;
     if (c.ngrams !== undefined) ngrams = c.ngrams as boolean;
@@ -431,6 +435,7 @@
     }));
 
     config.pageWeight = pageWeight;
+    config.downloadImages = downloadImages;
     config.psi = psi;
     if (psiKey) config.psiKey = psiKey;
     config.ngrams = ngrams;
@@ -869,6 +874,11 @@
         <label class="flex items-center gap-2 text-sm cursor-pointer">
           <input type="checkbox" bind:checked={pageWeight} class="rounded accent-accent" />
           Analyze page weight
+        </label>
+        <label class="flex items-center gap-2 text-sm cursor-pointer" title="Off: JS rendering blocks images and links to image files are not requested. Page weight sizes images either way.">
+          <input type="checkbox" bind:checked={downloadImages} class="rounded accent-accent" />
+          Download images
+          <span class="text-xs text-fg-2">(images in JS rendering, linked image URLs)</span>
         </label>
       </div>
     </CollapsibleSection>

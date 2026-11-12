@@ -87,6 +87,10 @@ var ticketSpecs = map[string]ticketSpec{
 		"These pages answer 200 OK but look like 'not found' or empty listings. Search engines may index them as thin pages. These are candidates: confirm them in Search Console.",
 		[]string{"Return 404 (or 410) when a page has no content, or add real content to it.", "Check the 'Page indexing' report in Search Console for 'Soft 404'."},
 		"The candidates return 404/410 or have content; the soft-404 count drops in the next crawl.", "", "pages"},
+	"html-over-2mb": {"Cut the HTML of %s pages below 2 MB", "Dev", "M", "Bug",
+		"These HTML files are larger than 2 MB. Googlebot reads only the first 2 MB (uncompressed, headers included) and indexes that part as if it were the whole page: text, links and structured data after the cutoff are not seen.",
+		[]string{"Move inline scripts, styles, SVGs and base64 images into separate files (each file has its own limit).", "Trim big inline JSON (app state, hydration data) and long repeated lists; paginate them.", "Put the main content, links and structured data near the top of the HTML."},
+		"No HTML page is over 2 MB in the next crawl.", "", "pages"},
 	"unreachable": {"Link to %s pages no one can reach from the home page", "SEO + Dev", "M", "Task",
 		"No chain of internal links leads to these pages from the start page. Crawlers only find them through sitemaps, if at all.",
 		[]string{"Decide per page: link it from a relevant hub or category, or remove it from the sitemap if it should not rank.", "Add the important ones to navigation, breadcrumbs or related-content blocks."},
@@ -220,6 +224,11 @@ func buildIssues(s *types.CrawlStats, total int, t totals) []Issue {
 	broken := max(t.broken(), classCount(s.StatusCodes, 4))
 	add("broken-links", "critical", "Broken internal links (4xx)", broken, 0, brokenEx)
 	add("missing-title", "critical", "Pages without a title", s.PagesWithoutTitle, 0, "")
+	var bigHTMLEx string
+	if len(s.HTMLOver2MBPages) > 0 {
+		bigHTMLEx = s.HTMLOver2MBPages[0].URL
+	}
+	add("html-over-2mb", "critical", "HTML over 2 MB (Googlebot stops reading)", max(s.TotalHTMLOver2MBPages, len(s.HTMLOver2MBPages)), 0, bigHTMLEx)
 	if s.Soft404Stats != nil {
 		add("soft-404", "warning", "Soft 404 candidates", s.Soft404Stats.ByConfidence["high"]+s.Soft404Stats.ByConfidence["medium"], 0, first(s.Soft404Pages))
 	}
@@ -479,6 +488,10 @@ func affectedURLs(id string, s *types.CrawlStats, pages []*types.PageData) []str
 	case "redirect-chains":
 		for _, r := range s.LongRedirectChains {
 			out = append(out, r.URL)
+		}
+	case "html-over-2mb":
+		for _, h := range s.HTMLOver2MBPages {
+			out = append(out, h.URL)
 		}
 	case "thin":
 		for _, w := range s.ThinContentPages {

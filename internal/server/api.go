@@ -1932,6 +1932,8 @@ func pageMatchesIssue(p *types.PageData, issue string, dupSet map[string]bool) b
 		return p.Canonical == nil
 	case "soft-404":
 		return p.Soft404 != nil
+	case "html-over-2mb":
+		return p.StatusCode >= 200 && p.StatusCode < 300 && p.BodySize > types.GooglebotHTMLLimit
 	case "duplicate-titles", "duplicate-descriptions":
 		return dupSet[p.URL]
 	case "device-any":

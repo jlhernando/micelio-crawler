@@ -471,7 +471,7 @@ func buildPageWeightStats(pages []*types.PageData) *types.PageWeightStats {
 			})
 		}
 		// Googlebot truncation risk: HTML body > 2MB (uncompressed)
-		if p.BodySize > 2*1024*1024 {
+		if p.BodySize > types.GooglebotHTMLLimit {
 			truncationRisk = append(truncationRisk, types.URLBytesEntry{
 				URL:        p.URL,
 				TotalBytes: p.BodySize,

@@ -565,6 +565,9 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 		stats.ThinContentPages = stats.ThinContentPages[:50]
 	}
 
+	// HTML over Googlebot's 2 MB fetch limit (content after it is not indexed)
+	stats.HTMLOver2MBPages, stats.TotalHTMLOver2MBPages = HTMLOver2MB(pages)
+
 	// Non-descriptive anchors: cap at 50
 	if len(stats.NonDescriptiveAnchors) > 50 {
 		stats.NonDescriptiveAnchors = stats.NonDescriptiveAnchors[:50]

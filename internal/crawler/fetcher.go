@@ -42,7 +42,7 @@ const (
 	externalTimeout     = 10 * time.Second
 	maxRetryAfterMs     = 60000
 	defaultFetchTimeout = 30 * time.Second
-	maxBodySize         = 10 * 1024 * 1024 // 10 MB body size cap
+	maxBodySize         = types.HTMLBodyReadCap // 10 MB body size cap
 	// maxDrainBytes caps how much of an unused body (redirects, non-HTML,
 	// errors) is read before closing. Past this, the connection is dropped
 	// instead of downloading e.g. a multi-GB PDF just to reuse the socket.

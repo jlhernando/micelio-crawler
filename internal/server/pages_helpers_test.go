@@ -208,6 +208,23 @@ func TestPageMatchesIssue_DefaultFalse(t *testing.T) {
 	}
 }
 
+func TestPageMatchesIssue_HTMLOver2MB(t *testing.T) {
+	for _, c := range []struct {
+		status int
+		size   int64
+		want   bool
+	}{
+		{200, types.GooglebotHTMLLimit, false},
+		{200, types.GooglebotHTMLLimit + 1, true},
+		{404, types.GooglebotHTMLLimit + 1, false},
+	} {
+		p := &types.PageData{URL: "https://example.com/", StatusCode: c.status, BodySize: c.size}
+		if got := pageMatchesIssue(p, "html-over-2mb", nil); got != c.want {
+			t.Errorf("status %d size %d: got %v", c.status, c.size, got)
+		}
+	}
+}
+
 func TestBuildDirectoryTreeIsCapped(t *testing.T) {
 	var pages []*types.PageData
 	for d := 0; d < 80; d++ {

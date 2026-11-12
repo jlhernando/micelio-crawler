@@ -1180,7 +1180,7 @@ func extractConsensusReadiness(doc *goquery.Document, bodyText string, wordCount
 
 // googlebotHTMLLimit is Googlebot's maximum fetch size for HTML documents (uncompressed).
 // Announced in https://developers.google.com/search/blog/2026/03/crawler-blog-post
-const googlebotHTMLLimit = 2 * 1024 * 1024
+const googlebotHTMLLimit = types.GooglebotHTMLLimit
 
 // truncationElement defines an SEO element to check for Googlebot truncation risk.
 type truncationElement struct {

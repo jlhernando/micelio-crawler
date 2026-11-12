@@ -440,6 +440,14 @@ function renderOverview(){
   h+='<div class="card"><div class="label">Orphans</div><div class="value '+(s.orphanPages&&s.orphanPages.length?'warn':'good')+'">'+(s.totalOrphanPages||(s.orphanPages?s.orphanPages.length:0))+'</div></div>';
   h+='</div></div>';
 
+  // HTML over Googlebot's 2 MB fetch limit (uncompressed): content after it is not indexed
+  const big=s.htmlOver2mbPages||[],bigN=s.totalHtmlOver2mbPages||big.length;
+  if(bigN){
+    h+='<div class="chart-card" style="margin-bottom:16px;border-color:var(--red)"><h4>HTML larger than 2 MB: '+comma(bigN)+' page'+(bigN===1?'':'s')+'</h4><div class="sub" style="margin-bottom:8px">Googlebot stops reading an HTML file at 2 MB. Content and links after that are not indexed.</div>';
+    big.slice(0,20).forEach(b=>{h+='<div style="padding:2px 0"><span class="bad">'+(b.atLeast?'&ge; ':'')+fmt(b.bytes/1048576,1)+' MB</span> '+esc(b.url)+(b.cutElements&&b.cutElements.length?' <span class="sub">after the cutoff: '+esc(b.cutElements.join(', '))+'</span>':'')+'</div>'});
+    h+='</div>';
+  }
+
   // Page Types
   if(s.templateTypeDistribution){const types=s.templateTypeDistribution;const keys=Object.keys(types).sort((a,b)=>types[b]-types[a]);if(keys.length){h+='<div style="margin-bottom:16px">';keys.forEach(k=>{h+='<span class="type-tag">'+esc(k)+' <b>'+comma(types[k])+'</b></span>'});h+='</div>'}}
 

@@ -204,7 +204,7 @@ func DetectTemplateType(page *types.PageData, seedURL string) string {
 	if page.WordCount < 300 && len(page.InternalLinks) > 15 {
 		scores[TemplateListing] += 2
 	}
-	if page.WordCount >= 100 && page.WordCount <= 600 && len(page.Images) >= 2 {
+	if page.WordCount >= 100 && page.WordCount <= 600 && page.ImageCount() >= 2 {
 		scores[TemplateProduct] += 1
 	}
 	if page.WordCount < 100 && page.Depth > 1 {
@@ -268,7 +268,7 @@ func DetectTemplateType(page *types.PageData, seedURL string) string {
 	}
 
 	// Ad detail content heuristic: moderate text + many images = typical ad page
-	if page.WordCount >= 100 && page.WordCount <= 800 && len(page.Images) >= 5 {
+	if page.WordCount >= 100 && page.WordCount <= 800 && page.ImageCount() >= 5 {
 		scores[TemplateAdDetail] += 1
 	}
 

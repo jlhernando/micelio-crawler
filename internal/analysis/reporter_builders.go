@@ -15,22 +15,17 @@ func buildImageAuditStats(pages []*types.PageData) *types.ImageAuditStats {
 		if p.StatusCode != 200 {
 			continue
 		}
-		for _, img := range p.Images {
-			audit.TotalImages++
-			if img.Alt == nil {
-				audit.MissingAltAttribute++
-			} else if *img.Alt == "" {
-				audit.EmptyAlt++
-			} else if len(*img.Alt) > types.AltTooLongLimit {
-				audit.AltTooLong = append(audit.AltTooLong, types.ImageAltIssue{
-					URL:       p.URL,
-					Src:       img.Src,
-					AltLength: len(*img.Alt),
-				})
-			}
-			if img.MissingDimensions() {
-				audit.MissingDimensions++
-			}
+		sum := p.ImageSummaryOf()
+		if sum == nil {
+			continue
+		}
+		audit.TotalImages += sum.Total
+		audit.MissingAltAttribute += sum.NoAltAttr
+		audit.EmptyAlt += sum.EmptyAlt
+		audit.MissingDimensions += sum.NoDims
+		for _, issue := range sum.LongAlt {
+			issue.URL = p.URL
+			audit.AltTooLong = append(audit.AltTooLong, issue)
 		}
 	}
 	if audit.TotalImages == 0 {

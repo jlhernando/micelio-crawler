@@ -1605,6 +1605,12 @@ func (m *CrawlManager) runDeferredAnalysis(ctx context.Context, crawlID string, 
 		}
 	}
 
+	// Link intelligence and the stats round-trips below build the run's
+	// peak heap after analyzeAndCache has released its GC hold: keep GOGC
+	// at 50 until that memory is freed (same policy as the core analysis).
+	restoreGC := gctune.Hold(50, 0)
+	defer restoreGC()
+
 	// The cached pages drop now what link intelligence would drop, so
 	// memory peaks as before. Cancelled already: nothing more runs.
 	work := pages
@@ -1693,6 +1699,7 @@ func (m *CrawlManager) runDeferredAnalysis(ctx context.Context, crawlID string, 
 	}
 
 	// Release deferred analysis memory
+	restoreGC()
 	debug.FreeOSMemory()
 
 	if interrupted != "" {
@@ -1835,7 +1842,7 @@ func (m *CrawlManager) loadResults(crawlID string) *CrawlResults {
 		cs, csErr := storage.NewCrawlStore(job.DBPath)
 		if csErr == nil {
 			var loadErr error
-			pages, loadErr = cs.GetPagesForAnalysis(context.Background(), nil, nil, storedAnchorCloud(statsMap) != nil)
+			pages, loadErr = cs.GetPagesForCache(context.Background(), nil, storedAnchorCloud(statsMap) != nil)
 			cs.Close()
 			if loadErr != nil {
 				log.Printf("lazy load pages for crawl %s: %v", crawlID, loadErr)
@@ -1986,7 +1993,7 @@ func (m *CrawlManager) loadPagesInBackground(ctx context.Context, crawlID string
 	result.mu.RUnlock()
 	var pages []*types.PageData
 	var loadErr error
-	pages, loadErr = cs.GetPagesForAnalysis(ctx, onProgress, nil, skipAnchors)
+	pages, loadErr = cs.GetPagesForCache(ctx, onProgress, skipAnchors)
 	cs.Close()
 
 	// If context was cancelled (LRU eviction), stop early
@@ -2126,6 +2133,7 @@ func stripPagesForCache(pages []*types.PageData) {
 		p.Anchors = nil
 		p.BodyText = ""
 		p.Images = nil
+		p.ImageSummary = nil
 		p.StructuredData = nil
 		p.OpenGraph = nil
 		p.TwitterCard = nil

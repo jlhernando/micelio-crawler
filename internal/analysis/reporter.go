@@ -135,6 +135,10 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 		}
 
 		// Images
+		if p.ImageSummary != nil {
+			stats.TotalImages += p.ImageSummary.Total
+			stats.ImagesMissingAlt += p.ImageSummary.NoAltAttr + p.ImageSummary.EmptyAlt
+		}
 		for _, img := range p.Images {
 			stats.TotalImages++
 			if img.Alt == nil || *img.Alt == "" {

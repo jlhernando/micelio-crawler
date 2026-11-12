@@ -199,3 +199,59 @@ func TestGetPagesForAnalysisDropsOnlySchemaRaw(t *testing.T) {
 		}
 	}
 }
+
+// GetPagesForCache equals GetPagesForAnalysis except for the fields
+// stripPagesForCache drops unread (Images, OpenGraph, TwitterCard,
+// SchemaValidation, RenderDiffs), which stay nil. The analysis reload keeps
+// images only as an ImageSummary.
+func TestGetPagesForCacheSkipsOnlyStrippedFields(t *testing.T) {
+	store, err := NewCrawlStore(filepath.Join(t.TempDir(), "cache.db"))
+	if err != nil {
+		t.Fatalf("NewCrawlStore: %v", err)
+	}
+	defer store.Close()
+	alt := "a dog"
+	for i := 0; i < 3; i++ {
+		u := "https://example.com/" + string(rune('a'+i))
+		p := &types.PageData{URL: u, StatusCode: 200, CrawledAt: time.Now().UTC(),
+			InternalLinks:  []string{u + "/x"},
+			Anchors:        []types.AnchorData{{Href: u + "/x", Text: "x", IsInternal: true}},
+			StructuredData: []types.StructuredDataEntry{{Type: "Product", Format: types.FormatJSONLD, Raw: `{"a":1}`}},
+			Hreflang:       []types.HreflangEntry{{Lang: "en", Href: u}},
+		}
+		if i > 0 {
+			p.Images = []types.ImageData{{Src: u + "/i.png", Alt: &alt}}
+			p.OpenGraph = map[string]string{"type": "website"}
+			p.TwitterCard = map[string]string{"card": "summary"}
+			p.SchemaValidation = []types.SchemaValidationEntry{{Type: "Product", Issues: []types.SchemaValidationIssue{}}}
+			p.RenderDiffs = []types.RenderDiff{{Field: "title", Original: "a", Rendered: "b"}}
+		}
+		if err := store.InsertPage(p); err != nil {
+			t.Fatalf("InsertPage: %v", err)
+		}
+	}
+	for _, skip := range []bool{false, true} {
+		want, err := store.GetPagesForAnalysis(t.Context(), nil, nil, skip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := store.GetPagesForCache(t.Context(), nil, skip)
+		if err != nil || len(got) != len(want) {
+			t.Fatalf("GetPagesForCache: %v (n=%d)", err, len(got))
+		}
+		if want[1].ImageSummary == nil || want[1].ImageSummary.Total != 1 || want[1].Images != nil ||
+			len(want[1].RenderDiffs) != 1 || len(want[1].OpenGraph) != 1 {
+			t.Fatalf("fixture not stored: %+v", want[1])
+		}
+		for i := range want {
+			want[i].ImageSummary, want[i].OpenGraph, want[i].TwitterCard = nil, nil, nil
+			want[i].SchemaValidation, want[i].RenderDiffs = nil, nil
+			if !reflect.DeepEqual(want[i], got[i]) {
+				t.Errorf("skip=%v page %d differs:\n%+v\n%+v", skip, i, want[i], got[i])
+			}
+		}
+		if (len(got[0].Anchors) == 0) != skip || len(got[0].Hreflang) != 1 || len(got[0].StructuredData) != 1 {
+			t.Errorf("skip=%v kept fields lost: %+v", skip, got[0])
+		}
+	}
+}

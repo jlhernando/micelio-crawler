@@ -108,6 +108,14 @@ func schemaEntries(in []schemaEntryNoRaw) []types.StructuredDataEntry {
 type pageLoadOpts struct {
 	skipAnchors   bool // Anchors stays nil
 	dropSchemaRaw bool // StructuredData[].Raw stays ""
+	// cacheOnly (with dropSchemaRaw) also leaves undecoded what a results
+	// load drops in stripPagesForCache before anything reads it: Images,
+	// OpenGraph, TwitterCard, SchemaValidation, RenderDiffs (images alone
+	// are ~1/4 of a crawl's page JSON).
+	cacheOnly bool
+	// imageSummary folds Images into ImageSummary (Images nil): post-crawl
+	// analysis reads only counts and long alts from them.
+	imageSummary bool
 }
 
 func decodeAnalysisPage(data []byte) (*types.PageData, error) {
@@ -123,6 +131,35 @@ func decodeAnalysisPageOpt(data []byte, o pageLoadOpts) (*types.PageData, error)
 	var in, ex stringArrayCount
 	var err error
 	switch {
+	case o.cacheOnly && o.skipAnchors:
+		p := struct {
+			*analysisPageData
+			InternalLinks    stringArrayCount   `json:"internalLinks"`
+			ExternalLinks    stringArrayCount   `json:"externalLinks"`
+			Anchors          skipJSON           `json:"anchors"`
+			StructuredData   []schemaEntryNoRaw `json:"structuredData"`
+			Images           skipJSON           `json:"images"`
+			OpenGraph        skipJSON           `json:"openGraph"`
+			TwitterCard      skipJSON           `json:"twitterCard"`
+			SchemaValidation skipJSON           `json:"schemaValidation"`
+			RenderDiffs      skipJSON           `json:"renderDiffs"`
+		}{analysisPageData: base}
+		err = json.Unmarshal(data, &p)
+		in, ex, page.StructuredData = p.InternalLinks, p.ExternalLinks, schemaEntries(p.StructuredData)
+	case o.cacheOnly:
+		p := struct {
+			*analysisPageData
+			InternalLinks    stringArrayCount   `json:"internalLinks"`
+			ExternalLinks    stringArrayCount   `json:"externalLinks"`
+			StructuredData   []schemaEntryNoRaw `json:"structuredData"`
+			Images           skipJSON           `json:"images"`
+			OpenGraph        skipJSON           `json:"openGraph"`
+			TwitterCard      skipJSON           `json:"twitterCard"`
+			SchemaValidation skipJSON           `json:"schemaValidation"`
+			RenderDiffs      skipJSON           `json:"renderDiffs"`
+		}{analysisPageData: base}
+		err = json.Unmarshal(data, &p)
+		in, ex, page.StructuredData = p.InternalLinks, p.ExternalLinks, schemaEntries(p.StructuredData)
 	case o.skipAnchors && o.dropSchemaRaw:
 		p := struct {
 			*analysisPageData

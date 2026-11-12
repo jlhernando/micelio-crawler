@@ -469,9 +469,18 @@ func (s *CrawlStore) GetAllPagesWithProgress(ctx context.Context, onProgress fun
 // field for every page at once. Anchors stays nil when skipAnchors (result
 // loads whose stats already hold the Anchor Cloud), and structured data
 // entries keep Type and Format but not Raw (the JSON-LD text, read only by
-// crawl-time schema validation; the stripped pages never reach a writer).
+// crawl-time schema validation; the stripped pages never reach a writer),
+// and Images become an ImageSummary (what the analysis reads of them).
 func (s *CrawlStore) GetPagesForAnalysis(ctx context.Context, onProgress func(loaded int), each func(*types.PageData), skipAnchors bool) ([]*types.PageData, error) {
-	return s.getAllPages(ctx, onProgress, each, pageLoadOpts{skipAnchors: skipAnchors, dropSchemaRaw: true})
+	return s.getAllPages(ctx, onProgress, each, pageLoadOpts{skipAnchors: skipAnchors, dropSchemaRaw: true, imageSummary: true})
+}
+
+// GetPagesForCache is GetPagesForAnalysis (no hook) for results loads,
+// whose pages go through stripPagesForCache right after the load-time
+// aggregates: the fields it drops that none of them reads stay undecoded
+// (see pageLoadOpts.cacheOnly).
+func (s *CrawlStore) GetPagesForCache(ctx context.Context, onProgress func(loaded int), skipAnchors bool) ([]*types.PageData, error) {
+	return s.getAllPages(ctx, onProgress, nil, pageLoadOpts{skipAnchors: skipAnchors, dropSchemaRaw: true, cacheOnly: true})
 }
 
 func (s *CrawlStore) getAllPages(ctx context.Context, onProgress func(loaded int), each func(*types.PageData), opts pageLoadOpts) ([]*types.PageData, error) {
@@ -514,6 +523,10 @@ func (s *CrawlStore) getAllPages(ctx context.Context, onProgress func(loaded int
 				// SchemaValidationStats / RenderCompareStats. RunCoreAnalysis
 				// and stripPagesForCache release them after the report.
 				page.CustomExtractions = nil
+				if opts.imageSummary && page.Images != nil {
+					page.ImageSummary = types.SummarizeImages(page.Images)
+					page.Images = nil
+				}
 				if each != nil {
 					each(page)
 				}

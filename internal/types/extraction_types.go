@@ -46,6 +46,54 @@ func (i ImageData) MissingAlt() bool { return i.Alt == nil }
 // (layout shift risk).
 func (i ImageData) MissingDimensions() bool { return i.Width == nil || i.Height == nil }
 
+// ImageSummary is what post-crawl analysis reads from a page's Images
+// (counts, alt state, long alts in page order). Dashboard analysis reloads
+// keep it instead of the image list: images are ~1/3 of a reloaded crawl's
+// live heap and nothing after the reload needs more.
+type ImageSummary struct {
+	Total, NoAltAttr, EmptyAlt, NoDims int
+	LongAlt                            []ImageAltIssue // URL left empty: the page's URL
+}
+
+// SummarizeImages returns the summary of imgs (nil when there are none).
+func SummarizeImages(imgs []ImageData) *ImageSummary {
+	if len(imgs) == 0 {
+		return nil
+	}
+	s := &ImageSummary{Total: len(imgs)}
+	for _, img := range imgs {
+		switch {
+		case img.Alt == nil:
+			s.NoAltAttr++
+		case *img.Alt == "":
+			s.EmptyAlt++
+		case len(*img.Alt) > AltTooLongLimit:
+			s.LongAlt = append(s.LongAlt, ImageAltIssue{Src: img.Src, AltLength: len(*img.Alt)})
+		}
+		if img.MissingDimensions() {
+			s.NoDims++
+		}
+	}
+	return s
+}
+
+// ImageSummaryOf returns the page's image summary, from Images when the
+// page still holds them.
+func (p *PageData) ImageSummaryOf() *ImageSummary {
+	if p.ImageSummary != nil {
+		return p.ImageSummary
+	}
+	return SummarizeImages(p.Images)
+}
+
+// ImageCount is len(Images), also for pages reloaded with a summary.
+func (p *PageData) ImageCount() int {
+	if p.ImageSummary != nil {
+		return p.ImageSummary.Total
+	}
+	return len(p.Images)
+}
+
 // HreflangEntry represents a single hreflang annotation.
 type HreflangEntry struct {
 	Lang   string `json:"lang"`

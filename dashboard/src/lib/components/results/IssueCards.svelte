@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api } from '../../api';
+  import { formatBytes } from '../../format';
 
   let { stats, crawlId }: { stats: Record<string, unknown>; crawlId: string } = $props();
 
@@ -74,6 +75,20 @@
       cards.push({
         id: 'long-redirect-chains', label: 'Long Redirect Chains (3+)', count: longRedirects.length, severity: 'critical',
         details: longRedirects.slice(0, 50).map(r => ({ url: r.url, info: `${r.hops} hops` })),
+      });
+    }
+
+    // Googlebot reads only the first 2 MB of an HTML file (uncompressed);
+    // content and links after that are not indexed.
+    const bigHtml = (stats.htmlOver2mbPages as { url: string; bytes: number; atLeast?: boolean; cutElements?: string[] }[]) || [];
+    const bigHtmlTotal = (stats.totalHtmlOver2mbPages as number) || bigHtml.length; // list is capped at 50
+    if (bigHtmlTotal > 0) {
+      cards.push({
+        id: 'html-over-2mb', label: 'HTML over 2 MB (Googlebot stops reading at 2 MB)', count: bigHtmlTotal, severity: 'critical',
+        details: bigHtml.slice(0, 50).map(p => ({
+          url: p.url,
+          info: `${p.atLeast ? '≥ ' : ''}${formatBytes(p.bytes)}${p.cutElements?.length ? ` · after the cutoff: ${p.cutElements.join(', ')}` : ''}`,
+        })),
       });
     }
 

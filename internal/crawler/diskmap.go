@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
+	"github.com/klauspost/compress/zstd"
+	"github.com/micelio/micelio/internal/intern"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -110,7 +113,7 @@ type resourceRefsDisk struct {
 }
 
 type resourceRefsEntry struct {
-	PageURL string               `json:"p"`
+	PageURL string                `json:"p"`
 	Refs    []types.ResourceEntry `json:"r"`
 }
 
@@ -144,6 +147,9 @@ func (d *resourceRefsDisk) Load() (map[string][]types.ResourceEntry, error) {
 	}
 
 	result := make(map[string][]types.ResourceEntry)
+	// Most pages link the same stylesheets, scripts and images: share one
+	// copy of each URL and type string instead of one per page.
+	strs := intern.New(0)
 	dec := json.NewDecoder(bufio.NewReaderSize(d.file, 64*1024))
 	var decErr error
 	for dec.More() {
@@ -152,7 +158,7 @@ func (d *resourceRefsDisk) Load() (map[string][]types.ResourceEntry, error) {
 			decErr = fmt.Errorf("decode resrefs entry: %w", err)
 			break
 		}
-		result[entry.PageURL] = entry.Refs
+		result[entry.PageURL] = compactRefs(entry.Refs, strs)
 	}
 
 	d.cleanup()
@@ -160,6 +166,18 @@ func (d *resourceRefsDisk) Load() (map[string][]types.ResourceEntry, error) {
 		return result, decErr
 	}
 	return result, nil
+}
+
+// compactRefs returns refs in an exact-size slice (the decoder grows it by
+// doubling) with URL and Type strings interned. nil and empty stay as they are.
+func compactRefs(refs []types.ResourceEntry, strs *intern.Table) []types.ResourceEntry {
+	refs = intern.Clip(refs)
+	for i := range refs {
+		r := &refs[i]
+		r.URL = strs.Str(r.URL)
+		r.Type = types.ResourceType(strs.Str(string(r.Type)))
+	}
+	return refs
 }
 
 func (d *resourceRefsDisk) cleanup() {
@@ -170,65 +188,106 @@ func (d *resourceRefsDisk) cleanup() {
 
 // --- Disk-backed internal links accumulator ---
 
-// internalLinksDisk streams per-page internal link edges to a temp file during crawl.
-// Each line: source\ttarget1\ttarget2\t...targetN\n (TSV grouped by source page).
-// This avoids keeping InternalLinks []string in memory on each PageData, saving ~5GB for 1M pages.
+// internalLinksDisk streams per-page internal link edges to a temp file during
+// the crawl, so PageData does not keep InternalLinks in memory (~5 GB for 1M
+// pages). Each line: source\ttarget1\t...targetN\n (TSV grouped by source).
+//
+// The file is zstd-compressed: menu and footer links repeat on every page, so
+// it shrinks ~10× (Wikipedia 9.2K pages, 4.8M links: 283 MB → ~30 MB) with a
+// few MB of encoder memory and no per-URL state in RAM.
 type internalLinksDisk struct {
 	file *os.File
 	buf  *bufio.Writer
+	zw   *zstd.Encoder
+	err  error
+	line []byte // AddPage scratch buffer, reused across pages
 }
 
 func newInternalLinksDisk() (*internalLinksDisk, error) {
-	f, err := os.CreateTemp("", "micelio-intlinks-*.tsv")
+	f, err := os.CreateTemp("", "micelio-intlinks-*.tsv.zst")
 	if err != nil {
 		return nil, fmt.Errorf("create intlinks temp file: %w", err)
 	}
-	return &internalLinksDisk{
-		file: f,
-		buf:  bufio.NewWriterSize(f, 64*1024),
-	}, nil
+	buf := bufio.NewWriterSize(f, 64*1024)
+	zw, err := zstd.NewWriter(buf, zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithEncoderConcurrency(1), zstd.WithWindowSize(4<<20))
+	if err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return nil, fmt.Errorf("create intlinks encoder: %w", err)
+	}
+	return &internalLinksDisk{file: f, buf: buf, zw: zw}, nil
 }
 
 // AddPage writes all internal links for a source page. Thread-safe via caller's mutex.
 func (d *internalLinksDisk) AddPage(sourceURL string, links []string) {
-	if len(links) == 0 {
+	if len(links) == 0 || d.err != nil {
 		return
 	}
-	d.buf.WriteString(escapeTSV(sourceURL))
+	// Reuse one buffer: the caller's mutex serialises AddPage, and a page's
+	// line is built whole so the encoder gets one Write per page.
+	line := append(d.line[:0], escapeTSV(sourceURL)...)
 	for _, link := range links {
-		d.buf.WriteByte('\t')
-		d.buf.WriteString(escapeTSV(link))
+		line = append(line, '\t')
+		line = append(line, escapeTSV(link)...)
 	}
-	d.buf.WriteByte('\n')
+	line = append(line, '\n')
+	if _, err := d.zw.Write(line); err != nil {
+		d.err = err
+	}
+	if cap(line) > maxLineBuf {
+		line = nil // drop a rare huge page's buffer instead of keeping it all crawl
+	}
+	d.line = line
 }
+
+// maxLineBuf caps the retained AddPage buffer (typical lines are a few KB to ~60 KB).
+const maxLineBuf = 1 << 20
 
 // Iterate reads all stored edges and calls fn for each source→targets group.
 // Must be called after all AddPage calls. Caller should call Close after iteration.
 func (d *internalLinksDisk) Iterate(fn func(source string, targets []string)) error {
+	if d.err != nil {
+		return fmt.Errorf("write intlinks: %w", d.err)
+	}
+	if err := d.zw.Close(); err != nil {
+		return fmt.Errorf("finish intlinks: %w", err)
+	}
 	if err := d.buf.Flush(); err != nil {
 		return fmt.Errorf("flush intlinks: %w", err)
 	}
 	if _, err := d.file.Seek(0, 0); err != nil {
 		return fmt.Errorf("seek intlinks: %w", err)
 	}
-	scanner := bufio.NewScanner(d.file)
-	scanner.Buffer(make([]byte, 0, 256*1024), 4*1024*1024) // 4MB max line
-	for scanner.Scan() {
-		parts := strings.Split(scanner.Text(), "\t")
-		if len(parts) < 2 {
-			continue
-		}
-		source := unescapeTSV(parts[0])
-		targets := make([]string, len(parts)-1)
-		for i := 1; i < len(parts); i++ {
-			targets[i-1] = unescapeTSV(parts[i])
-		}
-		fn(source, targets)
+	zr, err := zstd.NewReader(d.file, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxWindow(8<<20))
+	if err != nil {
+		return fmt.Errorf("open intlinks: %w", err)
 	}
-	return scanner.Err()
+	defer zr.Close()
+	r := bufio.NewReaderSize(zr, 256*1024)
+	for {
+		line, err := r.ReadString('\n') // no line-length cap: pages may have many links
+		if line = strings.TrimSuffix(line, "\n"); line != "" {
+			parts := strings.Split(line, "\t")
+			if len(parts) >= 2 {
+				source := unescapeTSV(parts[0])
+				targets := make([]string, len(parts)-1)
+				for i := 1; i < len(parts); i++ {
+					targets[i-1] = unescapeTSV(parts[i])
+				}
+				fn(source, targets)
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read intlinks: %w", err)
+		}
+	}
 }
 
 func (d *internalLinksDisk) Close() {
+	d.zw.Close()
 	name := d.file.Name()
 	d.file.Close()
 	os.Remove(name)

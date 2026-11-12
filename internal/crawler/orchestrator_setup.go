@@ -271,9 +271,10 @@ func (s *crawlSession) setupHTTPClient() error {
 
 func (s *crawlSession) setupQueue() error {
 	queueOpts := &QueueOptions{
-		EnforceInternal: true,
-		AllowedDomains:  s.config.AllowedDomains,
-		PathOnlyFilters: s.config.PathOnlyFilters,
+		EnforceInternal:  true,
+		AllowedDomains:   s.config.AllowedDomains,
+		PathOnlyFilters:  s.config.PathOnlyFilters,
+		SkipLinkedImages: !s.config.DownloadImages,
 	}
 	for _, p := range s.config.IncludePatterns {
 		re, err := compilePattern(p)
@@ -477,6 +478,7 @@ func (s *crawlSession) setupBrowser() {
 	}
 	cfg := browser.RenderConfig{
 		BlockResources: s.config.RenderBlockRes,
+		BlockImages:    !s.config.DownloadImages,
 		// Documents the browser loads itself (iframes, JS navigations) wait
 		// their turn like crawler requests. hostRL is set up after this.
 		Pace: func(ctx context.Context, u string) func() {
@@ -502,6 +504,8 @@ func (s *crawlSession) setupBrowser() {
 	features := "max 4 tabs"
 	if cfg.BlockResources {
 		features += ", resource-blocking"
+	} else if cfg.BlockImages {
+		features += ", images blocked"
 	}
 	if cfg.Timeout > 0 {
 		features += fmt.Sprintf(", timeout=%v", cfg.Timeout)

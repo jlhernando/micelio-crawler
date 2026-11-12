@@ -254,6 +254,22 @@ func TestGEOBacklog(t *testing.T) {
 	}
 }
 
+func TestBacklogHTMLOver2MB(t *testing.T) {
+	s, pages := backlogFixture()
+	s.HTMLOver2MBPages = []types.HTMLSizeEntry{{URL: "https://ex.com/shop/big", Bytes: 3 << 20}}
+	s.TotalHTMLOver2MBPages = 4
+	d := BuildPDFData("https://ex.com/", s, pages, PDFOptions{})
+	for _, tk := range d.Tickets {
+		if tk.ID == "html-over-2mb" {
+			if tk.Count != 4 || tk.Type != "Bug" || len(tk.Examples) == 0 || tk.Examples[0] != "/shop/big" {
+				t.Errorf("ticket %+v", tk)
+			}
+			return
+		}
+	}
+	t.Fatal("no html-over-2mb ticket")
+}
+
 func TestCountTitleSingular(t *testing.T) {
 	for _, c := range []struct {
 		format string

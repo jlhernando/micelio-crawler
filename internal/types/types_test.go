@@ -8,6 +8,7 @@ import (
 
 func TestPageDataJSONRoundTrip(t *testing.T) {
 	title := TextLength{Text: "Test Page", Length: 9}
+	logoAlt := "Logo"
 	desc := TextLength{Text: "A test description", Length: 18}
 	canonical := "https://example.com/"
 	clickDepth := 2
@@ -27,7 +28,7 @@ func TestPageDataJSONRoundTrip(t *testing.T) {
 		InternalLinks: []string{"/about", "/contact"},
 		ExternalLinks: []string{"https://other.com"},
 		Images: []ImageData{
-			{Src: "/img/logo.png", MissingAlt: false, HasAltAttribute: true, AltLength: 4},
+			{Src: "/img/logo.png", Alt: &logoAlt},
 		},
 		Depth:     1,
 		CrawledAt: time.Now().UTC().Truncate(time.Second),

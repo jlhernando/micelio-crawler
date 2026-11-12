@@ -76,6 +76,7 @@ var ValidSettings = map[string]string{
 	"alertEmailPassword": "string", "alertEmailFrom": "string", "alertEmailTo": "string",
 	"alertEmailSecurity": "string", "alertEmailAlways": "boolean", "dashboardUrl": "string",
 	"alertTelegramToken": "string", "alertTelegramChatId": "string", "alertAlways": "boolean",
+	"downloadImages": "boolean", // Settings → Images; see applyDownloadImagesDefault
 }
 
 // envFallbacks maps setting keys to environment variable names.
@@ -132,6 +133,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			jsonError(w, "seed URL targets a private/loopback address", http.StatusBadRequest)
 			return
 		}
+		applyDownloadImagesDefault(store, config)
 		job, err := store.CreateCrawlJob(config)
 		if err != nil {
 			jsonError(w, err.Error(), http.StatusInternalServerError)
@@ -513,11 +515,17 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 			"stats":           stats,
 			"pageCount":       results.PageCount,
 			"analysisPending": results.AnalysisPending,
-			"pagesReady":      results.PagesReady,
-			"loadingProgress": int(results.loadingProgress.Load()),
+			// Link intelligence / embeddings still to come: Stop (network
+			// checks only) leaves work running, so the dashboard offers it.
+			"linkAnalysisPending": results.AnalysisPending && results.linkAnalysis,
+			"pagesReady":          results.PagesReady,
+			"loadingProgress":     int(results.loadingProgress.Load()),
 		}
 		if total := results.externalTotal.Load(); total > 0 {
 			resp["externalCheck"] = map[string]int64{"loaded": results.externalChecked.Load(), "total": total}
+		}
+		if total := results.pageWeightTotal.Load(); total > 0 {
+			resp["pageWeight"] = map[string]int64{"loaded": results.pageWeightDone.Load(), "total": total}
 		}
 		results.mu.RUnlock()
 		jsonOK(w, resp)
@@ -1924,6 +1932,8 @@ func pageMatchesIssue(p *types.PageData, issue string, dupSet map[string]bool) b
 		return p.Canonical == nil
 	case "soft-404":
 		return p.Soft404 != nil
+	case "html-over-2mb":
+		return p.StatusCode >= 200 && p.StatusCode < 300 && p.BodySize > types.GooglebotHTMLLimit
 	case "duplicate-titles", "duplicate-descriptions":
 		return dupSet[p.URL]
 	case "device-any":
@@ -2359,10 +2369,20 @@ func anchorCloudToMap(c *types.AnchorCloudStats) map[string]interface{} {
 // anchorStatsFor returns persisted Anchor Cloud stats (collected during the
 // crawl, stored in the stats JSON) or rebuilds them from page Anchors.
 func anchorStatsFor(statsMap map[string]interface{}, pages []*types.PageData) map[string]interface{} {
-	if cloud, ok := statsMap["anchorCloud"].(map[string]interface{}); ok && cloud != nil {
+	if cloud := storedAnchorCloud(statsMap); cloud != nil {
 		return cloud
 	}
 	return buildAnchorStats(pages)
+}
+
+// storedAnchorCloud returns the Anchor Cloud persisted in stats, or nil.
+// When it is set a result load needs no page Anchors (anchorStatsFor is
+// their only reader before stripPagesForCache drops them).
+func storedAnchorCloud(statsMap map[string]interface{}) map[string]interface{} {
+	if cloud, ok := statsMap["anchorCloud"].(map[string]interface{}); ok && cloud != nil {
+		return cloud
+	}
+	return nil
 }
 
 // ── Directory Tree ──

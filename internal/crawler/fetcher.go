@@ -42,7 +42,7 @@ const (
 	externalTimeout     = 10 * time.Second
 	maxRetryAfterMs     = 60000
 	defaultFetchTimeout = 30 * time.Second
-	maxBodySize         = 10 * 1024 * 1024 // 10 MB body size cap
+	maxBodySize         = types.HTMLBodyReadCap // 10 MB body size cap
 	// maxDrainBytes caps how much of an unused body (redirects, non-HTML,
 	// errors) is read before closing. Past this, the connection is dropped
 	// instead of downloading e.g. a multi-GB PDF just to reuse the socket.
@@ -273,9 +273,20 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 	// Cookies and custom headers go to rawURL's host only, not to another
 	// site a redirect leads to.
 	credScope, _ := url.Parse(rawURL)
+	// An image URL (a linked .jpg) only needs its status and headers: ask
+	// with HEAD, then a one-byte Range GET if HEAD is refused. Never the
+	// whole file.
+	probe := probeNone
+	if types.HasImageExt(rawURL) {
+		probe = probeHead
+	}
 
 	for {
-		req, err := newRequest(ctx, http.MethodGet, currentURL)
+		method := http.MethodGet
+		if probe == probeHead {
+			method = http.MethodHead
+		}
+		req, err := newRequest(ctx, method, currentURL)
 		if err != nil {
 			return types.FetchResult{
 				URL:            rawURL,
@@ -287,6 +298,9 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 		}
 
 		setHeadersFor(req, opts, credentialsAllowed(credScope, req.URL))
+		if probe == probeRange {
+			req.Header.Set("Range", "bytes=0-0")
+		}
 
 		resp, err := clock.do(client, req, opts.Pace)
 		if err != nil {
@@ -304,6 +318,22 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 				ResponseTimeMs: clock.ms(),
 				Error:          FormatError(err),
 				Retryable:      retryable,
+			}
+		}
+
+		// HEAD refused: ask for the first byte instead. Range refused: plain
+		// GET (the non-HTML branch below reads at most maxDrainBytes).
+		if (probe == probeHead && (resp.StatusCode == 405 || resp.StatusCode == 501)) ||
+			(probe == probeRange && resp.StatusCode == 416) {
+			drainAndClose(resp.Body)
+			probe++
+			continue
+		}
+		if probe == probeRange && resp.StatusCode == 206 {
+			// One byte of a 200 resource: report it as the 200 it is.
+			resp.StatusCode = http.StatusOK
+			if total := rangeTotal(resp.Header.Get("Content-Range")); total > 0 {
+				resp.Header.Set("Content-Length", strconv.FormatInt(total, 10))
 			}
 		}
 
@@ -382,6 +412,13 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 		contentType := resp.Header.Get("Content-Type")
 		isHTML := strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml")
 
+		if isHTML && probe != probeNone {
+			// An image-looking URL that serves a page: fetch it as a page.
+			drainAndClose(resp.Body)
+			probe = probeNone
+			continue
+		}
+
 		var html string
 		var transferSize int64
 		if isHTML {
@@ -442,6 +479,27 @@ func FetchPage(ctx context.Context, rawURL string, opts FetchOptions) types.Fetc
 			BodySize:       int64(len(html)), // uncompressed HTML body size
 		}
 	}
+}
+
+// Image-URL probe steps in FetchPage, in fallback order.
+const (
+	probeHead  = iota + 1 // HEAD
+	probeRange            // GET with Range: bytes=0-0
+	probeNone             // plain GET
+)
+
+// rangeTotal returns the full size from a Content-Range header
+// ("bytes 0-0/12345"), or 0 when unknown.
+func rangeTotal(cr string) int64 {
+	i := strings.LastIndexByte(cr, '/')
+	if i < 0 {
+		return 0
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(cr[i+1:]), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // FetchHead performs a HEAD request, tracking redirects and extracting SEO headers.

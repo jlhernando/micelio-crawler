@@ -130,6 +130,7 @@ func RunCoreAnalysisWithGraph(ctx context.Context, pages []*types.PageData, cfg 
 	for _, p := range pages {
 		p.Anchors = nil
 		p.Images = nil
+		p.ImageSummary = nil
 		p.StructuredData = nil
 		p.SchemaValidation = nil
 		p.RenderDiffs = nil

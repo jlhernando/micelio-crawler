@@ -8,7 +8,7 @@
   let reasons = $derived(coverage?.reasons || []);
   let excluded = $derived(reasons.reduce((n, r) => n + r.count, 0));
   let maxExcluded = $derived(Math.max(...reasons.map(r => r.count), 1));
-  const labels: Record<string,string> = {depth:'Maximum depth',page_limit:'Page limit',domain:'Outside allowed domains',include_filter:'No include rule matched',exclude_filter:'Exclude rule matched',robots:'Blocked by robots.txt',path_budget:'Path budget',invalid_url:'Invalid URL'};
+  const labels: Record<string,string> = {depth:'Maximum depth',page_limit:'Page limit',domain:'Outside allowed domains',include_filter:'No include rule matched',exclude_filter:'Exclude rule matched',robots:'Blocked by robots.txt',path_budget:'Path budget',invalid_url:'Invalid URL',linked_image:'Linked image (not requested)'};
   let config = $derived((job?.config || {}) as Record<string, unknown>);
   const number = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
   let limit = $derived(number(config.maxPages ?? config.limit));
@@ -22,6 +22,8 @@
     { label: 'HTTP errors', count: errors, note: 'Recorded 4xx and 5xx responses', color: C.danger },
     { label: 'Robots blocked', count: coverage?.final ? reasons.filter(r => r.reason === 'robots').reduce((n,r) => n+r.count,0) : number(stats.robotsBlockedCount), note: 'Recorded blocks only; not all excluded URLs', color: C.warning },
   ]);
+  let robotsValue = $derived(typeof config.respectRobots === 'boolean' ? config.respectRobots ? 'Yes' : 'No' : 'Unknown');
+  let uncrawledSitemap = $derived(sitemap && Array.isArray(sitemap.uncrawledSitemapUrls) ? sitemap.uncrawledSitemapUrls.length : null);
   let max = $derived(Math.max(pageCount, ...rows.map(r => r.count ?? 0), 1));
 </script>
 <section class="chart-panel" aria-label="Crawl coverage">
@@ -32,12 +34,12 @@
       <p class="chart-note">Counts can overlap. These bars do not measure whole-site coverage.</p>
     </div>
     <div class="scope-detail">
-      <dl>
-        <div><dt>Mode</dt><dd>{config.mode || job?.mode || 'Unknown'}</dd></div>
-        <div><dt>Page limit</dt><dd>{limit === null ? 'Unknown' : limit === 0 ? 'Default not recorded' : limit.toLocaleString()}</dd></div>
-        <div><dt>Maximum depth</dt><dd>{depth === null ? 'Unknown' : depth === 0 ? 'Default not recorded' : depth}</dd></div>
-        <div><dt>Respect robots.txt</dt><dd>{typeof config.respectRobots === 'boolean' ? config.respectRobots ? 'Yes' : 'No' : 'Unknown'}</dd></div>
-        <div><dt>Sitemap URLs not crawled</dt><dd>{sitemap && Array.isArray(sitemap.uncrawledSitemapUrls) ? sitemap.uncrawledSitemapUrls.length.toLocaleString() : 'Not measured'}</dd></div>
+      <dl class="scope-tiles">
+        <div><dt>Mode</dt><dd class:muted={!(config.mode || job?.mode)}>{config.mode || job?.mode || 'Unknown'}</dd></div>
+        <div><dt>Page limit</dt><dd class:muted={!limit}>{limit === null ? 'Unknown' : limit === 0 ? 'Default not recorded' : limit.toLocaleString()}</dd></div>
+        <div><dt>Maximum depth</dt><dd class:muted={!depth}>{depth === null ? 'Unknown' : depth === 0 ? 'Default not recorded' : depth}</dd></div>
+        <div><dt>Respect robots.txt</dt><dd class:warn={robotsValue === 'No'} class:muted={robotsValue === 'Unknown'}>{robotsValue}</dd></div>
+        <div><dt>Sitemap URLs not crawled</dt><dd class:warn={(uncrawledSitemap ?? 0) > 0} class:muted={uncrawledSitemap === null}>{uncrawledSitemap === null ? 'Not measured' : uncrawledSitemap.toLocaleString()}</dd></div>
       </dl>
       <p class="scope-note">{limitReached ? 'The stored page count reached the configured limit. More URLs may remain outside this crawl.' : 'Finishing a crawl does not prove that the entire site was visited.'}</p>
       <p class="chart-note">{coverage ? 'Exclusion decisions are saved for the latest execution. Resumed executions do not include earlier decisions. Whole-site coverage is unknown.' : 'Exclusion reasons were not recorded for this crawl. Run a new crawl to collect them. Whole-site coverage is unknown.'}</p>
@@ -48,7 +50,7 @@
     <div class="chart-panel-heading"><div><h3>Saved exclusion reasons</h3><p>{coverage ? `${excluded.toLocaleString()} rejected attempts · ${coverage.final ? 'final snapshot' : 'partial checkpoint'}` : 'Not recorded'}</p></div></div>
     {#if coverage}
       <p class="chart-note mb-4">Attempts, not unique URLs. The first failing check is recorded; repeated discoveries can count again. Already queued duplicates are omitted. Up to 5 example URLs per reason and rule.</p>
-      <dl class="mb-4"><div><dt>URLs admitted to the queue</dt><dd>{coverage.acceptedUrls.toLocaleString()}</dd></div><div><dt>Still queued at snapshot</dt><dd>{coverage.pendingUrls.toLocaleString()}</dd></div></dl>
+      <dl class="scope-tiles queue-tiles mb-4"><div><dt>URLs admitted to the queue</dt><dd>{coverage.acceptedUrls.toLocaleString()}</dd></div><div><dt>Still queued at snapshot</dt><dd>{coverage.pendingUrls.toLocaleString()}</dd></div></dl>
       {#each reasons as reason}
         <details class="exclusion-row">
           <summary><span>{labels[reason.reason] || reason.reason}{#if reason.rule}<small>{reason.rule}</small>{/if}</span><span class="reason-bar" aria-hidden="true"><i style:width={`${reason.count/maxExcluded*100}%`}></i></span><strong>{reason.count.toLocaleString()}</strong></summary>
@@ -73,8 +75,16 @@
   .chart-panel-heading {flex-wrap:wrap;}
   .track { height:10px; background:var(--color-surface-3); border-radius:4px; overflow:hidden; margin:8px 0; }
   .track i {display:block;height:100%;border-radius:4px;}
-  dl div {display:flex;justify-content:space-between;gap:16px;font-size:12px;padding:7px 0;border-bottom:1px solid var(--color-border);}
-  dt {color:var(--color-fg-2);} dd {text-align:right;}
+  .scope-tiles {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
+  .scope-tiles > div {min-width:0;background:var(--color-surface-1);border:1px solid var(--color-border);border-radius:8px;padding:11px 13px;}
+  .scope-tiles > div:last-child:nth-child(odd) {grid-column:1 / -1;}
+  .scope-tiles dt {font-size:11px;color:var(--color-fg-2);line-height:1.4;}
+  .scope-tiles dd {margin-top:5px;font-size:15px;font-weight:550;letter-spacing:-.2px;line-height:1.35;font-variant-numeric:tabular-nums;overflow-wrap:break-word;}
+  .scope-tiles dd.warn {color:var(--color-warning);}
+  /* Placeholder values (Unknown, Not measured, Default not recorded) are not data. */
+  .scope-tiles dd.muted {color:var(--color-fg-2);font-weight:400;}
+  .queue-tiles {grid-template-columns:repeat(auto-fill,minmax(180px,240px));}
   .scope-note {font-size:13px;line-height:1.6;margin:16px 0 8px;}
-  @media(max-width:700px){.coverage-grid{grid-template-columns:1fr;gap:20px;}}
+  @media(max-width:700px){.coverage-grid{grid-template-columns:1fr;gap:20px;} .scope-tiles{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));} .queue-tiles{grid-template-columns:repeat(auto-fill,minmax(180px,240px));}}
+  @media(max-width:360px){.scope-tiles{grid-template-columns:1fr;} .queue-tiles{grid-template-columns:repeat(auto-fill,minmax(180px,240px));}}
 </style>

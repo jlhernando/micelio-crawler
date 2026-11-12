@@ -39,7 +39,7 @@ func TestDeferredAnalysisDoesNotRaceHandlers(t *testing.T) {
 		defer close(finished)
 		defer done()
 		cfg := analysis.PostProcessConfig{SeedURL: "https://ex.com/", LinkIntelligence: true}
-		m.runDeferredAnalysis(ctx, "race", res, cfg, types.CrawlStats{}, "", nil)
+		m.runDeferredAnalysis(ctx, "race", res, cfg, types.CrawlStats{}, "", nil, nil)
 	}()
 	for running := true; running; {
 		select {
@@ -103,7 +103,7 @@ func TestDeleteCancelsExternalCheck(t *testing.T) {
 	go func() {
 		defer close(finished)
 		defer done()
-		m.runDeferredAnalysis(ctx, job.ID, res, analysis.PostProcessConfig{}, types.CrawlStats{}, "", check)
+		m.runDeferredAnalysis(ctx, job.ID, res, analysis.PostProcessConfig{}, types.CrawlStats{}, "", check, nil)
 	}()
 
 	select {

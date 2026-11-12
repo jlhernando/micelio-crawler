@@ -128,6 +128,7 @@ failures.
 | `--js` | off | Render pages in headless Chrome |
 | `--render-block-resources` | on | Block images, fonts, and analytics while rendering |
 | `--render-timeout <seconds>` | `30` | JS-render timeout |
+| `--download-images` | off | JS rendering loads images and linked image URLs (`<a href="x.jpg">`) are checked with HEAD. Off: Chrome blocks images and linked images are not requested. `--page-weight` sizes images either way |
 
 ### Technical, content, and link analysis
 

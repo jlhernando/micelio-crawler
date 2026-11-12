@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/net/html"
 
 	"github.com/micelio/micelio/internal/types"
 	"github.com/micelio/micelio/internal/urlutil"
@@ -24,14 +25,50 @@ func extractBodyText(doc *goquery.Document) string {
 		return ""
 	}
 
-	// Work on a clone to avoid mutating the shared document
-	bodyClone := body.Clone()
-	bodyClone.Find("script, style, noscript, svg").Remove()
-
-	text := bodyClone.Text()
+	text := textSkipping(body.Nodes, skipBodyTextTag, 0)
 	// Normalize whitespace
 	text = strings.Join(strings.Fields(text), " ")
 	return strings.TrimSpace(text)
+}
+
+func skipBodyTextTag(tag string) bool {
+	return tag == "script" || tag == "style" || tag == "noscript" || tag == "svg"
+}
+
+func skipBylineTag(tag string) bool {
+	return tag == "script" || tag == "style" || tag == "noscript"
+}
+
+// textSkipping returns the same string as cloning nodes, removing every
+// descendant element whose tag matches skip (Find(tags).Remove()) and calling
+// Text(), without copying the DOM. limit > 0 stops once at least limit bytes
+// are collected, so text[:limit] is unchanged.
+func textSkipping(nodes []*html.Node, skip func(string) bool, limit int) string {
+	var b strings.Builder
+	var walk func(n *html.Node) bool
+	walk = func(n *html.Node) bool {
+		if n.Type == html.TextNode {
+			b.WriteString(n.Data)
+			if limit > 0 && b.Len() >= limit {
+				return false
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if c.Type == html.ElementNode && skip(c.Data) {
+				continue
+			}
+			if !walk(c) {
+				return false
+			}
+		}
+		return true
+	}
+	for _, n := range nodes {
+		if !walk(n) {
+			break
+		}
+	}
+	return b.String()
 }
 
 func countWords(text string) int {
@@ -195,13 +232,40 @@ func detectSoft404Text(doc *goquery.Document, bodyText string) string {
 // itemURLRe matches links to product or classified-ad detail pages, used to
 // tell an empty listing from a full one. Same families as analysis'
 // productURLRe and adDetailURLRe.
-var itemURLRe = regexp.MustCompile(`(?i)/products?/[^/?#]+|/items?/[^/?#]+|/p/[^/?#]+|/pd/[^/?#]+|/sku/|/dp/[^/?#]+|` +
-	`/(oferta|offer|annonce|anuncio|anunt|oglas|ilan|inserat)/[^/?#]+|/d/oferta/|/marketplace/item/|/(itm|item|listing)/[^/]*-?\d{5,}|[-_]ID[0-9A-Za-z]{4,}\.html`)
+// It is split in two so an unanchored scan of every link is avoided: all
+// alternatives but the last start with '/', so they are tried anchored at
+// each '/' whose next byte can start one of them (itemURLStart, derived from
+// the regexp; non-ASCII bytes are tried when a Unicode case fold can start a
+// match); the "-ID...html" alternative runs only when the link contains its
+// required literal (itemURLIDLit, ".html").
+var (
+	itemURLAfterSlash = `(?i)(?:products?/[^/?#]+|items?/[^/?#]+|p/[^/?#]+|pd/[^/?#]+|sku/|dp/[^/?#]+|` +
+		`(oferta|offer|annonce|anuncio|anunt|oglas|ilan|inserat)/[^/?#]+|d/oferta/|marketplace/item/|(itm|item|listing)/[^/]*-?\d{5,})`
+	itemURLSlashRe = regexp.MustCompile(`(?i)^/` + itemURLAfterSlash)
+	// itemURLStart: bytes that can follow the '/' in a match, derived from
+	// the regexp so the gate follows any edit to it.
+	itemURLStart = firstBytes(itemURLAfterSlash)
+	itemURLIDRe  = regexp.MustCompile(`(?i)[-_]ID[0-9A-Za-z]{4,}\.html`)
+	// itemURLIDLit: a literal every itemURLIDRe match contains ("html").
+	itemURLIDLit = requiredLiteral(itemURLIDRe.String())
+)
+
+func isItemURL(l string) bool {
+	for i := 0; i < len(l); i++ {
+		if l[i] != '/' || i+1 >= len(l) {
+			continue
+		}
+		if itemURLStart[l[i+1]] && itemURLSlashRe.MatchString(l[i:]) {
+			return true
+		}
+	}
+	return containsFoldASCII(l, itemURLIDLit) && itemURLIDRe.MatchString(l)
+}
 
 func countItemLinks(links []string) int {
 	n := 0
 	for _, l := range links {
-		if itemURLRe.MatchString(l) {
+		if isItemURL(l) {
 			n++
 		}
 	}
@@ -565,10 +629,10 @@ func extractContentRichness(doc *goquery.Document, headings types.HeadingData, w
 // --- Listing signal extraction ---
 
 // listingClassPatterns matches CSS classes/IDs commonly used for listing containers.
-var listingClassPatterns = regexp.MustCompile(`(?i)(search-results|product-list|listing|results-list|item-list|catalog|grid-view|card-list|offers-list|search-list|product-grid)`)
+var listingClassPatterns = newFoldWords("search-results", "product-list", "listing", "results-list", "item-list", "catalog", "grid-view", "card-list", "offers-list", "search-list", "product-grid")
 
 // listingDataAttrPatterns matches data-* attribute values indicating listing containers.
-var listingDataAttrPatterns = regexp.MustCompile(`(?i)(results|listing|catalog)`)
+var listingDataAttrPatterns = newFoldWords("results", "listing", "catalog")
 
 // maxAttrLen caps class/id attribute length to avoid slow regex matching on adversarial HTML.
 const maxAttrLen = 1000
@@ -653,10 +717,10 @@ func extractListingSignals(doc *goquery.Document) int {
 // --- Ad detail signal extraction ---
 
 // adDetailClassPatterns matches CSS classes/IDs for classifieds/marketplace ad detail pages.
-var adDetailClassPatterns = regexp.MustCompile(`(?i)(contact-seller|message-seller|seller-info|seller-profile|seller-card|ad-params|ad-attributes|report-ad|flag-ad|ad-gallery|offer-params|offer-details|listing-details|ad-description|seller-details|vendor-info)`)
+var adDetailClassPatterns = newFoldWords("contact-seller", "message-seller", "seller-info", "seller-profile", "seller-card", "ad-params", "ad-attributes", "report-ad", "flag-ad", "ad-gallery", "offer-params", "offer-details", "listing-details", "ad-description", "seller-details", "vendor-info")
 
 // ecommerceClassPatterns matches CSS classes/IDs for e-commerce product pages (negative signal).
-var ecommerceClassPatterns = regexp.MustCompile(`(?i)(add-to-cart|add-to-bag|add-to-basket|buy-now|buy-it-now|checkout|shopping-cart|cart-icon|quantity-selector|qty-selector|product-variants|size-selector|color-selector)`)
+var ecommerceClassPatterns = newFoldWords("add-to-cart", "add-to-bag", "add-to-basket", "buy-now", "buy-it-now", "checkout", "shopping-cart", "cart-icon", "quantity-selector", "qty-selector", "product-variants", "size-selector", "color-selector")
 
 // extractAdDetailSignals returns a net score: ad detail signals minus e-commerce signals.
 // Positive = classifieds/marketplace ad, negative = e-commerce product page.
@@ -724,6 +788,11 @@ var buyButtonText = regexp.MustCompile(`(?i)^\s*(add to (cart|basket|bag)|buy no
 // productItemClass matches classes of repeated product cards in a grid.
 var productItemClass = regexp.MustCompile(`(?i)(^|[\s_-])product[-_]?(pod|card|item|tile|box|thumb)s?($|[\s_-])`)
 
+// productItemLit is a literal every productItemClass match contains, checked
+// before the regexp runs. Derived from the regexp (panics at start-up if an
+// edit removes it), so the gate cannot drift from the pattern.
+var productItemLit = requiredLiteral(productItemClass.String())
+
 // extractCommerceSignals counts product cards plus the buy buttons and prices
 // that sit outside any card. A product page shows its own price and buy button
 // outside the "related" or "recently viewed" cards; a listing keeps every
@@ -764,7 +833,9 @@ func isProductCard(s *goquery.Selection) bool {
 	if !ok || len(cls) >= maxAttrLen {
 		return false
 	}
-	if productItemClass.MatchString(cls) {
+	// No letter of "product" has a non-ASCII case fold, so the regexp
+	// cannot match a class without it.
+	if containsFoldASCII(cls, productItemLit) && productItemClass.MatchString(cls) {
 		return true
 	}
 	if tag := goquery.NodeName(s); tag == "li" || tag == "article" {
@@ -796,9 +867,9 @@ var (
 	authorityDomains = map[string]bool{
 		"edu": true, "gov": true, "org": true,
 	}
-	aboutPaths    = regexp.MustCompile(`(?i)^/(about|about-us|team|who-we-are)(/|$)`)
-	contactPaths  = regexp.MustCompile(`(?i)^/(contact|contact-us|get-in-touch)(/|$)`)
-	authorPaths   = regexp.MustCompile(`(?i)^/(author|authors|contributor|writer)s?/`)
+	aboutPaths     = regexp.MustCompile(`(?i)^/(about|about-us|team|who-we-are)(/|$)`)
+	contactPaths   = regexp.MustCompile(`(?i)^/(contact|contact-us|get-in-touch)(/|$)`)
+	authorPaths    = regexp.MustCompile(`(?i)^/(author|authors|contributor|writer)s?/`)
 	editorialPaths = regexp.MustCompile(`(?i)^/(editorial|editorial-policy|fact-check|corrections|ethics|standards)(/|$)`)
 	bylinePattern  = regexp.MustCompile(`(?i:by|author|written by|reviewed by)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)`)
 )
@@ -869,9 +940,7 @@ func extractEEAT(doc *goquery.Document, sd []types.StructuredDataEntry, anchors 
 
 	// 3. Visible byline pattern (check first 2KB of body text)
 	if !e.HasAuthor {
-		bodyClone := doc.Find("body").Clone()
-		bodyClone.Find("script, style, noscript").Remove()
-		text := bodyClone.Text()
+		text := textSkipping(doc.Find("body").Nodes, skipBylineTag, 2048)
 		if len(text) > 2048 {
 			text = text[:2048]
 		}
@@ -928,7 +997,7 @@ func extractEEAT(doc *goquery.Document, sd []types.StructuredDataEntry, anchors 
 // --- Passage readiness extraction ---
 
 var (
-	definitionPattern = regexp.MustCompile(`(?i)(is a|is an|refers to|defined as|means|is the)`)
+	definitionPattern = newFoldWords("is a", "is an", "refers to", "defined as", "means", "is the")
 	faqHeadingPattern = regexp.MustCompile(`(?i)^(what|how|why|when|where|who|can|does|is|are|do|should|will|which)\s`)
 )
 
@@ -1180,7 +1249,7 @@ func extractConsensusReadiness(doc *goquery.Document, bodyText string, wordCount
 
 // googlebotHTMLLimit is Googlebot's maximum fetch size for HTML documents (uncompressed).
 // Announced in https://developers.google.com/search/blog/2026/03/crawler-blog-post
-const googlebotHTMLLimit = 2 * 1024 * 1024
+const googlebotHTMLLimit = types.GooglebotHTMLLimit
 
 // truncationElement defines an SEO element to check for Googlebot truncation risk.
 type truncationElement struct {
@@ -1246,7 +1315,10 @@ func ExtractResourceRefs(htmlContent, pageURL string) []types.ResourceEntry {
 	if err != nil {
 		return nil
 	}
+	return resourceRefsFromDoc(doc, pageURL)
+}
 
+func resourceRefsFromDoc(doc *goquery.Document, pageURL string) []types.ResourceEntry {
 	seen := make(map[string]bool)
 	var resources []types.ResourceEntry
 

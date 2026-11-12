@@ -83,6 +83,7 @@ var overlayFields = map[string]copyField{
 	"js":                     func(d, s *types.CrawlConfig) { d.JSRendering = s.JSRendering },
 	"render-block-resources": func(d, s *types.CrawlConfig) { d.RenderBlockRes = s.RenderBlockRes },
 	"render-timeout":         func(d, s *types.CrawlConfig) { d.RenderTimeoutSec = s.RenderTimeoutSec },
+	"download-images":        func(d, s *types.CrawlConfig) { d.DownloadImages = s.DownloadImages },
 	"snippet":                func(d, s *types.CrawlConfig) { d.SnippetPaths = s.SnippetPaths },
 
 	"ngrams":               func(d, s *types.CrawlConfig) { d.Ngrams = s.Ngrams },

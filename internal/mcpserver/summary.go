@@ -47,6 +47,8 @@ type summaryStats struct {
 	OrphanPages               []string   `json:"orphanPages"`
 	TotalOrphanPages          int        `json:"totalOrphanPages"`
 	ThinContentPages          []urlItem  `json:"thinContentPages"`
+	HTMLOver2MBPages          []urlItem  `json:"htmlOver2mbPages"`
+	TotalHTMLOver2MBPages     int        `json:"totalHtmlOver2mbPages"`
 	TotalThinContentPages     int        `json:"totalThinContentPages"`
 	NonHTTPSPages             []string   `json:"nonHttpsPages"`
 	TotalNonHTTPSPages        int        `json:"totalNonHttpsPages"`
@@ -236,6 +238,7 @@ func issueDefs(s summaryStats) []issueDef {
 		{id: "long-redirect-chains", label: "redirect chains with several hops", count: listCount(s.TotalLongRedirectChains, len(s.LongRedirectChains)), samples: urls(s.LongRedirectChains)},
 		{id: "orphan-pages", label: "pages no crawled page links to", count: listCount(s.TotalOrphanPages, len(s.OrphanPages)), samples: first3(s.OrphanPages)},
 		{id: "thin-content", label: "pages with very little text", count: listCount(s.TotalThinContentPages, len(s.ThinContentPages)), samples: urls(s.ThinContentPages)},
+		{id: "html-over-2mb", label: "HTML over 2 MB: Googlebot stops reading at 2 MB, content and links after that are not indexed", count: listCount(s.TotalHTMLOver2MBPages, len(s.HTMLOver2MBPages)), samples: urls(s.HTMLOver2MBPages), filter: map[string]string{"issue": "html-over-2mb"}},
 		{id: "non-https", label: "pages not served over HTTPS", count: listCount(s.TotalNonHTTPSPages, len(s.NonHTTPSPages)), samples: first3(s.NonHTTPSPages)},
 		{id: "mixed-content", label: "HTTPS pages loading HTTP resources", count: len(s.MixedContentPages), samples: first3(s.MixedContentPages)},
 		{id: "broken-external-links", label: "external links that are broken", count: len(s.BrokenExternalLinks), samples: urls(s.BrokenExternalLinks)},

@@ -43,6 +43,7 @@
     defaultJsRendering: boolean;
     defaultRespectRobots: boolean;
     defaultShowBlockedInternal: boolean;
+    downloadImages: boolean;
     alertWebhookUrl: string;
     alertSlackUrl: string;
     alertEmailHost: string;
@@ -106,6 +107,7 @@
     defaultJsRendering: false,
     defaultRespectRobots: true,
     defaultShowBlockedInternal: false,
+    downloadImages: false,
     alertWebhookUrl: '',
     alertSlackUrl: '',
     alertEmailHost: '',
@@ -462,6 +464,15 @@
           JavaScript Rendering
         </label>
       </div>
+    </CollapsibleSection>
+
+    <!-- Images -->
+    <CollapsibleSection title="Images">
+      <label class="flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={bool('downloadImages')} onchange={(e) => set('downloadImages', (e.target as HTMLInputElement).checked)} class="w-4 h-4 accent-accent" />
+        Download images
+      </label>
+      <p class="text-xs text-fg-2 mt-2">Off (recommended): JS rendering blocks images and linked image URLs (a link to a .jpg) are not requested. On: JS rendering loads images and linked images are checked with a HEAD request. Page weight always asks each image's size (HEAD), so its totals stay comparable with Lighthouse. Used by New Crawl, schedules and API crawls that do not say otherwise.</p>
     </CollapsibleSection>
 
     <!-- Robots.txt Defaults -->

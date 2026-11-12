@@ -135,6 +135,10 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 		}
 
 		// Images
+		if p.ImageSummary != nil {
+			stats.TotalImages += p.ImageSummary.Total
+			stats.ImagesMissingAlt += p.ImageSummary.NoAltAttr + p.ImageSummary.EmptyAlt
+		}
 		for _, img := range p.Images {
 			stats.TotalImages++
 			if img.Alt == nil || *img.Alt == "" {
@@ -564,6 +568,9 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 	if len(stats.ThinContentPages) > 50 {
 		stats.ThinContentPages = stats.ThinContentPages[:50]
 	}
+
+	// HTML over Googlebot's 2 MB fetch limit (content after it is not indexed)
+	stats.HTMLOver2MBPages, stats.TotalHTMLOver2MBPages = HTMLOver2MB(pages)
 
 	// Non-descriptive anchors: cap at 50
 	if len(stats.NonDescriptiveAnchors) > 50 {

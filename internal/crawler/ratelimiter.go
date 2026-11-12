@@ -181,6 +181,15 @@ func (h *hostRateLimiter) bucket(host string) *tokenBucket {
 	return b
 }
 
+// knows reports whether the crawl already sent requests to host (it has a
+// bucket for it).
+func (h *hostRateLimiter) knows(host string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, ok := h.buckets[strings.ToLower(host)]
+	return ok
+}
+
 // Wait blocks until a request to rawURL's host may be sent. The caller must
 // call sent once the request is on the wire (see tokenBucket.Wait); pace and
 // pacedDo do that for HTTP requests.

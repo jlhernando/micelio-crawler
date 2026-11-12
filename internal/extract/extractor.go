@@ -32,6 +32,14 @@ type ExtractionOptions struct {
 
 // ExtractPageData parses HTML and produces a PageData struct.
 func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
+	page, _ := ExtractPageDataWithRefs(html, opts, false)
+	return page
+}
+
+// ExtractPageDataWithRefs is ExtractPageData that, when withRefs is set, also
+// returns what ExtractResourceRefs(html, finalURL-or-pageURL) would, read
+// from the same parsed document so the HTML is parsed once instead of twice.
+func ExtractPageDataWithRefs(html string, opts ExtractionOptions, withRefs bool) (types.PageData, []types.ResourceEntry) {
 	baseURL := opts.FinalURL
 	if baseURL == "" {
 		baseURL = opts.PageURL
@@ -45,7 +53,21 @@ func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
 			StatusCode: opts.StatusCode,
 			Depth:      opts.Depth,
 			Error:      fmt.Sprintf("HTML parse error: %v", err),
-		}
+		}, nil
+	}
+	return extractFromDoc(doc, html, opts, baseURL, withRefs)
+}
+
+// extractFromDoc runs every extraction step on one parsed document. The steps
+// share it and must only read it: body text and EEAT walk the live tree (no
+// Clone since the resource loop, Nov 2026), so a step that removed or edited
+// nodes would change the text, word count, n-grams and simhash of every
+// later step. TestExtractionDoesNotMutateDocument guards this.
+func extractFromDoc(doc *goquery.Document, html string, opts ExtractionOptions, baseURL string, withRefs bool) (types.PageData, []types.ResourceEntry) {
+	// Refs first, so they are exactly those of a fresh parse.
+	var refs []types.ResourceEntry
+	if withRefs {
+		refs = resourceRefsFromDoc(doc, baseURL)
 	}
 
 	page := types.PageData{
@@ -213,7 +235,7 @@ func ExtractPageData(html string, opts ExtractionOptions) types.PageData {
 		page.CustomSearches = runCustomSearches(html, opts.CustomSearches)
 	}
 
-	return page
+	return page, refs
 }
 
 // --- Headings ---
@@ -442,45 +464,68 @@ func extractImages(doc *goquery.Document, baseURL string) []types.ImageData {
 	var images []types.ImageData
 
 	doc.Find("img").Each(func(_ int, s *goquery.Selection) {
-		src, _ := s.Attr("src")
-		if src == "" {
-			// Try data-src for lazy-loaded images
-			src, _ = s.Attr("data-src")
-		}
-		if src != "" {
+		// src is stored as the page serves it (resolved against the page
+		// URL), query string included: tracking parameters can be part of a
+		// signed CDN URL, and a rewritten src would not be the image the
+		// page loads.
+		src, inlineBytes := imageSrc(s)
+		if src != "" && !strings.HasPrefix(src, "data:") {
 			src = resolveRef(baseURL, src)
 		}
 
-		_, hasAlt := s.Attr("alt")
-		altVal, _ := s.Attr("alt")
-		altLen := len(altVal)
-
-		width, hasWidth := s.Attr("width")
-		height, hasHeight := s.Attr("height")
-
-		img := types.ImageData{
-			Src:             src,
-			HasAltAttribute: hasAlt,
-			MissingAlt:      !hasAlt,
-			AltLength:       altLen,
-			AltTooLong:      altLen > 125,
-			MissingWidth:    !hasWidth,
-			MissingHeight:   !hasHeight,
+		// Only the reference is kept: src and the attributes the audits
+		// read. Missing alt/size and alt length are derived from these.
+		img := types.ImageData{Src: src, InlineBytes: inlineBytes}
+		if v, ok := s.Attr("alt"); ok {
+			img.Alt = &v
 		}
-		if hasAlt {
-			img.Alt = &altVal
+		if v, ok := s.Attr("width"); ok {
+			img.Width = &v
 		}
-		if hasWidth {
-			img.Width = &width
-		}
-		if hasHeight {
-			img.Height = &height
+		if v, ok := s.Attr("height"); ok {
+			img.Height = &v
 		}
 
 		images = append(images, img)
 	})
 
 	return images
+}
+
+// maxDataSrc: an inline data: URI up to this length is stored whole.
+const maxDataSrc = 128
+
+// maxDataHeader caps the "data:<mediatype>[;base64]" part kept of a longer one.
+const maxDataHeader = 64
+
+// imageSrc returns the image's address. Lazy-loading pages often put a
+// placeholder in src (empty or an inline data: URI) and the real image in
+// data-src or data-lazy-src: the real one wins.
+//
+// An inline data: URI longer than maxDataSrc keeps only its header (the
+// part before the comma, "data:image/gif;base64") and inlineBytes is the
+// length of the whole attribute. The stored value is a true prefix of what
+// the page serves, never a made-up URL, and inlineBytes says it was cut and
+// how big the inline image is. The payload can be kilobytes per image.
+func imageSrc(s *goquery.Selection) (src string, inlineBytes int) {
+	src = strings.TrimSpace(s.AttrOr("src", ""))
+	if src == "" || strings.HasPrefix(src, "data:") {
+		for _, attr := range [...]string{"data-src", "data-lazy-src"} {
+			if v := strings.TrimSpace(s.AttrOr(attr, "")); v != "" && !strings.HasPrefix(v, "data:") {
+				return v, 0
+			}
+		}
+	}
+	if strings.HasPrefix(src, "data:") && len(src) > maxDataSrc {
+		inlineBytes = len(src)
+		if i := strings.IndexByte(src, ','); i >= 0 {
+			src = src[:i]
+		}
+		if len(src) > maxDataHeader {
+			src = src[:maxDataHeader]
+		}
+	}
+	return src, inlineBytes
 }
 
 // --- Hreflang ---

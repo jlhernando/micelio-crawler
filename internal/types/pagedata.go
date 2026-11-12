@@ -96,6 +96,7 @@ type PageData struct {
 	JSErrors           []string                `json:"jsErrors,omitempty"`
 	SchemaValidation   []SchemaValidationEntry `json:"schemaValidation,omitempty"`
 	Images             []ImageData             `json:"images,omitempty"`
+	ImageSummary       *ImageSummary           `json:"-"` // analysis reloads: Images folded into counts (Images nil)
 	ExternalLinks      []string                `json:"externalLinks,omitempty"`
 	Security           SecurityData            `json:"security"`
 	ResponseTimeMs     int64                   `json:"responseTimeMs"`

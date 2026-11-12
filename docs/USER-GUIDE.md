@@ -156,6 +156,13 @@ does not create or supply API keys.
   1000 / delay pages per second whatever the concurrency: 200 ms allows up to
   5 pages/s, 1,000 ms allows 1 page/s. New Crawl shows the cap for the chosen
   delay.
+- **Download images** is off by default. Off: JS rendering blocks image
+  requests and links to image files (`<a href="photo.jpg">`) are not
+  requested (Crawl coverage lists them as `linked_image`). On: linked images
+  are checked with a HEAD request (then a 1-byte range request), never
+  downloaded in full. Set the default in **Settings → Images**; the CLI flag is
+  `--download-images`. Page weight sizes every `<img>` either way, so its totals
+  stay comparable with Lighthouse.
 
 ### Device
 
@@ -319,6 +326,13 @@ Available controls:
   appear in seconds: external links are checked afterwards, in the background.
   Results shows "Checking external links n / total" and adds the broken ones
   when done.
+- **Background work** (external link check, page weight, link intelligence)
+  shows as one strip at the top of Results. **Stop external link check** ends
+  only the network checks; link analysis still finishes. **Cancel background
+  analysis** stops all of it: the results you already see stay, and a note
+  says the analysis was interrupted. Cancel and Stop & Analyze also work
+  while this post-crawl work runs (before, they answered "crawl has
+  finished" and the work kept going).
 
 Running and paused crawls also appear in the sidebar, so concurrent jobs can be
 opened directly. Persisted crawls can be resumed after an app restart with their
@@ -758,6 +772,24 @@ Depending on the selected options, Micelio can produce:
 
 JSONL output streams as the crawl runs and can be gzip- or zstd-compressed.
 
+**Image entries changed in Nov 2026.** Each item of a page's `images` list now
+holds only `src`, `alt`, `width`, `height` and, for long inline images,
+`inlineBytes`. Scripts that read the JSONL should note:
+
+- `alt` is left out when the `<img>` has no alt attribute. Before, it was
+  written as `"alt": null`. An empty alt (`alt=""`) is still written as `""`.
+- The six derived keys `altLength`, `missingAlt`, `hasAltAttribute`,
+  `altTooLong`, `missingWidth` and `missingHeight` are no longer written.
+  Derive them from `alt`, `width` and `height` (alt too long = over 125 bytes).
+- `src` is the URL the page serves, resolved against the page URL, query
+  string included. Lazy-load placeholders give way to `data-src` or
+  `data-lazy-src`.
+- An inline `data:` image longer than 128 characters keeps only its header
+  (for example `data:image/png;base64`) and `inlineBytes` gives the length of
+  the whole attribute. Shorter ones are stored whole.
+
+Crawls stored before the change still load in the dashboard and import.
+
 `--no-db` disables automatic crawl database creation for CLI Spider crawls, but
 also removes persistence-dependent features such as resume. `--resume` and
 `--no-db` cannot be used together.
@@ -808,8 +840,16 @@ A compact list of what Micelio checks and computes, by area.
 ### Performance
 
 - PageSpeed Insights (lab data) and Chrome UX Report (field data).
-- Page weight from resource sizes (HEAD requests), with Googlebot 2 MB
-  truncation warnings.
+- Page weight from resource sizes (one HEAD request per unique resource),
+  with Googlebot 2 MB truncation warnings. In the dashboard the sizes are
+  measured after the results open (a "Measuring page weight" bar shows
+  progress) and the page weights fill in when done. Resources on the
+  crawled site and its subdomains (static.example.com) follow the crawl
+  delay; cookies and custom headers go only to the crawled host and allowed
+  domains. Resources on other hosts (CDNs,
+  image hosts) get at most 10 requests/s and 4 at once per host (6 on large
+  platforms), and a 429/503 pauses that host. Resources that could not be
+  sized count as 0 bytes and are counted in the stats.
 - Uncompressed HTML size per page.
 - Response time percentiles (p50, p90, p99).
 

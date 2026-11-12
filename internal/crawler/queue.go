@@ -85,6 +85,8 @@ type CrawlQueue struct {
 	mu              sync.Mutex
 	enforceInternal bool
 	pathOnlyFilters bool
+	// skipLinkedImages: see QueueOptions.SkipLinkedImages.
+	skipLinkedImages bool
 }
 
 // QueueOptions holds optional configuration for CrawlQueue.
@@ -94,6 +96,10 @@ type QueueOptions struct {
 	AllowedDomains  []string
 	EnforceInternal bool
 	PathOnlyFilters bool // match include/exclude patterns against path only (no query string)
+	// SkipLinkedImages drops discovered links (depth > 0) whose path ends in
+	// an image extension: <a href="x.jpg"> stays a reference on the linking
+	// page and is never requested. Set unless CrawlConfig.DownloadImages.
+	SkipLinkedImages bool
 }
 
 // NewCrawlQueue creates a new crawl queue rooted at seedURL.
@@ -119,6 +125,7 @@ func NewCrawlQueue(seedURL string, maxDepth, maxPages int, opts *QueueOptions) *
 		q.enforceInternal = opts.EnforceInternal
 		q.allowedDomains = opts.AllowedDomains
 		q.pathOnlyFilters = opts.PathOnlyFilters
+		q.skipLinkedImages = opts.SkipLinkedImages
 	}
 
 	return q
@@ -152,6 +159,9 @@ func (q *CrawlQueue) Enqueue(rawURL string, depth int, referrer *string) bool {
 	if q.seenLocked(normalized) {
 		return false
 	}
+	if q.linkedImageLocked(normalized, depth) {
+		return false
+	}
 	if depth > q.maxDepth {
 		q.recordExclusion("depth", "", normalized)
 		return false
@@ -179,6 +189,18 @@ func (q *CrawlQueue) Enqueue(rawURL string, depth int, referrer *string) bool {
 	return true
 }
 
+// linkedImageLocked reports (and records once) a discovered image link that
+// must not be fetched. It is marked seen without using a page-limit slot.
+// Caller holds q.mu.
+func (q *CrawlQueue) linkedImageLocked(normalized string, depth int) bool {
+	if !q.skipLinkedImages || depth == 0 || !types.HasImageExt(normalized) {
+		return false
+	}
+	q.visited[normalized] = struct{}{}
+	q.recordExclusion("linked_image", "", normalized)
+	return true
+}
+
 // EnqueueEntry adds a full QueueEntry to the queue, preserving all fields (including Requeues).
 // Used for restoring persisted entries on resume.
 func (q *CrawlQueue) EnqueueEntry(entry types.QueueEntry) bool {
@@ -190,6 +212,9 @@ func (q *CrawlQueue) EnqueueEntry(entry types.QueueEntry) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.seenLocked(normalized) {
+		return false
+	}
+	if q.linkedImageLocked(normalized, entry.Depth) {
 		return false
 	}
 	if entry.Depth > q.maxDepth {

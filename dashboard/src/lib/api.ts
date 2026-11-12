@@ -188,7 +188,7 @@ export const api = {
     ),
 
   getCrawlStats: (id: string) =>
-    request<{ stats: Record<string, unknown>; pageCount: number; analysisPending?: boolean; pagesReady?: boolean; loadingProgress?: number; externalCheck?: { loaded: number; total: number } }>('GET', `/api/crawl/${id}/stats`),
+    request<{ stats: Record<string, unknown>; pageCount: number; analysisPending?: boolean; pagesReady?: boolean; loadingProgress?: number; externalCheck?: { loaded: number; total: number }; pageWeight?: { loaded: number; total: number } }>('GET', `/api/crawl/${id}/stats`),
 
   getFilteredStats: (id: string, template: string) =>
     request<{ stats: Record<string, unknown>; pageCount: number; scopedKeys?: string[]; template?: string }>('GET', `/api/crawl/${id}/stats/filtered?template=${encodeURIComponent(template)}`),

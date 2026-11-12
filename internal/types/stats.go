@@ -232,6 +232,11 @@ type CrawlStats struct {
 	// Automatic segmentation (no user rules): per-dimension value breakdown.
 	AutoSegmentStats     []SegmentDimensionStats `json:"autoSegmentStats,omitempty"`
 	TextAmountThresholds []int                   `json:"textAmountThresholds,omitempty"` // [low, high] word-count cut points
+
+	// HTML over Googlebot's 2 MB fetch limit: 2xx pages, biggest first,
+	// capped at 50. TotalHTMLOver2MBPages keeps the real count.
+	HTMLOver2MBPages      []HTMLSizeEntry `json:"htmlOver2mbPages,omitempty"`
+	TotalHTMLOver2MBPages int             `json:"totalHtmlOver2mbPages,omitempty"`
 }
 
 // SearchStat holds found/total for custom search.
@@ -247,6 +252,35 @@ type PageWeightStats struct {
 	OversizedPages      []URLBytesEntry              `json:"oversizedPages"`
 	TruncationRiskPages []URLBytesEntry              `json:"truncationRiskPages"` // HTML body > 2MB (Googlebot limit)
 	AvgTotalBytes       int64                        `json:"avgTotalBytes"`
+	// The resource size check (one HEAD per unique resource URL). A resource
+	// without a size counts as 0 bytes; ResourcesUnsized says how many.
+	ResourcesTotal   int      `json:"resourcesTotal,omitempty"`
+	ResourcesSized   int      `json:"resourcesSized,omitempty"`
+	ResourcesUnsized int      `json:"resourcesUnsized,omitempty"` // no size, rate-limited or not asked
+	RateLimitedHosts []string `json:"rateLimitedHosts,omitempty"` // kept answering 429/503
+}
+
+// GooglebotHTMLLimit is how much of an HTML file Googlebot (Google Search)
+// fetches: 2 MB, counted on the uncompressed bytes. Content past it is not
+// fetched, rendered or indexed; the page is not rejected. PDFs get 64 MB and
+// other Google fetchers 15 MB. The limit is per file: scripts, styles and
+// images are fetched separately with their own counter.
+// https://developers.google.com/search/blog/2026/03/crawler-blog-post
+const GooglebotHTMLLimit = 2 * 1024 * 1024
+
+// HTMLBodyReadCap is the most HTML the crawler reads per page. A page whose
+// BodySize equals it was cut by the crawler, so its real size is at least
+// this much.
+const HTMLBodyReadCap = 10 * 1024 * 1024
+
+// HTMLSizeEntry is a page whose HTML is over GooglebotHTMLLimit.
+type HTMLSizeEntry struct {
+	URL   string `json:"url"`
+	Bytes int64  `json:"bytes"` // decompressed HTML body size
+	// AtLeast: the body hit HTMLBodyReadCap, so Bytes is a lower bound.
+	AtLeast bool `json:"atLeast,omitempty"`
+	// CutElements are SEO elements found past the limit (Googlebot misses them).
+	CutElements []string `json:"cutElements,omitempty"`
 }
 
 // URLBytesEntry holds a URL with its byte size.

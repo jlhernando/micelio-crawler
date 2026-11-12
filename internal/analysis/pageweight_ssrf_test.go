@@ -19,8 +19,8 @@ func TestPlainHeadSizerBlocksPrivateAddresses(t *testing.T) {
 	}))
 	defer srv.Close()
 	target := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
-	if size, ok := plainHeadSizer("test")(context.Background(), target+"/img.png"); ok || size != 0 {
-		t.Errorf("sizer reached a loopback address: size=%d ok=%v", size, ok)
+	if r := plainHeadSizer("test")(context.Background(), target+"/img.png"); r.OK || r.Size != 0 {
+		t.Errorf("sizer reached a loopback address: %+v", r)
 	}
 	if hits.Load() != 0 {
 		t.Errorf("loopback server got %d requests", hits.Load())

@@ -14,18 +14,84 @@ type HeadingData struct {
 	H6 []string `json:"h6,omitempty"`
 }
 
-// ImageData holds SEO-relevant image information.
+// ImageData is the reference to one <img> on a page: where it points and
+// the attributes the audits read. The image itself is never downloaded for
+// it. Alt is nil when the alt attribute is absent; Width and Height are nil
+// when the attribute is absent. Src is the URL the page serves, resolved
+// against the page URL and otherwise unchanged (query string included).
+//
+// Crawls stored before Nov 2026 also carry altLength, missingAlt,
+// hasAltAttribute, altTooLong, missingWidth and missingHeight. They were all
+// derived from the three attributes, so they are no longer written; old rows
+// still decode (unknown keys are ignored) and the methods below give the
+// same answers.
 type ImageData struct {
-	Alt             *string `json:"alt"`
-	Width           *string `json:"width,omitempty"`
-	Height          *string `json:"height,omitempty"`
-	Src             string  `json:"src"`
-	AltLength       int     `json:"altLength,omitempty"`
-	MissingAlt      bool    `json:"missingAlt,omitempty"`
-	HasAltAttribute bool    `json:"hasAltAttribute"`
-	AltTooLong      bool    `json:"altTooLong,omitempty"`
-	MissingWidth    bool    `json:"missingWidth,omitempty"`
-	MissingHeight   bool    `json:"missingHeight,omitempty"`
+	Src    string  `json:"src"`
+	Alt    *string `json:"alt,omitempty"`
+	Width  *string `json:"width,omitempty"`
+	Height *string `json:"height,omitempty"`
+	// InlineBytes is set only for an inline data: URI too long to store:
+	// Src then holds its header ("data:image/png;base64") and InlineBytes
+	// the length of the whole src attribute.
+	InlineBytes int `json:"inlineBytes,omitempty"`
+}
+
+// AltTooLongLimit is the alt text length (bytes) above which alt is too long.
+const AltTooLongLimit = 125
+
+// MissingAlt reports an image without an alt attribute.
+func (i ImageData) MissingAlt() bool { return i.Alt == nil }
+
+// MissingDimensions reports an image without a width or height attribute
+// (layout shift risk).
+func (i ImageData) MissingDimensions() bool { return i.Width == nil || i.Height == nil }
+
+// ImageSummary is what post-crawl analysis reads from a page's Images
+// (counts, alt state, long alts in page order). Dashboard analysis reloads
+// keep it instead of the image list: images are ~1/3 of a reloaded crawl's
+// live heap and nothing after the reload needs more.
+type ImageSummary struct {
+	Total, NoAltAttr, EmptyAlt, NoDims int
+	LongAlt                            []ImageAltIssue // URL left empty: the page's URL
+}
+
+// SummarizeImages returns the summary of imgs (nil when there are none).
+func SummarizeImages(imgs []ImageData) *ImageSummary {
+	if len(imgs) == 0 {
+		return nil
+	}
+	s := &ImageSummary{Total: len(imgs)}
+	for _, img := range imgs {
+		switch {
+		case img.Alt == nil:
+			s.NoAltAttr++
+		case *img.Alt == "":
+			s.EmptyAlt++
+		case len(*img.Alt) > AltTooLongLimit:
+			s.LongAlt = append(s.LongAlt, ImageAltIssue{Src: img.Src, AltLength: len(*img.Alt)})
+		}
+		if img.MissingDimensions() {
+			s.NoDims++
+		}
+	}
+	return s
+}
+
+// ImageSummaryOf returns the page's image summary, from Images when the
+// page still holds them.
+func (p *PageData) ImageSummaryOf() *ImageSummary {
+	if p.ImageSummary != nil {
+		return p.ImageSummary
+	}
+	return SummarizeImages(p.Images)
+}
+
+// ImageCount is len(Images), also for pages reloaded with a summary.
+func (p *PageData) ImageCount() int {
+	if p.ImageSummary != nil {
+		return p.ImageSummary.Total
+	}
+	return len(p.Images)
 }
 
 // HreflangEntry represents a single hreflang annotation.

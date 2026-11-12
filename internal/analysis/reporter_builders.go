@@ -15,22 +15,17 @@ func buildImageAuditStats(pages []*types.PageData) *types.ImageAuditStats {
 		if p.StatusCode != 200 {
 			continue
 		}
-		for _, img := range p.Images {
-			audit.TotalImages++
-			if img.Alt == nil {
-				audit.MissingAltAttribute++
-			} else if *img.Alt == "" {
-				audit.EmptyAlt++
-			} else if len(*img.Alt) > 125 {
-				audit.AltTooLong = append(audit.AltTooLong, types.ImageAltIssue{
-					URL:       p.URL,
-					Src:       img.Src,
-					AltLength: len(*img.Alt),
-				})
-			}
-			if img.MissingWidth || img.MissingHeight {
-				audit.MissingDimensions++
-			}
+		sum := p.ImageSummaryOf()
+		if sum == nil {
+			continue
+		}
+		audit.TotalImages += sum.Total
+		audit.MissingAltAttribute += sum.NoAltAttr
+		audit.EmptyAlt += sum.EmptyAlt
+		audit.MissingDimensions += sum.NoDims
+		for _, issue := range sum.LongAlt {
+			issue.URL = p.URL
+			audit.AltTooLong = append(audit.AltTooLong, issue)
 		}
 	}
 	if audit.TotalImages == 0 {
@@ -471,7 +466,7 @@ func buildPageWeightStats(pages []*types.PageData) *types.PageWeightStats {
 			})
 		}
 		// Googlebot truncation risk: HTML body > 2MB (uncompressed)
-		if p.BodySize > 2*1024*1024 {
+		if p.BodySize > types.GooglebotHTMLLimit {
 			truncationRisk = append(truncationRisk, types.URLBytesEntry{
 				URL:        p.URL,
 				TotalBytes: p.BodySize,

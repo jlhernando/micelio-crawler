@@ -36,6 +36,7 @@
   import SegmentsView from '../lib/components/results/SegmentsView.svelte';
   import LinkStructure from '../lib/components/results/LinkStructure.svelte';
   import RenderComparison from '../lib/components/results/RenderComparison.svelte';
+  import BackgroundWorkControl from '../lib/components/results/BackgroundWorkControl.svelte';
   import type { SegmentDimension } from '../lib/segments';
 
   let { id }: { id: string } = $props();
@@ -47,8 +48,11 @@
   let crawlJob = $state<Record<string, unknown> | null>(null);
   let scopeUnavailable = $state(false);
   let analysisPending = $state(false);
+  // Link intelligence / embeddings still to come (Stop leaves them running).
+  let linkAnalysisPending = $state(false);
   // Background external link check after the crawl (null = not running).
   let externalCheck = $state<{ loaded: number; total: number } | null>(null);
+  let pageWeightCheck = $state<{ loaded: number; total: number } | null>(null);
   let pagesReady = $state(false);
   let loadingProgress = $state(0);
 
@@ -144,13 +148,29 @@
   let linkAnalysis = $derived((stats?.linkAnalysis as { deadEndPages: string[]; nofollowedInternalLinks: number; followedInternalLinks: number; linksToNonIndexable: { from: string; to: string }[] }) || null);
   let liStats = $derived((stats?.linkIntelligenceStats as Record<string, unknown>) || null);
 
+  function applyBackgroundState(data: Record<string, unknown>) {
+    analysisPending = (data.analysisPending as boolean) || false;
+    linkAnalysisPending = (data.linkAnalysisPending as boolean) || false;
+    externalCheck = (data.externalCheck as { loaded: number; total: number } | undefined) ?? null;
+    pageWeightCheck = (data.pageWeight as { loaded: number; total: number } | undefined) ?? null;
+  }
+
+  // After Stop/Cancel answers: re-read /stats so the background strip never
+  // stays stuck on a missed WebSocket event.
+  function refreshBackgroundState() {
+    api.getCrawlStats(id).then((data: Record<string, unknown>) => {
+      stats = data.stats as Record<string, unknown>;
+      pageCount = data.pageCount as number;
+      applyBackgroundState(data);
+    }).catch(() => {});
+  }
+
   onMount(() => {
     api.getCrawlStatus(id).then(data => crawlJob = data).catch(() => scopeUnavailable = true);
     api.getCrawlStats(id).then((data: Record<string, unknown>) => {
       stats = data.stats as Record<string, unknown>;
       pageCount = data.pageCount as number;
-      analysisPending = (data.analysisPending as boolean) || false;
-      externalCheck = (data.externalCheck as { loaded: number; total: number } | undefined) ?? null;
+      applyBackgroundState(data);
       // Preserve original template distribution for pills
       const s = data.stats as Record<string, unknown>;
       if (s?.templateTypeDistribution) {
@@ -169,6 +189,13 @@
       if (msg.type === 'analysis_progress' && msg.data?.crawlId === id) {
         if (msg.data.phase === 'external_check') {
           externalCheck = { loaded: (msg.data.loaded as number) || 0, total: (msg.data.total as number) || 0 };
+        } else if (msg.data.phase === 'page_weight') {
+          pageWeightCheck = { loaded: (msg.data.loaded as number) || 0, total: (msg.data.total as number) || 0 };
+        } else if (msg.data.phase === 'page_weight_done') {
+          pageWeightCheck = null;
+          api.getCrawlStats(id).then((data: Record<string, unknown>) => {
+            stats = data.stats as Record<string, unknown>;
+          });
         } else if (msg.data.phase === 'external_done') {
           externalCheck = null;
           api.getCrawlStats(id).then((data: Record<string, unknown>) => {
@@ -179,6 +206,7 @@
       if (msg.type === 'analysis_complete' && msg.data?.crawlId === id) {
         externalCheck = null;
         analysisPending = false;
+        linkAnalysisPending = false;
         // Re-fetch stats with link intelligence data
         api.getCrawlStats(id).then((data: Record<string, unknown>) => {
           stats = data.stats as Record<string, unknown>;
@@ -266,11 +294,38 @@
     {/if}
 
     <!-- Tab Navigation -->
-    {#if externalCheck && externalCheck.total > 0}
-      <div class="rounded-md border border-accent/30 bg-accent/5 px-4 py-2 flex items-center gap-3 text-sm" role="status">
-        <div class="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0"></div>
-        <span class="text-fg-1">Checking external links {externalCheck.loaded.toLocaleString()} / {externalCheck.total.toLocaleString()}…</span>
-        <span class="text-xs text-fg-2">Broken external links appear in Issues when done.</span>
+    {#if (externalCheck && externalCheck.total > 0) || (pageWeightCheck && pageWeightCheck.total > 0) || analysisPending}
+      {@const checking = externalCheck && externalCheck.total > 0 ? externalCheck : null}
+      {@const sizing = pageWeightCheck && pageWeightCheck.total > 0 ? pageWeightCheck : null}
+      <div class="rounded-md border border-accent/30 bg-accent/5 px-4 py-2 space-y-2 text-sm" data-testid="background-work">
+        {#if checking}
+          <div class="flex flex-wrap items-center gap-3" role="status">
+            <div class="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0"></div>
+            <span class="text-fg-1">Checking external links {checking.loaded.toLocaleString()} / {checking.total.toLocaleString()}…</span>
+            <span class="text-xs text-fg-2">Broken external links appear in Issues when done.</span>
+          </div>
+        {/if}
+        {#if sizing}
+          <div class="flex flex-wrap items-center gap-3" role="status" data-testid="page-weight-progress">
+            <div class="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0"></div>
+            <span class="text-fg-1">Measuring page weight: {sizing.loaded.toLocaleString()} / {sizing.total.toLocaleString()} resources…</span>
+            <span class="text-xs text-fg-2">Page weights fill in when done.</span>
+          </div>
+        {/if}
+        {#if analysisPending && !checking}
+          <div class="flex flex-wrap items-center gap-3" role="status">
+            <div class="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0"></div>
+            <span class="text-fg-1">Background analysis running…</span>
+            <span class="text-xs text-fg-2">{linkAnalysisPending ? 'Link intelligence, centrality and suggestions appear when done.' : 'Results update when done.'}</span>
+          </div>
+        {/if}
+        <BackgroundWorkControl
+          crawlId={id}
+          externalRunning={checking !== null}
+          pageWeightRunning={sizing !== null}
+          {linkAnalysisPending}
+          onSettled={refreshBackgroundState}
+        />
       </div>
     {/if}
     {#if typeof stats.analysisInterrupted === 'string' && stats.analysisInterrupted}
@@ -569,17 +624,6 @@
             </div>
           {/if}
         </div>
-
-        <!-- Analysis Pending Banner -->
-        {#if analysisPending}
-          <div class="rounded-md border border-accent/30 bg-accent/5 p-4 flex items-center gap-3">
-            <div class="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0"></div>
-            <div>
-              <div class="text-sm font-medium text-fg-1">Link analysis in progress</div>
-              <div class="text-xs text-fg-2">Link intelligence, centrality, and suggestions will appear automatically when complete.</div>
-            </div>
-          </div>
-        {/if}
 
         <!-- Link Intelligence -->
         {#if liStats}

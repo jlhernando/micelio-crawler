@@ -1471,9 +1471,14 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 	}
 
 	// Post-crawl: Page weight analysis
+	var pageWeightSum *analysis.PageWeightSummary
 	if config.PageWeight && len(result.ResourceRefs) > 0 {
 		fmt.Fprintf(os.Stderr, "  Analyzing page weight...\n")
-		analysis.ComputePageWeight(ctx, result.Pages, result.ResourceRefs, result.TransferSizes, config.Concurrency, result.ResourceSizer)
+		sum := analysis.ComputePageWeight(ctx, result.Pages, result.ResourceRefs, result.TransferSizes, analysis.PageWeightOptions{
+			Concurrency: config.Concurrency,
+			Sizer:       result.ResourceSizer,
+		})
+		pageWeightSum = &sum
 		result.ResourceRefs = nil
 		result.TransferSizes = nil
 		debug.FreeOSMemory()
@@ -1499,6 +1504,9 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 			ppCfg.InternalLinksIter = result.InternalLinksIter
 		}
 		stats, _ = analysis.RunPostCrawlAnalysis(postCtx, result.Pages, *ppCfg)
+		if pageWeightSum != nil {
+			pageWeightSum.Annotate(stats.PageWeightStats)
+		}
 	}
 
 	// Attach broken external links to stats

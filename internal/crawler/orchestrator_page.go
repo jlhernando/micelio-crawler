@@ -163,56 +163,6 @@ func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
 	}
 }
 
-// resourceSizer returns a page-weight sizer that HEAD-fetches resources with
-// the crawl client and waits on the per-host rate limiter. Cookies and custom
-// headers are only sent to the crawled site's own hosts, never to third-party
-// CDNs.
-func (s *crawlSession) resourceSizer() analysis.ResourceSizer {
-	opts := s.fetchOpts
-	opts.NoRetry = true
-	opts.Referrer = ""
-	opts.IfNoneMatch = ""
-	opts.IfModifiedSince = ""
-	thirdParty := opts
-	thirdParty.Cookies = ""
-	thirdParty.CustomHeaders = nil
-
-	internal := map[string]bool{}
-	if s.queue != nil {
-		internal[strings.ToLower(s.queue.SeedDomain())] = true
-	}
-	for _, d := range s.config.AllowedDomains {
-		internal[strings.ToLower(d)] = true
-	}
-	hostRL := s.hostRL
-	if hostRL != nil {
-		opts.Pace = hostRL.pace
-		thirdParty.Pace = hostRL.pace
-	}
-
-	return func(ctx context.Context, u string) (int64, bool) {
-		o := thirdParty
-		if p, err := url.Parse(u); err == nil && internal[strings.ToLower(p.Hostname())] {
-			o = opts
-		}
-		r := FetchHead(ctx, u, o)
-		if r.StatusCode == 429 || r.StatusCode == 503 {
-			if hostRL != nil {
-				pause, ok := RetryAfterDuration(r.Headers["retry-after"], MaxServerRetryAfter)
-				if !ok {
-					pause = retryBackoff(0)
-				}
-				hostRL.Pause(u, pause)
-			}
-			return 0, false
-		}
-		if r.Error != "" || r.StatusCode >= 400 || r.ContentLength == nil {
-			return 0, false
-		}
-		return *r.ContentLength, true
-	}
-}
-
 // retryBackoff is the host pause used when a 429/503/network error carries
 // no Retry-After header: 1s, 2s, 4s... by attempt.
 func retryBackoff(attempt int) time.Duration {

@@ -49,6 +49,7 @@
   let analysisPending = $state(false);
   // Background external link check after the crawl (null = not running).
   let externalCheck = $state<{ loaded: number; total: number } | null>(null);
+  let pageWeightCheck = $state<{ loaded: number; total: number } | null>(null);
   let pagesReady = $state(false);
   let loadingProgress = $state(0);
 
@@ -151,6 +152,7 @@
       pageCount = data.pageCount as number;
       analysisPending = (data.analysisPending as boolean) || false;
       externalCheck = (data.externalCheck as { loaded: number; total: number } | undefined) ?? null;
+      pageWeightCheck = (data.pageWeight as { loaded: number; total: number } | undefined) ?? null;
       // Preserve original template distribution for pills
       const s = data.stats as Record<string, unknown>;
       if (s?.templateTypeDistribution) {
@@ -169,6 +171,13 @@
       if (msg.type === 'analysis_progress' && msg.data?.crawlId === id) {
         if (msg.data.phase === 'external_check') {
           externalCheck = { loaded: (msg.data.loaded as number) || 0, total: (msg.data.total as number) || 0 };
+        } else if (msg.data.phase === 'page_weight') {
+          pageWeightCheck = { loaded: (msg.data.loaded as number) || 0, total: (msg.data.total as number) || 0 };
+        } else if (msg.data.phase === 'page_weight_done') {
+          pageWeightCheck = null;
+          api.getCrawlStats(id).then((data: Record<string, unknown>) => {
+            stats = data.stats as Record<string, unknown>;
+          });
         } else if (msg.data.phase === 'external_done') {
           externalCheck = null;
           api.getCrawlStats(id).then((data: Record<string, unknown>) => {
@@ -277,6 +286,13 @@
       <p class="rounded-md border border-yellow-500/30 bg-yellow-500/5 px-4 py-2 text-xs text-fg-1" role="status" data-testid="analysis-interrupted">
         Analysis cut short: {stats.analysisInterrupted}. Results show what finished.
       </p>
+    {/if}
+    {#if pageWeightCheck && pageWeightCheck.total > 0}
+      <div class="rounded-md border border-accent/30 bg-accent/5 px-4 py-2 flex items-center gap-3 text-sm" role="status" data-testid="page-weight-progress">
+        <div class="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0"></div>
+        <span class="text-fg-1">Measuring page weight: {pageWeightCheck.loaded.toLocaleString()} / {pageWeightCheck.total.toLocaleString()} resources…</span>
+        <span class="text-xs text-fg-2">Page weights fill in when done.</span>
+      </div>
     {/if}
 
     <div class="section-tabs">

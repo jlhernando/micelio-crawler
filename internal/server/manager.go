@@ -51,6 +51,9 @@ type CrawlResults struct {
 	// Background external link check: URLs done / total (total 0 = not running).
 	externalChecked atomic.Int64
 	externalTotal   atomic.Int64
+	// Background resource size check (page weight): done / total (total 0 = not running).
+	pageWeightDone  atomic.Int64
+	pageWeightTotal atomic.Int64
 	loadCancel      context.CancelFunc // cancels background page loading goroutine
 	mu              sync.RWMutex       // protects Pages during deferred analysis
 	views           pageViewCache      // /pages filter+sort results (pages_view.go)
@@ -1021,19 +1024,22 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		postCfg.SitemapHreflang = result.SitemapHreflang
 		postCfg.AgentReadiness = result.AgentReadiness
 		intLinksClose := result.InternalLinksClose
-		// Compute page weight before releasing CrawlResult. Its requests
-		// use the post-crawl network context: cancel and stop abort them.
-		var interrupted string
+		// Resource sizes (one HEAD per unique resource, often 100K+ on
+		// image-heavy sites) are asked after the results are shown, in the
+		// background with the deferred analysis (runDeferredAnalysis), on
+		// the post-crawl network context: cancel and stop end them.
+		var pageWeight *pageWeightJob
 		if crawlConfig.PageWeight && len(result.ResourceRefs) > 0 {
-			analysis.ComputePageWeight(run.net, pages, result.ResourceRefs, result.TransferSizes, crawlConfig.Concurrency, result.ResourceSizer)
-			if errors.Is(context.Cause(run.net), errAnalysisStopped) {
-				interrupted = "page weight stopped by user (resource sizes partial)"
+			pageWeight = &pageWeightJob{
+				refs:          result.ResourceRefs,
+				transferSizes: result.TransferSizes,
+				sizer:         result.ResourceSizer,
+				concurrency:   crawlConfig.Concurrency,
 			}
 		} else if len(result.ResourceRefs) > 0 {
 			// Even without full page weight mode, populate from available data
 			analysis.AssignPageWeightFromRefs(pages, result.ResourceRefs, result.TransferSizes)
 		}
-		timer.mark("page weight")
 		// External links are checked after the results are shown (background,
 		// with the deferred analysis), so Stop & Analyze does not wait for
 		// hundreds of HEAD requests to other sites.
@@ -1051,7 +1057,7 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 			ctx: run.ctx, crawlID: crawlID, job: job, config: crawlConfig,
 			pages: pages, postCfg: postCfg, crawlStore: crawlStore, externalLinks: externalLinks,
 			closeLinks: intLinksClose, elapsed: elapsed, beforeComplete: clearActive,
-			timer: timer, run: run, runDone: runDone, interrupted: interrupted,
+			timer: timer, run: run, runDone: runDone, pageWeight: pageWeight,
 		})
 		return
 	}
@@ -1085,7 +1091,8 @@ type analysisRun struct {
 	// nil: analyzeAndCache starts one.
 	run         *deferredRun
 	runDone     func()
-	interrupted string // work already cut short by the user (stats note)
+	interrupted string         // work already cut short by the user (stats note)
+	pageWeight  *pageWeightJob // resource sizes asked in the background; may be nil
 }
 
 // analyzeAndCache runs core analysis, persists stats, caches the results and
@@ -1198,7 +1205,7 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 	}
 
 	// Check if deferred analysis (link intelligence, embeddings) is needed
-	needsDeferred := crawlConfig.LinkIntelligence || (crawlConfig.Embeddings && crawlConfig.EmbeddingKey != "") || len(r.externalLinks) > 0
+	needsDeferred := crawlConfig.LinkIntelligence || (crawlConfig.Embeddings && crawlConfig.EmbeddingKey != "") || len(r.externalLinks) > 0 || r.pageWeight != nil
 	var checkExternal func(context.Context) *crawler.ExternalCheckSummary
 	if len(r.externalLinks) > 0 {
 		links := r.externalLinks
@@ -1306,7 +1313,7 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 				}
 			}()
 			coreSnap.save(dbPath)
-			m.runDeferredAnalysis(deferCtx, crawlID, newResult, postCfg, crawlStats, dbPath, checkExternal)
+			m.runDeferredAnalysis(deferCtx, crawlID, newResult, postCfg, crawlStats, dbPath, checkExternal, r.pageWeight)
 		}()
 	} else {
 		if intLinksClose != nil {
@@ -1488,7 +1495,7 @@ func releaseLinkData(pages []*types.PageData) {
 // (errAnalysisCancelled) it stops too, but publishes what it has done with a
 // note (stats.analysisInterrupted, a "cancelled" crawl event); Stop & Analyze
 // ends only the external check (netContext) and the analysis goes on.
-func (m *CrawlManager) runDeferredAnalysis(ctx context.Context, crawlID string, own *CrawlResults, cfg analysis.PostProcessConfig, crawlStats types.CrawlStats, dbPath string, checkExternal func(context.Context) *crawler.ExternalCheckSummary) {
+func (m *CrawlManager) runDeferredAnalysis(ctx context.Context, crawlID string, own *CrawlResults, cfg analysis.PostProcessConfig, crawlStats types.CrawlStats, dbPath string, checkExternal func(context.Context) *crawler.ExternalCheckSummary, pageWeight *pageWeightJob) {
 	pages := own.Pages
 	// finish strips the cached pages and clears the pending flag.
 	finish := func() {
@@ -1560,6 +1567,17 @@ func (m *CrawlManager) runDeferredAnalysis(ctx context.Context, crawlID string, 
 		})
 	}
 
+	// Resource sizes for page weight: started after the external check so
+	// both never add up on one host, then left running next to link
+	// intelligence (network next to CPU). Applied when both are done.
+	// Network work: Stop & Analyze ends it too (netContext); the sizes
+	// known by then are kept.
+	var pageWeightCh <-chan pageWeightResult
+	if pageWeight != nil {
+		pageWeightCh = m.startPageWeight(netContext(ctx), crawlID, pageWeight)
+	}
+	pageWeightApplied := false
+
 	m.emit(ProgressEvent{
 		CrawlID: crawlID, Type: "analysis_progress",
 		Data: map[string]interface{}{"crawlId": crawlID, "phase": "link_intelligence"},
@@ -1604,6 +1622,21 @@ func (m *CrawlManager) runDeferredAnalysis(ctx context.Context, crawlID string, 
 	}
 	if ctx.Err() != nil && (cfg.LinkIntelligence || (cfg.Embeddings && cfg.EmbeddingKey != "")) {
 		notes = append(notes, "link intelligence and embeddings cancelled by user (finished phases kept)")
+	}
+	// Sizes already known: publish them with the deferred results (one
+	// save, one refresh). work holds the pages the cache gets below.
+	if pageWeightCh != nil {
+		select {
+		case r := <-pageWeightCh:
+			own.mu.Lock()
+			crawlStats.PageWeightStats = pageWeight.apply(work, r)
+			own.mu.Unlock()
+			pageWeightApplied = true
+			if note := pageWeightNote(netContext(ctx), r.sum); note != "" {
+				notes = append(notes, note)
+			}
+		default:
+		}
 	}
 	interrupted := strings.Join(notes, "; ")
 	crawlStats.AnalysisInterrupted = interrupted
@@ -1672,6 +1705,10 @@ func (m *CrawlManager) runDeferredAnalysis(ctx context.Context, crawlID string, 
 	})
 
 	fmt.Fprintf(os.Stderr, "  [deferred] Analysis complete for crawl %s\n", crawlID)
+
+	if pageWeightCh != nil {
+		m.finishPageWeight(ctx, crawlID, own, pageWeight, pageWeightCh, pageWeightApplied, crawlStats)
+	}
 }
 
 // publishStats saves stats mid-analysis and swaps them into the cached

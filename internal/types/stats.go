@@ -247,6 +247,12 @@ type PageWeightStats struct {
 	OversizedPages      []URLBytesEntry              `json:"oversizedPages"`
 	TruncationRiskPages []URLBytesEntry              `json:"truncationRiskPages"` // HTML body > 2MB (Googlebot limit)
 	AvgTotalBytes       int64                        `json:"avgTotalBytes"`
+	// The resource size check (one HEAD per unique resource URL). A resource
+	// without a size counts as 0 bytes; ResourcesUnsized says how many.
+	ResourcesTotal   int      `json:"resourcesTotal,omitempty"`
+	ResourcesSized   int      `json:"resourcesSized,omitempty"`
+	ResourcesUnsized int      `json:"resourcesUnsized,omitempty"` // no size, rate-limited or not asked
+	RateLimitedHosts []string `json:"rateLimitedHosts,omitempty"` // kept answering 429/503
 }
 
 // URLBytesEntry holds a URL with its byte size.

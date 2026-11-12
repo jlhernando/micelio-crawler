@@ -808,8 +808,16 @@ A compact list of what Micelio checks and computes, by area.
 ### Performance
 
 - PageSpeed Insights (lab data) and Chrome UX Report (field data).
-- Page weight from resource sizes (HEAD requests), with Googlebot 2 MB
-  truncation warnings.
+- Page weight from resource sizes (one HEAD request per unique resource),
+  with Googlebot 2 MB truncation warnings. In the dashboard the sizes are
+  measured after the results open (a "Measuring page weight" bar shows
+  progress) and the page weights fill in when done. Resources on the
+  crawled site and its subdomains (static.example.com) follow the crawl
+  delay; cookies and custom headers go only to the crawled host and allowed
+  domains. Resources on other hosts (CDNs,
+  image hosts) get at most 10 requests/s and 4 at once per host (6 on large
+  platforms), and a 429/503 pauses that host. Resources that could not be
+  sized count as 0 bytes and are counted in the stats.
 - Uncompressed HTML size per page.
 - Response time percentiles (p50, p90, p99).
 

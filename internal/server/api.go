@@ -519,6 +519,9 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 		if total := results.externalTotal.Load(); total > 0 {
 			resp["externalCheck"] = map[string]int64{"loaded": results.externalChecked.Load(), "total": total}
 		}
+		if total := results.pageWeightTotal.Load(); total > 0 {
+			resp["pageWeight"] = map[string]int64{"loaded": results.pageWeightDone.Load(), "total": total}
+		}
 		results.mu.RUnlock()
 		jsonOK(w, resp)
 	})

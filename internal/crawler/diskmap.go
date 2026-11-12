@@ -147,12 +147,24 @@ func (d *resourceRefsDisk) Load() (map[string][]types.ResourceEntry, error) {
 
 	result := make(map[string][]types.ResourceEntry)
 	dec := json.NewDecoder(bufio.NewReaderSize(d.file, 64*1024))
+	// The same stylesheet, script or logo is on most pages: decoding gives
+	// each page its own copy of the URL string. Keep one copy per URL; the
+	// refs live until page weight is done (hours on big crawls).
+	urls := make(map[string]string)
 	var decErr error
 	for dec.More() {
 		var entry resourceRefsEntry
 		if err := dec.Decode(&entry); err != nil {
 			decErr = fmt.Errorf("decode resrefs entry: %w", err)
 			break
+		}
+		for i := range entry.Refs {
+			u := entry.Refs[i].URL
+			if s, ok := urls[u]; ok {
+				entry.Refs[i].URL = s
+			} else {
+				urls[u] = u
+			}
 		}
 		result[entry.PageURL] = entry.Refs
 	}

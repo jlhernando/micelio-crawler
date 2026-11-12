@@ -21,14 +21,14 @@ func buildImageAuditStats(pages []*types.PageData) *types.ImageAuditStats {
 				audit.MissingAltAttribute++
 			} else if *img.Alt == "" {
 				audit.EmptyAlt++
-			} else if len(*img.Alt) > 125 {
+			} else if len(*img.Alt) > types.AltTooLongLimit {
 				audit.AltTooLong = append(audit.AltTooLong, types.ImageAltIssue{
 					URL:       p.URL,
 					Src:       img.Src,
 					AltLength: len(*img.Alt),
 				})
 			}
-			if img.MissingWidth || img.MissingHeight {
+			if img.MissingDimensions() {
 				audit.MissingDimensions++
 			}
 		}

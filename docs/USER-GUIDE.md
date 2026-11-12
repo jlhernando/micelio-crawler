@@ -758,6 +758,24 @@ Depending on the selected options, Micelio can produce:
 
 JSONL output streams as the crawl runs and can be gzip- or zstd-compressed.
 
+**Image entries changed in Nov 2026.** Each item of a page's `images` list now
+holds only `src`, `alt`, `width`, `height` and, for long inline images,
+`inlineBytes`. Scripts that read the JSONL should note:
+
+- `alt` is left out when the `<img>` has no alt attribute. Before, it was
+  written as `"alt": null`. An empty alt (`alt=""`) is still written as `""`.
+- The six derived keys `altLength`, `missingAlt`, `hasAltAttribute`,
+  `altTooLong`, `missingWidth` and `missingHeight` are no longer written.
+  Derive them from `alt`, `width` and `height` (alt too long = over 125 bytes).
+- `src` is the URL the page serves, resolved against the page URL, query
+  string included. Lazy-load placeholders give way to `data-src` or
+  `data-lazy-src`.
+- An inline `data:` image longer than 128 characters keeps only its header
+  (for example `data:image/png;base64`) and `inlineBytes` gives the length of
+  the whole attribute. Shorter ones are stored whole.
+
+Crawls stored before the change still load in the dashboard and import.
+
 `--no-db` disables automatic crawl database creation for CLI Spider crawls, but
 also removes persistence-dependent features such as resume. `--resume` and
 `--no-db` cannot be used together.

@@ -442,45 +442,68 @@ func extractImages(doc *goquery.Document, baseURL string) []types.ImageData {
 	var images []types.ImageData
 
 	doc.Find("img").Each(func(_ int, s *goquery.Selection) {
-		src, _ := s.Attr("src")
-		if src == "" {
-			// Try data-src for lazy-loaded images
-			src, _ = s.Attr("data-src")
-		}
-		if src != "" {
+		// src is stored as the page serves it (resolved against the page
+		// URL), query string included: tracking parameters can be part of a
+		// signed CDN URL, and a rewritten src would not be the image the
+		// page loads.
+		src, inlineBytes := imageSrc(s)
+		if src != "" && !strings.HasPrefix(src, "data:") {
 			src = resolveRef(baseURL, src)
 		}
 
-		_, hasAlt := s.Attr("alt")
-		altVal, _ := s.Attr("alt")
-		altLen := len(altVal)
-
-		width, hasWidth := s.Attr("width")
-		height, hasHeight := s.Attr("height")
-
-		img := types.ImageData{
-			Src:             src,
-			HasAltAttribute: hasAlt,
-			MissingAlt:      !hasAlt,
-			AltLength:       altLen,
-			AltTooLong:      altLen > 125,
-			MissingWidth:    !hasWidth,
-			MissingHeight:   !hasHeight,
+		// Only the reference is kept: src and the attributes the audits
+		// read. Missing alt/size and alt length are derived from these.
+		img := types.ImageData{Src: src, InlineBytes: inlineBytes}
+		if v, ok := s.Attr("alt"); ok {
+			img.Alt = &v
 		}
-		if hasAlt {
-			img.Alt = &altVal
+		if v, ok := s.Attr("width"); ok {
+			img.Width = &v
 		}
-		if hasWidth {
-			img.Width = &width
-		}
-		if hasHeight {
-			img.Height = &height
+		if v, ok := s.Attr("height"); ok {
+			img.Height = &v
 		}
 
 		images = append(images, img)
 	})
 
 	return images
+}
+
+// maxDataSrc: an inline data: URI up to this length is stored whole.
+const maxDataSrc = 128
+
+// maxDataHeader caps the "data:<mediatype>[;base64]" part kept of a longer one.
+const maxDataHeader = 64
+
+// imageSrc returns the image's address. Lazy-loading pages often put a
+// placeholder in src (empty or an inline data: URI) and the real image in
+// data-src or data-lazy-src: the real one wins.
+//
+// An inline data: URI longer than maxDataSrc keeps only its header (the
+// part before the comma, "data:image/gif;base64") and inlineBytes is the
+// length of the whole attribute. The stored value is a true prefix of what
+// the page serves, never a made-up URL, and inlineBytes says it was cut and
+// how big the inline image is. The payload can be kilobytes per image.
+func imageSrc(s *goquery.Selection) (src string, inlineBytes int) {
+	src = strings.TrimSpace(s.AttrOr("src", ""))
+	if src == "" || strings.HasPrefix(src, "data:") {
+		for _, attr := range [...]string{"data-src", "data-lazy-src"} {
+			if v := strings.TrimSpace(s.AttrOr(attr, "")); v != "" && !strings.HasPrefix(v, "data:") {
+				return v, 0
+			}
+		}
+	}
+	if strings.HasPrefix(src, "data:") && len(src) > maxDataSrc {
+		inlineBytes = len(src)
+		if i := strings.IndexByte(src, ','); i >= 0 {
+			src = src[:i]
+		}
+		if len(src) > maxDataHeader {
+			src = src[:maxDataHeader]
+		}
+	}
+	return src, inlineBytes
 }
 
 // --- Hreflang ---

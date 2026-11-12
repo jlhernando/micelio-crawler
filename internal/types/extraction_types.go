@@ -14,19 +14,37 @@ type HeadingData struct {
 	H6 []string `json:"h6,omitempty"`
 }
 
-// ImageData holds SEO-relevant image information.
+// ImageData is the reference to one <img> on a page: where it points and
+// the attributes the audits read. The image itself is never downloaded for
+// it. Alt is nil when the alt attribute is absent; Width and Height are nil
+// when the attribute is absent. Src is the URL the page serves, resolved
+// against the page URL and otherwise unchanged (query string included).
+//
+// Crawls stored before Nov 2026 also carry altLength, missingAlt,
+// hasAltAttribute, altTooLong, missingWidth and missingHeight. They were all
+// derived from the three attributes, so they are no longer written; old rows
+// still decode (unknown keys are ignored) and the methods below give the
+// same answers.
 type ImageData struct {
-	Alt             *string `json:"alt"`
-	Width           *string `json:"width,omitempty"`
-	Height          *string `json:"height,omitempty"`
-	Src             string  `json:"src"`
-	AltLength       int     `json:"altLength,omitempty"`
-	MissingAlt      bool    `json:"missingAlt,omitempty"`
-	HasAltAttribute bool    `json:"hasAltAttribute"`
-	AltTooLong      bool    `json:"altTooLong,omitempty"`
-	MissingWidth    bool    `json:"missingWidth,omitempty"`
-	MissingHeight   bool    `json:"missingHeight,omitempty"`
+	Src    string  `json:"src"`
+	Alt    *string `json:"alt,omitempty"`
+	Width  *string `json:"width,omitempty"`
+	Height *string `json:"height,omitempty"`
+	// InlineBytes is set only for an inline data: URI too long to store:
+	// Src then holds its header ("data:image/png;base64") and InlineBytes
+	// the length of the whole src attribute.
+	InlineBytes int `json:"inlineBytes,omitempty"`
 }
+
+// AltTooLongLimit is the alt text length (bytes) above which alt is too long.
+const AltTooLongLimit = 125
+
+// MissingAlt reports an image without an alt attribute.
+func (i ImageData) MissingAlt() bool { return i.Alt == nil }
+
+// MissingDimensions reports an image without a width or height attribute
+// (layout shift risk).
+func (i ImageData) MissingDimensions() bool { return i.Width == nil || i.Height == nil }
 
 // HreflangEntry represents a single hreflang annotation.
 type HreflangEntry struct {

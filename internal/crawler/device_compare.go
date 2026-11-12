@@ -178,7 +178,7 @@ func (s *crawlSession) snapshot(e types.QueueEntry, res types.FetchResult, page 
 	}
 	snap.H1 = src.Headings.H1[:min(len(src.Headings.H1), 3)]
 	for _, im := range src.Images {
-		if im.MissingAlt {
+		if im.MissingAlt() {
 			snap.ImagesNoAlt++
 		}
 	}

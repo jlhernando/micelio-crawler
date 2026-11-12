@@ -399,7 +399,7 @@ func flattenPageForCSV(page *types.PageData) []string {
 	// Images missing alt
 	missingAlt := 0
 	for _, img := range page.Images {
-		if img.MissingAlt {
+		if img.MissingAlt() {
 			missingAlt++
 		}
 	}

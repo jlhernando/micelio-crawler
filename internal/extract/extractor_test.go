@@ -1,6 +1,7 @@
 package extract
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/micelio/micelio/internal/types"
@@ -159,7 +160,7 @@ func TestExtractImages(t *testing.T) {
 	}
 
 	// First image has alt
-	if page.Images[0].MissingAlt {
+	if page.Images[0].MissingAlt() {
 		t.Error("First image should have alt")
 	}
 	if page.Images[0].Alt == nil || *page.Images[0].Alt != "A test photo" {
@@ -167,8 +168,53 @@ func TestExtractImages(t *testing.T) {
 	}
 
 	// Second image is missing alt
-	if !page.Images[1].MissingAlt {
+	if !page.Images[1].MissingAlt() {
 		t.Error("Second image should be missing alt")
+	}
+}
+
+// Lazy-load placeholders give way to the real image; a long inline data:
+// URI keeps only its header plus its length, never the payload.
+func TestExtractImageSrcLazyAndDataURI(t *testing.T) {
+	payload := strings.Repeat("A", 5000)
+	html := `<html><body>
+<img src="data:image/gif;base64,` + payload + `" data-src="/real.jpg">
+<img src="data:image/svg+xml;base64,` + payload + `" data-lazy-src="/lazy.png">
+<img src="data:image/png;base64,` + payload + `" alt="inline">
+<img data-src="/only-data-src.webp">
+<img src="//cdn.example.com/a.jpg?utm_source=x&amp;w=200&amp;utm_campaign=y">
+<img src="/b.png?utm_source=x&amp;utm_content=t">
+<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
+</body></html>`
+	page := ExtractPageData(html, ExtractionOptions{PageURL: "https://example.com/p", FinalURL: "https://example.com/p", StatusCode: 200})
+	want := []string{
+		"https://example.com/real.jpg",
+		"https://example.com/lazy.png",
+		"data:image/png;base64",
+		"https://example.com/only-data-src.webp",
+		// Query strings are kept as served (utm_* included): a signed CDN
+		// URL breaks if any parameter is dropped.
+		"https://cdn.example.com/a.jpg?utm_source=x&w=200&utm_campaign=y",
+		"https://example.com/b.png?utm_source=x&utm_content=t",
+		// A short data: URI is stored whole.
+		"data:image/gif;base64,R0lGODlhAQABAAAAACw=",
+	}
+	if len(page.Images) != len(want) {
+		t.Fatalf("got %d images, want %d", len(page.Images), len(want))
+	}
+	for i, w := range want {
+		if page.Images[i].Src != w {
+			t.Errorf("image %d src = %q, want %q", i, page.Images[i].Src, w)
+		}
+	}
+	// The cut data: URI records the length of the whole attribute.
+	if got, want := page.Images[2].InlineBytes, len("data:image/png;base64,")+len(payload); got != want {
+		t.Errorf("inlineBytes = %d, want %d", got, want)
+	}
+	for _, i := range []int{0, 1, 3, 4, 5, 6} {
+		if page.Images[i].InlineBytes != 0 {
+			t.Errorf("image %d inlineBytes = %d, want 0", i, page.Images[i].InlineBytes)
+		}
 	}
 }
 

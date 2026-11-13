@@ -25,6 +25,7 @@ type PostProcessConfig struct {
 	// Link intelligence reuses it instead of reading every edge again.
 	Graph               *AdjacencyGraph
 	AnchorAggregator    *AnchorAggregator // anchor stats collected during the crawl (Anchors are dropped before storage)
+	AnchorStream        *AnchorStream     // exact anchor stats of pages reloaded without Anchors
 	SeedURL             string
 	Language            string
 	EmbeddingModel      string
@@ -88,6 +89,7 @@ func RunCoreAnalysisWithGraph(ctx context.Context, pages []*types.PageData, cfg 
 		SitemapEntries:    cfg.SitemapEntries,
 		TotalSitemapURLs:  len(cfg.SitemapEntries),
 		AnchorAggregator:  cfg.AnchorAggregator,
+		AnchorStream:      cfg.AnchorStream,
 		Soft404Probes:     cfg.Soft404Probes,
 		SitemapHreflang:   cfg.SitemapHreflang,
 		AgentReadiness:    cfg.AgentReadiness,

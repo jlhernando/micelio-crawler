@@ -36,7 +36,7 @@ type CrawlProgress struct {
 type CrawlResult struct {
 	Coverage         *types.CrawlCoverage
 	ExternalLinks    map[string][]string
-	ResourceRefs     map[string][]types.ResourceEntry
+	ResourceRefs     *analysis.ResourceRefs
 	TransferSizes    map[string]int64
 	NgramAnalyzer    *analysis.NgramAnalyzer
 	AnchorAggregator *analysis.AnchorAggregator
@@ -404,16 +404,16 @@ func (s *crawlSession) loadDeadLetterQueue() []types.DeadLetterEntry {
 	return entries
 }
 
-func (s *crawlSession) loadResourceRefs() map[string][]types.ResourceEntry {
+func (s *crawlSession) loadResourceRefs() *analysis.ResourceRefs {
 	if s.resRefsDisk == nil {
 		return nil
 	}
-	refs, err := s.resRefsDisk.Load()
+	refs, err := s.resRefsDisk.LoadCompact()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  [warn] reload resrefs: %v\n", err)
-		return make(map[string][]types.ResourceEntry)
+		return analysis.NewResourceRefs().Done()
 	}
-	fmt.Fprintf(os.Stderr, "  [memory] Loaded %d page resource refs from disk\n", len(refs))
+	fmt.Fprintf(os.Stderr, "  [memory] Loaded %d page resource refs from disk\n", refs.Len())
 	return refs
 }
 

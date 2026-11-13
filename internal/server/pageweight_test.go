@@ -86,7 +86,7 @@ func TestPageWeightRunsAfterResults(t *testing.T) {
 			start := time.Now()
 			m.analyzeAndCache(analysisRun{
 				ctx: context.Background(), crawlID: "pw", config: cfg, pages: pages, postCfg: postCfg,
-				pageWeight: &pageWeightJob{refs: refs(), sizer: sizer, concurrency: 2},
+				pageWeight: &pageWeightJob{refs: analysis.CompactResourceRefs(refs()), sizer: sizer, concurrency: 2},
 			})
 			if d := time.Since(start); d > 2*time.Second {
 				t.Fatalf("results took %s: waited for page weight", d)
@@ -210,7 +210,7 @@ func TestPageWeightStopCancelDelete(t *testing.T) {
 			m.analyzeAndCache(analysisRun{
 				ctx: context.Background(), crawlID: id, job: job, config: cfg, pages: pages,
 				postCfg:    analysis.PostProcessConfigFromCrawl(cfg),
-				pageWeight: &pageWeightJob{refs: refs, sizer: sizer, concurrency: 2},
+				pageWeight: &pageWeightJob{refs: analysis.CompactResourceRefs(refs), sizer: sizer, concurrency: 2},
 			})
 			res := m.GetQuickStats(id)
 			if res == nil {

@@ -71,7 +71,7 @@ func crawlWithPageWeight(t *testing.T, seed string, download bool) *CrawlResult 
 	if err != nil {
 		t.Fatal(err)
 	}
-	analysis.ComputePageWeight(context.Background(), res.Pages, res.ResourceRefs, res.TransferSizes, analysis.PageWeightOptions{Concurrency: cfg.Concurrency, Sizer: res.ResourceSizer})
+	analysis.ComputePageWeight(context.Background(), res.Pages, res.ResourceRefs.Expand(), res.TransferSizes, analysis.PageWeightOptions{Concurrency: cfg.Concurrency, Sizer: res.ResourceSizer})
 	return res
 }
 

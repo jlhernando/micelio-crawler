@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/micelio/micelio/internal/intern"
+	"github.com/micelio/micelio/internal/analysis"
 	"github.com/micelio/micelio/internal/types"
 )
 
@@ -137,6 +137,12 @@ func (d *resourceRefsDisk) Add(pageURL string, refs []types.ResourceEntry) {
 
 // Load reads the temp file back into a map and removes the file.
 func (d *resourceRefsDisk) Load() (map[string][]types.ResourceEntry, error) {
+	refs, err := d.LoadCompact()
+	return refs.Expand(), err
+}
+
+// LoadCompact is Load into analysis.ResourceRefs (4 bytes per reference).
+func (d *resourceRefsDisk) LoadCompact() (*analysis.ResourceRefs, error) {
 	if err := d.buf.Flush(); err != nil {
 		d.cleanup()
 		return nil, fmt.Errorf("flush resrefs: %w", err)
@@ -146,10 +152,7 @@ func (d *resourceRefsDisk) Load() (map[string][]types.ResourceEntry, error) {
 		return nil, fmt.Errorf("seek resrefs: %w", err)
 	}
 
-	result := make(map[string][]types.ResourceEntry)
-	// Most pages link the same stylesheets, scripts and images: share one
-	// copy of each URL and type string instead of one per page.
-	strs := intern.New(0)
+	b := analysis.NewResourceRefs()
 	dec := json.NewDecoder(bufio.NewReaderSize(d.file, 64*1024))
 	var decErr error
 	for dec.More() {
@@ -158,26 +161,11 @@ func (d *resourceRefsDisk) Load() (map[string][]types.ResourceEntry, error) {
 			decErr = fmt.Errorf("decode resrefs entry: %w", err)
 			break
 		}
-		result[entry.PageURL] = compactRefs(entry.Refs, strs)
+		b.Add(entry.PageURL, entry.Refs)
 	}
 
 	d.cleanup()
-	if decErr != nil {
-		return result, decErr
-	}
-	return result, nil
-}
-
-// compactRefs returns refs in an exact-size slice (the decoder grows it by
-// doubling) with URL and Type strings interned. nil and empty stay as they are.
-func compactRefs(refs []types.ResourceEntry, strs *intern.Table) []types.ResourceEntry {
-	refs = intern.Clip(refs)
-	for i := range refs {
-		r := &refs[i]
-		r.URL = strs.Str(r.URL)
-		r.Type = types.ResourceType(strs.Str(string(r.Type)))
-	}
-	return refs
+	return b.Done(), decErr
 }
 
 func (d *resourceRefsDisk) cleanup() {

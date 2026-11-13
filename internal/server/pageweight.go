@@ -17,8 +17,8 @@ import (
 // site it is one HEAD per unique resource (188,080 for a 25K-page Wikipedia
 // crawl), which used to keep the results hidden for hours.
 type pageWeightJob struct {
-	refs          map[string][]types.ResourceEntry // page URL -> resources
-	transferSizes map[string]int64                 // page URL -> HTML bytes
+	refs          *analysis.ResourceRefs // page URL -> resources
+	transferSizes map[string]int64       // page URL -> HTML bytes
 	sizer         analysis.ResourceSizer
 	concurrency   int
 }
@@ -32,7 +32,7 @@ type pageWeightResult struct {
 // apply writes the page weights onto pages and returns their stats. The
 // caller holds the lock of the result that owns pages.
 func (j *pageWeightJob) apply(pages []*types.PageData, r pageWeightResult) *types.PageWeightStats {
-	analysis.ApplyResourceSizes(pages, j.refs, j.transferSizes, r.sizes)
+	analysis.ApplyResourceSizesCompact(pages, j.refs, j.transferSizes, r.sizes)
 	st := analysis.BuildPageWeightStats(pages)
 	r.sum.Annotate(st)
 	return st
@@ -69,7 +69,7 @@ func (m *CrawlManager) startPageWeight(ctx context.Context, crawlID string, job 
 		})
 	}
 	go func() {
-		sizes, sum := analysis.FetchResourceSizes(ctx, job.refs, analysis.PageWeightOptions{
+		sizes, sum := analysis.FetchResourceSizesCompact(ctx, job.refs, analysis.PageWeightOptions{
 			Concurrency: job.concurrency,
 			Sizer:       job.sizer,
 			OnProgress: func(done, total int) {

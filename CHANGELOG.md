@@ -4,6 +4,17 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+## [1.15.2] - 2026-11-13
+
+Less memory right after a dashboard crawl. No new features; crawl output and results are the same.
+
+### Changed
+
+- **Lighter reload after a crawl.** When a dashboard crawl ends, its pages are read back from the crawl database for the analysis. That reload now skips the raw JSON-LD text and the image list of each page (schema checks already ran during the crawl, and the report only needs image counts). The CLI still reloads full pages because it rewrites its output from them.
+- **Anchor stats built while pages are read back.** With full anchors on, every anchor of the crawl used to stay in memory until the report was built. Non-descriptive anchors, the Anchor Cloud and per-page anchor health are now computed page by page during the reload, with exactly the same results.
+- **Page resources stored once.** The CSS, JS, image and font list of each page (kept for page weight) now points into one shared table, so a stylesheet used on every page is stored once instead of once per page.
+- Peak RAM right after a crawl, recorded 100,000-page marketplace site replayed locally (2 side-by-side pairs each): -47% at 50,000 pages (2.28 GB to 1.20 GB) and -51% at 100,000 pages (4.33 GB to 2.11 GB) ([chart](docs/img/release-1.15.2-ram.png)). A live 10,000-page crawl of the same site: -12.5% peak RAM (836 MB to 731 MB), smaller because its reload is smaller. CPU time, disk use and output data did not change.
+
 ## [1.15.1] - 2026-11-12
 
 ### Fixed

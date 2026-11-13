@@ -169,20 +169,26 @@ func ComputePageWeight(ctx context.Context, pages []*types.PageData, resourceRef
 // limit. Pacing between requests is the sizer's job. A 429/503 is "slow
 // down", not a missing size: the URL is asked again after a pause.
 func FetchResourceSizes(ctx context.Context, refs map[string][]types.ResourceEntry, opts PageWeightOptions) (map[string]int64, PageWeightSummary) {
-	start := time.Now()
 	// One target per unique URL (40 bytes; the URL string is the one in
 	// refs, the host string is shared by the host's targets). Host queues
 	// hold indexes into targets.
-	type target struct {
-		url  string
-		host string
-		refs int
-	}
 	counts := make(map[string]int)
 	for _, rs := range refs {
 		for _, r := range rs {
 			counts[r.URL]++
 		}
+	}
+	return fetchResourceSizeCounts(ctx, counts, opts)
+}
+
+// fetchResourceSizeCounts is FetchResourceSizes from the number of
+// references per resource URL.
+func fetchResourceSizeCounts(ctx context.Context, counts map[string]int, opts PageWeightOptions) (map[string]int64, PageWeightSummary) {
+	start := time.Now()
+	type target struct {
+		url  string
+		host string
+		refs int
 	}
 	sum := PageWeightSummary{Total: len(counts)}
 	if len(counts) == 0 {

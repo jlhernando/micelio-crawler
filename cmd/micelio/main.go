@@ -1472,9 +1472,9 @@ func runCrawlWithProgress(config types.CrawlConfig, ppCfg *analysis.PostProcessC
 
 	// Post-crawl: Page weight analysis
 	var pageWeightSum *analysis.PageWeightSummary
-	if config.PageWeight && len(result.ResourceRefs) > 0 {
+	if config.PageWeight && result.ResourceRefs.Len() > 0 {
 		fmt.Fprintf(os.Stderr, "  Analyzing page weight...\n")
-		sum := analysis.ComputePageWeight(ctx, result.Pages, result.ResourceRefs, result.TransferSizes, analysis.PageWeightOptions{
+		sum := analysis.ComputePageWeight(ctx, result.Pages, result.ResourceRefs.Expand(), result.TransferSizes, analysis.PageWeightOptions{
 			Concurrency: config.Concurrency,
 			Sizer:       result.ResourceSizer,
 		})

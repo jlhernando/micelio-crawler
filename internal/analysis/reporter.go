@@ -26,6 +26,9 @@ type ReportConfig struct {
 	// AnchorAggregator holds anchor stats collected during the crawl. Used when
 	// pages no longer carry Anchors (they are dropped before storage).
 	AnchorAggregator *AnchorAggregator
+	// AnchorStream holds the exact anchor results of pages whose Anchors
+	// were dropped while they were reloaded; preferred over the aggregator.
+	AnchorStream *AnchorStream
 	// Soft404Probes are the crawl-time "URL that cannot exist" requests.
 	Soft404Probes []types.Soft404Probe
 	// SitemapHreflang holds the <xhtml:link> alternates of the sitemaps.
@@ -577,7 +580,15 @@ func GenerateReportWithGraph(pages []*types.PageData, durationMs int64, cfg Repo
 
 	// Anchor health (Patent US7533092) and Anchor Cloud.
 	// Prefer in-memory Anchors; fall back to the crawl-time aggregator.
-	if anyAnchors(pages) || cfg.AnchorAggregator == nil {
+	if st := cfg.AnchorStream; st.Pages() > 0 && !anyAnchors(pages) {
+		// Anchors were streamed while the pages were reloaded.
+		stats.NonDescriptiveAnchors = st.nonDesc
+		st.applyAnchorHealth(pages)
+		stats.AnchorCloud = st.anchorCloud()
+		if len(stats.AnchorCloud.Anchors) == 0 {
+			stats.AnchorCloud = nil
+		}
+	} else if anyAnchors(pages) || cfg.AnchorAggregator == nil {
 		buildAnchorHealth(pages, urlToPage)
 		stats.AnchorCloud = BuildAnchorCloud(pages)
 		if len(stats.AnchorCloud.Anchors) == 0 {

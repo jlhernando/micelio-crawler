@@ -802,8 +802,9 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 
 	// Run crawler (pass crawl store if available for SQLite persistence)
 	var storeArg []crawler.CrawlStore
+	var reloadAnchors *analysis.AnchorStream
 	if crawlStore != nil {
-		storeArg = []crawler.CrawlStore{crawlStore}
+		storeArg = []crawler.CrawlStore{analysisReloadStore{crawlStore, &reloadAnchors}}
 	}
 	var tuner *crawler.Tuner
 	result, err := crawler.CrawlWithTuner(ctx, crawlConfig, func(p crawler.CrawlProgress) {
@@ -1019,6 +1020,7 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		postCfg.CrawlDurationMs = elapsed
 		postCfg.NgramAnalyzer = result.NgramAnalyzer
 		postCfg.AnchorAggregator = result.AnchorAggregator
+		postCfg.AnchorStream = reloadAnchors
 		postCfg.InternalLinksIter = result.InternalLinksIter
 		if len(result.DiscoveredSitemapURLs) > 0 {
 			postCfg.SitemapEntries = result.DiscoveredSitemapURLs
@@ -1032,16 +1034,16 @@ func (m *CrawlManager) runCrawl(ctx context.Context, crawlID string, config map[
 		// background with the deferred analysis (runDeferredAnalysis), on
 		// the post-crawl network context: cancel and stop end them.
 		var pageWeight *pageWeightJob
-		if crawlConfig.PageWeight && len(result.ResourceRefs) > 0 {
+		if crawlConfig.PageWeight && result.ResourceRefs.Len() > 0 {
 			pageWeight = &pageWeightJob{
 				refs:          result.ResourceRefs,
 				transferSizes: result.TransferSizes,
 				sizer:         result.ResourceSizer,
 				concurrency:   crawlConfig.Concurrency,
 			}
-		} else if len(result.ResourceRefs) > 0 {
+		} else if result.ResourceRefs.Len() > 0 {
 			// Even without full page weight mode, populate from available data
-			analysis.AssignPageWeightFromRefs(pages, result.ResourceRefs, result.TransferSizes)
+			analysis.ApplyResourceSizesCompact(pages, result.ResourceRefs, result.TransferSizes, nil)
 		}
 		// External links are checked after the results are shown (background,
 		// with the deferred analysis), so Stop & Analyze does not wait for
@@ -1162,6 +1164,7 @@ func (m *CrawlManager) analyzeAndCache(r analysisRun) {
 	// Link intelligence reuses the reporter's graph instead of re-reading
 	// every edge from disk.
 	postCfg.Graph = coreGraph
+	postCfg.AnchorStream = nil // report done: free it before the deferred work
 
 	// The reporter already stored PageRank on each page (stats keep only
 	// a histogram, plus the URL map for small crawls).

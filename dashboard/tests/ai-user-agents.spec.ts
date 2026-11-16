@@ -41,4 +41,3 @@ test('A saved AI User-Agent is recognized and remains editable', async ({ page }
   await page.locator('#uaPreset').selectOption('__default');
   await expect(page.locator('#ua')).not.toBeVisible();
 });
-

@@ -8,6 +8,7 @@
   import CollapsibleSection from '../lib/components/ui/CollapsibleSection.svelte';
   import NumberInput from '../lib/components/ui/NumberInput.svelte';
   import { api } from '../lib/api';
+  import { aiUserAgentPresets } from '../lib/aiUserAgents';
   import { navigate, getCurrentRoute } from '../lib/router';
 
   // ── Crawl configuration state ──
@@ -153,7 +154,9 @@
     { group: 'Bots', label: 'Googlebot Desktop', value: 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Googlebot/2.1; +http://www.google.com/bot.html) Chrome/131.0.0.0 Safari/537.36' },
     { group: 'Bots', label: 'Googlebot Smartphone', value: 'Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' },
     { group: 'Bots', label: 'Bingbot', value: 'Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)' },
+    ...aiUserAgentPresets,
   ];
+  const selectedAiAgent = $derived(aiUserAgentPresets.find(p => p.value === userAgent));
   const uaGroups = [...new Set(uaPresets.map(p => p.group))];
   let selectedUaPreset = $state('__default');
 
@@ -808,6 +811,12 @@
             <input id="ua" type="text" bind:value={userAgent} oninput={onUaManualEdit}
               placeholder="Enter custom user agent string"
               class="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm font-mono focus:outline-none focus:border-accent" />
+          {/if}
+          {#if selectedAiAgent}
+            <p class="mt-2 text-xs text-fg-2" data-testid="ai-user-agent-help">
+              Changes only the User-Agent. Requests still use your connection, not the provider's IPs or signatures. Micelio keeps your robots.txt settings.
+              <a href={selectedAiAgent.source} target="_blank" rel="noopener noreferrer" class="text-accent hover:underline">Provider documentation</a>
+            </p>
           {/if}
         </div>
         <div>

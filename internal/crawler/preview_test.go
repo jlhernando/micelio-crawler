@@ -8,9 +8,29 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/micelio/micelio/internal/types"
 )
+
+func TestPreviewNoContentHasNoVisualDocument(t *testing.T) {
+	var status atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A content type does not give a no-content response a document.
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(int(status.Load()))
+	}))
+	t.Cleanup(srv.Close)
+	for _, code := range []int{http.StatusNoContent, http.StatusResetContent} {
+		status.Store(int32(code))
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		frame, err := PreviewHomepage(ctx, types.CrawlConfig{SeedURL: srv.URL, SkipSSRF: true})
+		cancel()
+		if frame != nil || err == nil || !strings.Contains(err.Error(), "no visual preview") {
+			t.Fatalf("HTTP %d was passed to Chrome as a document: frame=%v err=%v", code, frame, err)
+		}
+	}
+}
 
 func TestPreviewHomepageMatchesCrawlTransport(t *testing.T) {
 	var pages, effects, wrongCredentials atomic.Int32

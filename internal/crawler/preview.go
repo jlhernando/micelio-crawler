@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -61,8 +62,8 @@ func PreviewHomepage(ctx context.Context, config types.CrawlConfig) (*browser.Pr
 	if result.Error != "" {
 		return nil, fmt.Errorf("homepage request failed: %s", result.Error)
 	}
-	if !strings.Contains(strings.ToLower(result.ContentType), "html") {
-		return nil, fmt.Errorf("homepage returned HTTP %d with non-HTML content; no visual preview is available", result.StatusCode)
+	if result.StatusCode == http.StatusNoContent || result.StatusCode == http.StatusResetContent || !strings.Contains(strings.ToLower(result.ContentType), "html") {
+		return nil, fmt.Errorf("homepage returned HTTP %d without an HTML document; no visual preview is available", result.StatusCode)
 	}
 	var frame *browser.PreviewFrame
 	mode := "html"

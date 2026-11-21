@@ -24,7 +24,7 @@ for (const jsRendering of [false, true]) {
       await expect(page).toHaveURL(/monitor\/live/);
       const requests = writes.filter(w => w.path === '/api/crawl/start');
       expect(requests).toHaveLength(before + 1);
-      expect(requests.at(-1)!.body).toMatchObject({ userAgent: preset.value, jsRendering, respectRobots: true });
+      expect(requests.at(-1)!.body).toMatchObject({ userAgent: preset.value, jsRendering, nativeChrome: false, respectRobots: true });
     }
   });
 }
@@ -40,4 +40,18 @@ test('A saved AI User-Agent is recognized and remains editable', async ({ page }
   await expect(page.getByTestId('ai-user-agent-help')).not.toBeVisible();
   await page.locator('#uaPreset').selectOption('__default');
   await expect(page.locator('#ua')).not.toBeVisible();
+});
+
+test('Native Chrome disables AI presets and omits an earlier custom User-Agent', async ({ page }) => {
+  const writes = await mockApi(page);
+  await page.goto('/#/setup');
+  await page.locator('#url').fill('https://studio.example');
+  await page.getByRole('button', { name: 'HTTP & Authentication', exact: true }).click();
+  await page.locator('#uaPreset').selectOption('Perplexity-User — Perplexity (user request)');
+  await page.getByLabel('Native Chrome', { exact: true }).check();
+  await expect(page.locator('#uaPreset')).toBeDisabled();
+  await expect(page.getByTestId('ai-user-agent-help')).not.toBeVisible();
+  await page.getByRole('button', { name: 'Start Crawl', exact: true }).click();
+  await expect(page).toHaveURL(/monitor\/live/);
+  expect(writes.find(w => w.path === '/api/crawl/start')!.body).not.toHaveProperty('userAgent');
 });

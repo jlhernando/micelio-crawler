@@ -235,6 +235,9 @@ func CrawlWithTuner(ctx context.Context, config types.CrawlConfig, onProgress On
 	}
 
 	wg.Wait()
+	if s.nativeBlocked.Load() {
+		stopReason = s.abortReason()
+	}
 	s.finishBackground()
 	backgroundDone = true
 	// Write and commit every queued page before the queue flush, status

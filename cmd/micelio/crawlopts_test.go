@@ -19,6 +19,13 @@ type capturedCrawl struct {
 	calls   int
 }
 
+func TestNativeChromeCLI(t *testing.T) {
+	got := mustRun(t, crawlCmd(), "https://example.com/", "--native-chrome", "--concurrency", "9", "--delay", "20")
+	if !got.config.NativeChrome || got.config.Concurrency != 1 || got.config.DelayMs != 1000 || !got.config.NoAgentCheck {
+		t.Fatalf("native flags not applied: %+v", got.config)
+	}
+}
+
 // runCaptured executes cmd with args and returns the config it would crawl.
 func runCaptured(t *testing.T, cmd *cobra.Command, args ...string) (capturedCrawl, error) {
 	t.Helper()

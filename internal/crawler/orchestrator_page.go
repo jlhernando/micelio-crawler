@@ -18,6 +18,10 @@ import (
 
 // processEntry handles a single crawl queue entry. Called as a goroutine.
 func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
+	if s.nativeBlocked.Load() {
+		s.queue.Requeue(e)
+		return
+	}
 	// Path budget check (before any fetch)
 	if exceeded, rule := s.checkPathBudget(e.URL); exceeded {
 		s.queue.RecordExclusion("path_budget", rule, e.URL)
@@ -82,7 +86,11 @@ func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
 	}
 
 	// 429/503/network errors: pause the host for everyone and re-queue.
-	if s.handleRetryable(e, result) {
+	nativeBlocked := s.native != nil && (result.StatusCode == 403 || result.StatusCode == 429)
+	if nativeBlocked {
+		s.nativeBlocked.Store(true)
+	}
+	if !nativeBlocked && s.handleRetryable(e, result) {
 		return
 	}
 	// DLQ: HTTP failures after retry exhaustion. Page is still stored below
@@ -134,6 +142,9 @@ func (s *crawlSession) processEntry(ctx context.Context, e types.QueueEntry) {
 	if s.crawlDB != nil && (s.config.SaveHTML || s.config.SaveRendered) {
 		if s.config.SaveHTML {
 			srcHTML = result.HTML
+			if s.native != nil {
+				srcHTML = result.RawHTML
+			}
 		}
 		if s.config.SaveRendered {
 			renHTML = renderedHTML
@@ -272,6 +283,9 @@ func (s *crawlSession) fetchWithCache(ctx context.Context, e types.QueueEntry) t
 	if !s.isSpiderSeed(e.URL) {
 		reqOpts.FollowRedirect = s.queue.InScope
 	}
+	if s.native != nil {
+		return s.native.Fetch(ctx, e.URL, true, reqOpts.FollowRedirect)
+	}
 	if e.Referrer != nil {
 		reqOpts.Referrer = *e.Referrer
 	}
@@ -379,6 +393,7 @@ func (s *crawlSession) extractPageWithRefs(e types.QueueEntry, result types.Fetc
 		}
 	}
 	page.RedirectChain = result.RedirectChain
+	page.BrowserURL = result.BrowserURL
 	page.ResponseTimeMs = result.ResponseTimeMs
 	page.BodySize = result.BodySize
 	page.ContentType = result.ContentType
@@ -398,6 +413,15 @@ func (s *crawlSession) extractPageWithRefs(e types.QueueEntry, result types.Fetc
 
 func (s *crawlSession) enrichPage(ctx context.Context, e types.QueueEntry, result types.FetchResult, page *types.PageData) string {
 	var renderedHTML string
+	if s.native != nil && result.HTML != "" && result.Error == "" {
+		renderedHTML = result.HTML
+		if result.RawHTML != "" {
+			if diffs, err := browser.CompareRender(result.RawHTML, result.HTML); err == nil {
+				page.JSRendered = true
+				page.RenderDiffs = diffs
+			}
+		}
+	}
 
 	// JS rendering
 	if s.renderer != nil && result.HTML != "" && result.Error == "" && page.StatusCode == 200 {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
@@ -47,12 +48,16 @@ var blockedDomains = []string{
 type RenderResult struct {
 	HTML     string
 	JSErrors []string
+	Preview  *PreviewFrame
 }
 
 // RenderConfig holds per-renderer configuration.
 type RenderConfig struct {
-	Timeout        time.Duration
-	BlockResources bool
+	// previewHTMLOnly keeps a raw-HTML preview on its prefetched document.
+	// HTML-only crawling does not navigate meta refreshes or load iframe documents.
+	previewHTMLOnly bool
+	Timeout         time.Duration
+	BlockResources  bool
 	// BlockImages fails every image request (resource type Image or an image
 	// file extension), with or without BlockResources. Crawls set it unless
 	// DownloadImages is on, so rendering never downloads image files.
@@ -79,18 +84,25 @@ type Prefetched struct {
 
 // Renderer manages a headless Chrome instance.
 // Fresh tab contexts are created per render to avoid listener accumulation.
-// The Chrome process is shared via the allocator for efficiency.
+// A lifetime browser context owns one Chrome process. Each operation uses
+// a separate browser context and tab to isolate cookies and site storage.
 //
 // Chrome is never given the crawl's cookies or custom headers: they stay in
 // the crawler's fetcher, scoped by credentialsAllowed. Never add them with
 // network.SetExtraHTTPHeaders or an unscoped cookie, which reach every host
 // the page loads from (TestRenderSendsNoCrawlCredentials).
 type Renderer struct {
-	allocCtx    context.Context
-	allocCancel context.CancelFunc
-	proxy       string
-	config      RenderConfig
-	guard       *netguard.Proxy // set with GuardNetwork
+	browserCtx     context.Context
+	browserCancel  context.CancelFunc
+	lifetimeCancel context.CancelFunc
+	allocCancel    context.CancelFunc
+	startOnce      sync.Once
+	startReady     chan struct{}
+	startErr       error // written before startReady closes
+	closeOnce      sync.Once
+	proxy          string
+	config         RenderConfig
+	guard          *netguard.Proxy // set with GuardNetwork
 }
 
 // NewRenderer creates a new browser renderer.
@@ -132,7 +144,9 @@ func NewRenderer(proxy string, cfg ...RenderConfig) *Renderer {
 	} else if proxy != "" {
 		opts = append(opts, chromedp.ProxyServer(proxy))
 	}
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	lifetimeCtx, lifetimeCancel := context.WithCancel(context.Background())
+	allocCtx, allocCancel := chromedp.NewExecAllocator(lifetimeCtx, opts...)
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
 	rc := RenderConfig{Timeout: defaultTimeout, BlockResources: true}
 	if len(cfg) > 0 {
@@ -148,11 +162,14 @@ func NewRenderer(proxy string, cfg ...RenderConfig) *Renderer {
 	}
 
 	return &Renderer{
-		allocCtx:    allocCtx,
-		allocCancel: allocCancel,
-		proxy:       proxy,
-		config:      rc,
-		guard:       guard,
+		browserCtx:     browserCtx,
+		browserCancel:  browserCancel,
+		lifetimeCancel: lifetimeCancel,
+		allocCancel:    allocCancel,
+		startReady:     make(chan struct{}),
+		proxy:          proxy,
+		config:         rc,
+		guard:          guard,
 	}
 }
 
@@ -217,7 +234,7 @@ func setupInterception(cfg RenderConfig, pageURL string, pre *Prefetched) chrome
 			return nil
 		}
 		// Subscribe before enabling so no paused request is missed.
-		events := cdp.Events(ctx, t, fetch.RequestPaused)
+		events := interceptionEvents(ctx, t)
 		if _, err := cdp.Call(ctx, t, fetch.Enable, fetch.EnableParams{
 			Patterns: []*fetch.RequestPattern{{RequestStage: fetch.RequestStageRequest}},
 		}); err != nil {
@@ -245,6 +262,8 @@ func setupInterception(cfg RenderConfig, pageURL string, pre *Prefetched) chrome
 							RequestID: req.RequestID, ResponseCode: 200,
 							ResponseHeaders: prefetchedHeaders(pre.Headers), Body: []byte(pre.HTML),
 						})
+					case cfg.previewHTMLOnly && isDoc:
+						_, _ = cdp.Call(ctx, t, fetch.FailRequest, fetch.FailRequestParams{RequestID: req.RequestID, ErrorReason: network.ErrorReasonBlockedByClient})
 					case cfg.Pace != nil && isDoc:
 						sent := cfg.Pace(ctx, req.Request.URL)
 						cont(&req)
@@ -369,22 +388,49 @@ func (r *Renderer) RenderPage(ctx context.Context, pageURL, userAgent string, pr
 // RenderPageAs renders like RenderPage on another device's screen, so one
 // Chrome serves both devices of a device comparison crawl.
 func (r *Renderer) RenderPageAs(ctx context.Context, pageURL, userAgent string, device *types.DeviceProfile, pre *Prefetched) (*RenderResult, error) {
-	taskCtx, cancel := chromedp.NewContext(r.allocCtx)
-	defer cancel()
+	return r.renderPageAs(ctx, pageURL, userAgent, device, pre, true, false)
+}
 
-	timeoutCtx, timeoutCancel := context.WithTimeout(taskCtx, r.config.Timeout)
-	defer timeoutCancel()
+// PreviewPage captures the same tab and DOM used for rendering. Without JavaScript,
+// scripts are disabled before navigation, including inline scripts and frames.
+func (r *Renderer) PreviewPage(ctx context.Context, pageURL, userAgent string, pre *Prefetched, javascript bool) (*RenderResult, error) {
+	if !javascript && pre != nil {
+		headers := make(map[string]string, len(pre.Headers))
+		for key, value := range pre.Headers {
+			if !strings.EqualFold(key, "refresh") {
+				headers[key] = value
+			}
+		}
+		pre = &Prefetched{HTML: withoutPreviewRefresh(pre.HTML), Headers: headers}
+	}
+	return r.renderPageAs(ctx, pageURL, userAgent, r.config.Device, pre, javascript, true)
+}
+
+func (r *Renderer) renderPageAs(ctx context.Context, pageURL, userAgent string, device *types.DeviceProfile, pre *Prefetched, javascript, capture bool) (*RenderResult, error) {
+	timeoutCtx, cleanup, err := r.newTask(ctx, r.config.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("render page: %w", err)
+	}
+	defer cleanup()
 
 	var jsErrors []string
 	var errorMu sync.Mutex
+	renderConfig := r.config
+	renderConfig.previewHTMLOnly = !javascript
 
 	actions := []chromedp.Action[chromedp.Void]{
 		emulateDevice(device),
 		overrideUserAgent(userAgent, device),
 		collectJSErrors(&jsErrors, &errorMu),
-		setupInterception(r.config, pageURL, pre),
+		setupInterception(renderConfig, pageURL, pre),
 	}
 
+	if !javascript {
+		actions = append(actions, chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+			_, err := cdp.Call(ctx, t, emulation.SetScriptExecutionDisabled, emulation.SetScriptExecutionDisabledParams{Value: true})
+			return err
+		}))
+	}
 	actions = append(actions,
 		chromedp.Navigate(pageURL),
 		chromedp.WaitReady("body"),
@@ -403,17 +449,24 @@ func (r *Renderer) RenderPageAs(ctx context.Context, pageURL, userAgent string, 
 	errs := jsErrors
 	errorMu.Unlock()
 
-	return &RenderResult{HTML: html, JSErrors: errs}, nil
+	result := &RenderResult{HTML: html, JSErrors: errs}
+	if capture {
+		result.Preview, err = capturePreview(timeoutCtx)
+		if err != nil {
+			return nil, fmt.Errorf("capture preview: %w", err)
+		}
+	}
+	return result, nil
 }
 
 // RunSnippet executes a JavaScript snippet on a rendered page and returns the
 // result. With pre, the page itself is served from pre (see Prefetched).
 func (r *Renderer) RunSnippet(ctx context.Context, pageURL, userAgent, jsCode string, pre *Prefetched) (any, error) {
-	taskCtx, cancel := chromedp.NewContext(r.allocCtx)
-	defer cancel()
-
-	timeoutCtx, timeoutCancel := context.WithTimeout(taskCtx, snippetTimeout)
-	defer timeoutCancel()
+	timeoutCtx, cleanup, err := r.newTask(ctx, snippetTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("run snippet: %w", err)
+	}
+	defer cleanup()
 
 	actions := []chromedp.Action[chromedp.Void]{
 		emulateDevice(r.config.Device),
@@ -481,15 +534,14 @@ const hideOverlaysJS = `(() => {
 // scaled by scale (0.25 turns 1280x800 into a 320x200 thumbnail) without any
 // image processing in Go. Use a renderer with BlockResources off so images load.
 func (r *Renderer) Screenshot(ctx context.Context, pageURL string, width, height int64, scale float64, quality int64) ([]byte, error) {
-	taskCtx, cancel := chromedp.NewContext(r.allocCtx)
-	defer cancel()
-	timeoutCtx, timeoutCancel := context.WithTimeout(taskCtx, r.config.Timeout)
-	defer timeoutCancel()
-	stop := context.AfterFunc(ctx, timeoutCancel)
-	defer stop()
+	timeoutCtx, cleanup, err := r.newTask(ctx, r.config.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("screenshot: %w", err)
+	}
+	defer cleanup()
 
 	var shot []byte
-	err := chromedp.Do(timeoutCtx,
+	err = chromedp.Do(timeoutCtx,
 		chromedp.EmulateViewport(width, height, chromedp.EmulateScale(scale)),
 		chromedp.Navigate(pageURL),
 		chromedp.WaitReady("body"),
@@ -514,10 +566,34 @@ func (r *Renderer) Screenshot(ctx context.Context, pageURL string, width, height
 
 // Close shuts down the Chrome instance.
 func (r *Renderer) Close() {
-	r.allocCancel()
-	if r.guard != nil {
-		r.guard.Close()
-	}
+	r.closeOnce.Do(func() {
+		// Startup can still be allocating Chrome before the allocator's wait
+		// group is populated. Cancel unfinished startup, then join it before
+		// inspecting the browser or waiting for process cleanup.
+		r.startOnce.Do(func() {
+			r.startErr = context.Canceled
+			close(r.startReady)
+		})
+		select {
+		case <-r.startReady:
+		default:
+			r.lifetimeCancel()
+		}
+		<-r.startReady
+		if r.startErr == nil && r.browserCtx.Err() == nil {
+			// Let Chrome join its helpers before its main process exits. Killing
+			// the allocator first can leave helpers alive after Close returns.
+			ctx, cancel := context.WithTimeout(r.browserCtx, 2*time.Second)
+			_ = chromedp.Cancel(ctx)
+			cancel()
+		}
+		r.lifetimeCancel()
+		r.browserCancel()
+		r.allocCancel()
+		if r.guard != nil {
+			r.guard.Close()
+		}
+	})
 }
 
 // ── Render comparison ──

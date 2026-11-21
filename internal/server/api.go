@@ -107,6 +107,7 @@ func CreateAPIHandler(store *UiStore, manager *CrawlManager, upd *updater.Update
 	registerUpdateRoutes(mux, upd)
 	registerUniverseRoutes(mux, store, manager)
 	registerPageRoute(mux, manager)
+	registerBrowserPreview(mux, manager)
 
 	mux.HandleFunc("POST /api/crawl/start", func(w http.ResponseWriter, r *http.Request) {
 		config, err := readJSON(r)

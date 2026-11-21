@@ -115,7 +115,71 @@ The dashboard is built into the binary. No separate web server is needed.
 
 Open **New Crawl**, choose a preset if useful, then choose a crawl mode.
 
+### Preview what the crawler receives
+
+In Spider mode, enter a seed URL and click **Preview crawler view**. The
+preview always requests that site's homepage, even when the seed contains a
+path or query. It shows a still capture, HTTP response URL, title, status,
+User-Agent and the mode actually used. Chrome must be installed on the machine
+running Micelio.
+
+With **JavaScript rendering off**, Micelio uses the crawler's HTTP response
+and disables JavaScript before displaying it. Inline scripts, iframe documents
+and refresh redirects cannot replace that HTML view. Styles are displayed for
+readability; image blocking follows the crawl settings. The crawler itself
+reads HTML, rather than an image.
+
+With **JavaScript rendering on**, the same crawler renderer runs the fetched
+HTML and captures that tab. The homepage is not fetched twice. As in the
+crawler, only HTTP 200 documents run JavaScript; an HTTP error page appears as
+HTML. **Native Chrome** captures the native browser tab with its own per-site
+profile, including previously retained site verification. It does not use your
+personal Chrome profile. A native preview cannot open while a crawl is using
+that same profile.
+
+The preview uses the crawl's User-Agent, device, proxy, manual cookies and
+headers where that mode supports them. Crawl credentials remain in the HTTP
+fetcher and are not passed to unrelated browser resource requests. The same
+robots policy and network restrictions apply. If robots disallows the homepage,
+it is not requested. Blocks such as HTTP 403 or 429 remain visible.
+
+The image has no clickable web controls or automatic updates. Changes to the
+request or rendering settings mark it as outdated. Click **Update preview** to
+capture again, **Close preview** to remove the image, or **Cancel preview** to
+stop a pending capture. Chrome closes after each capture. One preview can be
+generated at a time; it does not create a crawl or add anything to History.
+
 ### Crawl modes
+
+**Native Chrome** is an optional transport for Spider crawls. Enable it under
+the seed URL, or pass `--native-chrome` to `micelio crawl`. It opens installed
+Chrome with its own profile per origin and keeps that browser session for the
+whole crawl, including robots.txt. Profiles under `~/.micelio/native-chrome`
+retain cookies and browser state between crawls so a successful verification
+is not discarded each time. Personal Chrome profiles are never opened. The
+profile is locked during a crawl to prevent two processes sharing it. It needs
+a visible desktop session. It uses
+one tab, at least 1,000 ms between document requests, and always respects
+robots.txt. The running crawl's Adjust panel cannot lower those limits.
+
+Chrome uses its own User-Agent and cookies. Personal browser profiles, manual
+headers/cookies, device emulation/comparison, snippets, sitemap discovery,
+HEAD-only crawls, page weight and external-link checks are not supported in
+this mode. The form omits those options for native crawls; the CLI/API reject
+incompatible combinations. Offline SEO analysis, history, saved HTML and
+rendered DOM, filters and page/depth limits still work. The native browser
+uses Micelio's protected proxy, and stops on HTTP 403/429 without falling back
+to the ordinary HTTP client. Its process closes when the crawl ends or is
+cancelled; its per-site profile is retained.
+
+Startup allows about 15 seconds for Chrome's first robots.txt page before
+attaching the crawler. Native response times include browser navigation and
+page loading; compare them separately from ordinary HTTP-only crawl timings.
+
+Results retain the final HTTP response URL for canonical/indexability checks.
+If JavaScript changes the address with `history.replaceState`, that separate
+address is saved as `browserUrl`. A browser-only `?range=20` change therefore
+does not make a clean HTTP URL appear canonicalised to another page.
 
 | Mode | Input | Behavior | Best for |
 |---|---|---|---|

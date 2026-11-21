@@ -11,6 +11,7 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ### Fixed
 
+- JavaScript document requests now keep the host's pacing turn until response headers or a redirect/failure, instead of releasing it when Chrome merely acknowledges continuation. Slow response headers can increase the effective gap; page bodies do not hold the turn.
 - Binary POST request events no longer stop Chrome request interception.
 - Chrome shuts down gracefully before cancellation, allowing its helper processes to exit.
 

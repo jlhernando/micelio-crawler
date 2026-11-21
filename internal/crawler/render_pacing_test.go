@@ -48,6 +48,10 @@ func TestJSRenderingHitsEachPageOnceAndKeepsDelay(t *testing.T) {
 		mu.Unlock()
 		w.Header().Set("Content-Type", "text/html")
 		if r.URL.Path == "/frame" {
+			http.Redirect(w, r, "/frame-document", http.StatusFound)
+			return
+		}
+		if r.URL.Path == "/frame-document" {
 			fmt.Fprint(w, "<html><body>frame</body></html>")
 			return
 		}
@@ -73,6 +77,9 @@ func TestJSRenderingHitsEachPageOnceAndKeepsDelay(t *testing.T) {
 	}
 	if hits["/frame"] == 0 {
 		t.Fatal("iframe never loaded: the test does not cover browser requests")
+	}
+	if hits["/frame-document"] == 0 {
+		t.Fatal("iframe redirect never followed: pacing must release the previous hop")
 	}
 	for i := 1; i < len(times); i++ {
 		if g := times[i].Sub(times[i-1]); g < 280*time.Millisecond {

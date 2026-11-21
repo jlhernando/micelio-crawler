@@ -220,6 +220,10 @@ does not create or supply API keys.
   1000 / delay pages per second whatever the concurrency: 200 ms allows up to
   5 pages/s, 1,000 ms allows 1 page/s. New Crawl shows the cap for the chosen
   delay.
+  With JavaScript rendering, browser document requests such as iframes and
+  redirects hold the site's turn until response headers or failure. The delay
+  then starts from that signal, so slow response headers can lower the crawl
+  speed further. The turn does not wait for the full body or page load.
 - **Download images** is off by default. Off: JS rendering blocks image
   requests and links to image files (`<a href="photo.jpg">`) are not
   requested (Crawl coverage lists them as `linked_image`). On: linked images

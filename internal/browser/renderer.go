@@ -265,9 +265,7 @@ func setupInterception(cfg RenderConfig, pageURL string, pre *Prefetched) chrome
 					case cfg.previewHTMLOnly && isDoc:
 						_, _ = cdp.Call(ctx, t, fetch.FailRequest, fetch.FailRequestParams{RequestID: req.RequestID, ErrorReason: network.ErrorReasonBlockedByClient})
 					case cfg.Pace != nil && isDoc:
-						sent := cfg.Pace(ctx, req.Request.URL)
-						cont(&req)
-						sent()
+						_ = continuePacedDocument(ctx, t, req, cfg.Pace)
 					default:
 						cont(&req)
 					}

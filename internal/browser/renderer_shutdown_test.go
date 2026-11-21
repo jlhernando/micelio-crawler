@@ -19,7 +19,7 @@ func TestRendererCloseLetsChromeExitNormally(t *testing.T) {
 	var forced atomic.Bool
 	var command *exec.Cmd
 	opts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
-	opts = append(opts, chromedp.ModifyCmdFunc(func(cmd *exec.Cmd) {
+	opts = append(opts, chromedp.Flag("no-sandbox", true), chromedp.ModifyCmdFunc(func(cmd *exec.Cmd) {
 		command = cmd
 		kill := cmd.Cancel
 		cmd.Cancel = func() error {

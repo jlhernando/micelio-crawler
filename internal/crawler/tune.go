@@ -44,6 +44,9 @@ func (tu *Tuner) Get() Tuning {
 // -1 means "no delay" (0 ms; the per-host floor and robots.txt Crawl-delay
 // still apply).
 func (tu *Tuner) Apply(n Tuning) (Tuning, error) {
+	if tu.s != nil && tu.s.config.NativeChrome && (n.Concurrency > 1 || (n.DelayMs != 0 && n.DelayMs < 1000)) {
+		return tu.Get(), errors.New("native Chrome uses one tab and a minimum delay of 1000 ms")
+	}
 	if n.Concurrency < 0 || n.Concurrency > maxLiveConcurrency {
 		return tu.Get(), errors.New("concurrency must be between 1 and 100")
 	}

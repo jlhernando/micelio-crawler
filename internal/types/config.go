@@ -105,6 +105,7 @@ type CrawlConfig struct {
 	GSC                 bool    `json:"gsc"`
 	SitemapOut          bool    `json:"sitemapOut"`
 	JSRendering         bool    `json:"jsRendering"`
+	NativeChrome        bool    `json:"nativeChrome,omitempty"`
 	DelayExplicit       bool    `json:"delayExplicit"`
 	AdaptiveRate        bool    `json:"adaptiveRate"`
 	CrUX                bool    `json:"crux"`

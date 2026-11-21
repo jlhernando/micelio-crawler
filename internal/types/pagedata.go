@@ -23,6 +23,7 @@ type FetchResult struct {
 	FinalURL       string            `json:"finalUrl"`
 	HTML           string            `json:"html"`
 	RawHTML        string            `json:"rawHtml,omitempty"`
+	BrowserURL     string            `json:"browserUrl,omitempty"`
 	ContentType    string            `json:"contentType"`
 	Error          string            `json:"error,omitempty"`
 	RedirectChain  []RedirectHop     `json:"redirectChain"`
@@ -80,6 +81,7 @@ type PageData struct {
 	Error              string                  `json:"error,omitempty"`
 	TemplateType       string                  `json:"templateType,omitempty"`
 	FinalURL           string                  `json:"finalUrl"`
+	BrowserURL         string                  `json:"browserUrl,omitempty"`
 	Headings           HeadingData             `json:"headings"`
 	Anchors            []AnchorData            `json:"anchors,omitempty"`
 	Segments           []string                `json:"segments,omitempty"`

@@ -2,6 +2,7 @@
   import ScheduleForm from '../lib/components/schedule/ScheduleForm.svelte';
   import { Zap, ScanSearch, FileText, Wrench, Network } from 'lucide-svelte';
   import DevicePicker from '../lib/components/DevicePicker.svelte';
+  import BrowserPreview from '../lib/components/BrowserPreview.svelte';
   import type { DeviceChoice } from '../lib/devices.js';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
   import { onMount } from 'svelte';
@@ -66,6 +67,21 @@
 
   // JavaScript
   let jsRendering = $state(false);
+  let nativeChrome = $state(false);
+
+  function changeNativeChrome() {
+    if (!nativeChrome) return;
+    concurrency = 1;
+    delay = Math.max(1000, delay);
+    jsRendering = false;
+    checkExternal = false;
+    discoverSitemaps = false;
+    pageWeight = false;
+    stealth = false;
+    respectRobots = true;
+    soft404Probe = false;
+    agentCheck = false;
+  }
   let device = $state<DeviceChoice | null>(null); // null = Micelio/1.0, 1920x1080 render
   let compareDevice = $state<DeviceChoice | null>(null); // fetch every page as this device too
   let renderBlockResources = $state(true);
@@ -297,9 +313,11 @@
     if (c.device !== undefined) device = (c.device as DeviceChoice | null) ?? null;
     if (c.timeoutSeconds !== undefined) stopAfterMinutes = Math.round((c.timeoutSeconds as number) / 60);
     if (c.delay !== undefined) delay = c.delay as number;
+    if (nativeChrome) changeNativeChrome();
   }
 
   function loadConfigFromJob(c: Record<string, unknown>) {
+    nativeChrome = c.nativeChrome === true;
     selectedPreset = null;
     if (c.mode) mode = c.mode as 'spider' | 'list' | 'sitemap';
     if (c.seedUrl) url = c.seedUrl as string;
@@ -382,6 +400,7 @@
   function buildConfig(): Record<string, unknown> {
     const config: Record<string, unknown> = {
       mode,
+      nativeChrome,
       depth,
       limit,
       concurrency,
@@ -484,6 +503,22 @@
     config.saveHtml = saveHtml;
     config.saveRendered = saveRendered;
 
+    if (nativeChrome) {
+      config.nativeChrome = true;
+      config.concurrency = 1;
+      config.delay = Math.max(1000, delay);
+      config.respectRobots = true;
+      config.noSoft404Probe = true;
+      config.noAgentCheck = true;
+      config.jsRendering = false;
+      config.renderBlockResources = false;
+      config.checkExternal = false;
+      config.discoverSitemaps = false;
+      config.pageWeight = false;
+      config.stealth = false;
+      for (const key of ['userAgent','device','compareDevice','cookies','customHeaders','snippetPaths']) delete config[key];
+    }
+
     return config;
   }
 
@@ -506,6 +541,16 @@
     if (!target.trim()) throw new Error('Please enter a URL or file path');
     return buildConfig();
   }
+
+  // Send only settings used to request or display the homepage. Keep secrets
+  // out of unrelated preview fields and never send local file paths.
+  const previewConfig = $derived.by(() => {
+    const crawl = buildConfig();
+    const keys = ['seedUrl', 'nativeChrome', 'jsRendering', 'userAgent', 'device', 'proxy',
+      'cookies', 'customHeaders', 'stealth', 'renderBlockResources', 'renderTimeoutSec',
+      'downloadImages', 'respectRobots', 'delay'];
+    return Object.fromEntries(keys.filter(key => crawl[key] !== undefined).map(key => [key, crawl[key]]));
+  });
 
   async function startCrawl() {
     const numErr = numberFieldError();
@@ -564,7 +609,7 @@
           type="button"
           class="px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer
             {mode === m ? 'bg-accent text-white' : 'bg-surface-3 text-fg-2 hover:text-fg'}"
-          onclick={() => mode = m as typeof mode}
+          onclick={() => { mode = m as typeof mode; if (mode !== 'spider') nativeChrome = false; }}
         >
           {m === 'spider' ? 'Spider' : m === 'list' ? 'URL List' : 'Sitemap'}
         </button>
@@ -581,6 +626,14 @@
           placeholder="https://example.com"
           class="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg placeholder:text-fg-2/50 text-sm focus:outline-none focus:border-accent"
         />
+        <label class="flex items-center gap-2 mt-3 text-sm cursor-pointer">
+          <input type="checkbox" bind:checked={nativeChrome} onchange={changeNativeChrome} class="rounded accent-accent" />
+          Native Chrome
+        </label>
+        {#if nativeChrome}
+          <p class="mt-2 text-xs text-fg-2" data-testid="native-chrome-help">Chrome opens when the crawl starts. Uses its own profile per site to keep browser verification between crawls, one tab and a minimum 1-second delay. Your personal Chrome profile is not used. Robots.txt stays enabled. Device emulation, manual headers/cookies, snippets, sitemap discovery, page weight and external link checks are not used in this mode. Chrome needs a visible desktop session.</p>
+        {/if}
+        <BrowserPreview config={previewConfig} />
         {#if recentSites.length > 0}
           <div class="flex flex-wrap gap-1.5 mt-2">
             {#each recentSites as site}
@@ -631,14 +684,14 @@
         <NumberInput id="limit" min={1} bind:value={limit}
           className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent" />
       </div>
-      <div>
+      <fieldset disabled={nativeChrome}>
         <label for="concurrency" class="block text-xs font-medium text-fg-2 mb-1">Concurrency</label>
         <NumberInput id="concurrency" min={1} max={20} bind:value={concurrency}
           className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent" />
-      </div>
+      </fieldset>
       <div>
         <label for="delay" class="block text-xs font-medium text-fg-2 mb-1">Delay (ms)</label>
-        <NumberInput id="delay" min={0} bind:value={delay}
+        <NumberInput id="delay" min={nativeChrome ? 1000 : 0} bind:value={delay}
           className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent" />
         <p class="mt-1 text-[11px] text-fg-2" data-testid="speed-cap">
           {#if delay > 0}
@@ -652,9 +705,9 @@
   </div>
 
   <!-- Device -->
-  <div class="rounded-xl border border-border bg-surface-2 p-5">
+  <fieldset disabled={nativeChrome} class="min-w-0 rounded-xl border border-border bg-surface-2 p-5">
     <DevicePicker bind:device bind:compareDevice {jsRendering} uaOverride={userAgent} />
-  </div>
+  </fieldset>
 
   <!-- Advanced Options -->
   <div class="space-y-3">
@@ -728,7 +781,7 @@
     <CollapsibleSection title="Robots.txt & Sitemaps">
       <div class="space-y-3">
         <label class="flex items-center gap-2 text-sm cursor-pointer">
-          <input type="checkbox" bind:checked={respectRobots} class="rounded accent-accent" />
+          <input type="checkbox" bind:checked={respectRobots} disabled={nativeChrome} class="rounded accent-accent" />
           Respect robots.txt
         </label>
         <p class="text-xs text-fg-2 pl-6">When enabled, URLs disallowed by robots.txt will be skipped during crawl.</p>
@@ -737,17 +790,17 @@
           Show internal URLs blocked by robots.txt
         </label>
         <label class="flex items-center gap-2 text-sm cursor-pointer">
-          <input type="checkbox" bind:checked={discoverSitemaps} class="rounded accent-accent" />
+          <input type="checkbox" bind:checked={discoverSitemaps} disabled={nativeChrome} class="rounded accent-accent" />
           Discover sitemaps
         </label>
         <p class="text-xs text-fg-2 pl-6">Parse XML sitemaps (from robots.txt or /sitemap.xml) to find and crawl orphan pages not reachable via internal links.</p>
         <label class="flex items-center gap-2 text-sm cursor-pointer">
-          <input type="checkbox" bind:checked={soft404Probe} class="rounded accent-accent" />
+          <input type="checkbox" bind:checked={soft404Probe} disabled={nativeChrome} class="rounded accent-accent" />
           Check how the site answers missing pages
         </label>
         <p class="text-xs text-fg-2 pl-6">One request for a URL that cannot exist. If the site answers 200, pages that look like its "not found" page are flagged as soft-404 candidates.</p>
         <label class="flex items-center gap-2 text-sm cursor-pointer">
-          <input type="checkbox" bind:checked={agentCheck} class="rounded accent-accent" />
+          <input type="checkbox" bind:checked={agentCheck} disabled={nativeChrome} class="rounded accent-accent" />
           Check agent readiness
         </label>
         <p class="text-xs text-fg-2 pl-6">About 20 requests per host, next to the crawl: robots.txt rules for AI bots, llms.txt, markdown for agents and /.well-known agent files (MCP, A2A, API catalog, OAuth). Results in the Agent readiness tab.</p>
@@ -771,7 +824,7 @@
         </div>
         {/if}
         <label class="flex items-center gap-2 text-sm cursor-pointer">
-          <input type="checkbox" bind:checked={stealth} class="rounded accent-accent" />
+          <input type="checkbox" bind:checked={stealth} disabled={nativeChrome} class="rounded accent-accent" />
           Stealth mode
         </label>
         <p class="text-xs text-fg-2 pl-6">Mimics Chrome TLS fingerprint and HTTP header order to evade bot detection. Use with a Chrome User-Agent.</p>
@@ -795,7 +848,7 @@
       <div class="space-y-3">
         <div>
           <label for="uaPreset" class="block text-xs font-medium text-fg-2 mb-1">User Agent <span class="font-normal">(overrides the Device User-Agent)</span></label>
-          <select id="uaPreset" value={selectedUaPreset} onchange={onUaPresetChange}
+          <select id="uaPreset" value={selectedUaPreset} onchange={onUaPresetChange} disabled={nativeChrome}
             class="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent mb-2">
             <option value="__default">Micelio/1.0 (default)</option>
             {#each uaGroups.filter(g => g !== 'Default') as group}
@@ -808,11 +861,11 @@
             <option value="__custom">Custom...</option>
           </select>
           {#if selectedUaPreset === '__custom' || (selectedUaPreset !== '__default' && selectedUaPreset !== '__custom')}
-            <input id="ua" type="text" bind:value={userAgent} oninput={onUaManualEdit}
+            <input id="ua" type="text" bind:value={userAgent} oninput={onUaManualEdit} disabled={nativeChrome}
               placeholder="Enter custom user agent string"
               class="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm font-mono focus:outline-none focus:border-accent" />
           {/if}
-          {#if selectedAiAgent}
+          {#if selectedAiAgent && !nativeChrome}
             <p class="mt-2 text-xs text-fg-2" data-testid="ai-user-agent-help">
               Changes only the User-Agent. Requests still use your connection, not the provider's IPs or signatures. Micelio keeps your robots.txt settings.
               <a href={selectedAiAgent.source} target="_blank" rel="noopener noreferrer" class="text-accent hover:underline">Provider documentation</a>
@@ -821,12 +874,12 @@
         </div>
         <div>
           <label for="headers" class="block text-xs font-medium text-fg-2 mb-1">Custom Headers (Name: Value, one per line)</label>
-          <textarea id="headers" bind:value={customHeaders} rows="2" placeholder="Authorization: Bearer token&#10;X-Custom: value"
+          <textarea id="headers" bind:value={customHeaders} disabled={nativeChrome} rows="2" placeholder="Authorization: Bearer token&#10;X-Custom: value"
             class="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm font-mono focus:outline-none focus:border-accent resize-y"></textarea>
         </div>
         <div>
           <label for="cookies" class="block text-xs font-medium text-fg-2 mb-1">Cookies</label>
-          <input id="cookies" type="text" bind:value={cookies} placeholder="name=value; name2=value2"
+          <input id="cookies" type="text" bind:value={cookies} disabled={nativeChrome} placeholder="name=value; name2=value2"
             class="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent" />
         </div>
         <div>
@@ -835,7 +888,7 @@
             class="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm focus:outline-none focus:border-accent" />
         </div>
         <label class="flex items-center gap-2 text-sm cursor-pointer">
-          <input type="checkbox" bind:checked={checkExternal} class="rounded accent-accent" />
+          <input type="checkbox" bind:checked={checkExternal} disabled={nativeChrome} class="rounded accent-accent" />
           Check external links
         </label>
       </div>
@@ -845,7 +898,7 @@
     <CollapsibleSection title="JavaScript Rendering">
       <div class="space-y-3">
         <label class="flex items-center gap-2 text-sm cursor-pointer">
-          <input type="checkbox" bind:checked={jsRendering} class="rounded accent-accent" />
+          <input type="checkbox" bind:checked={jsRendering} disabled={nativeChrome} class="rounded accent-accent" />
           Enable JS rendering (Playwright)
         </label>
         {#if jsRendering}
@@ -881,7 +934,7 @@
             class="w-full px-3 py-2 rounded-lg border border-border bg-surface text-fg text-sm font-mono focus:outline-none focus:border-accent resize-y"></textarea>
         </div>
         <label class="flex items-center gap-2 text-sm cursor-pointer">
-          <input type="checkbox" bind:checked={pageWeight} class="rounded accent-accent" />
+          <input type="checkbox" bind:checked={pageWeight} disabled={nativeChrome} class="rounded accent-accent" />
           Analyze page weight
         </label>
         <label class="flex items-center gap-2 text-sm cursor-pointer" title="Off: JS rendering blocks images and links to image files are not requested. Page weight sizes images either way.">

@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,44 @@ import (
 	"testing"
 	"time"
 )
+
+func TestNativeNoContentResponsesKeepHTTPStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/204":
+			w.WriteHeader(http.StatusNoContent)
+		case "/205":
+			w.WriteHeader(http.StatusResetContent)
+		default:
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, "<html><body>previous document</body></html>")
+		}
+	}))
+	t.Cleanup(srv.Close)
+	n := testNative(t, NativeConfig{Timeout: 5 * time.Second})
+	if result := n.Fetch(context.Background(), srv.URL, true, nil); result.Error != "" {
+		t.Fatal(result.Error)
+	}
+	for _, status := range []int{http.StatusNoContent, http.StatusResetContent} {
+		target := fmt.Sprintf("%s/%d", srv.URL, status)
+		result := n.Fetch(context.Background(), target, true, nil)
+		if result.Error != "" || result.StatusCode != status || result.FinalURL != target || result.HTML != "" || result.RawHTML != "" || result.BodySize != 0 {
+			t.Fatalf("no-content response reused a page or became an error: %+v", result)
+		}
+		response, err := n.RoundTrip(httptest.NewRequest(http.MethodGet, target, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil || response.StatusCode != status || len(body) != 0 {
+			t.Fatalf("round trip: status=%d body=%q err=%v", response.StatusCode, body, readErr)
+		}
+	}
+	if result := n.Fetch(context.Background(), srv.URL, true, nil); result.Error != "" || result.StatusCode != http.StatusOK {
+		t.Fatalf("navigation after no-content response failed: %+v", result)
+	}
+}
 
 func testNative(t *testing.T, cfg NativeConfig) *Native {
 	t.Helper()

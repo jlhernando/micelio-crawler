@@ -485,6 +485,13 @@ func (s *crawlSession) setupWriter() error {
 	return nil
 }
 
+func (s *crawlSession) browserProxy() string {
+	if s.torManager != nil {
+		return s.torManager.ProxyURL().String()
+	}
+	return s.config.Proxy
+}
+
 func (s *crawlSession) setupBrowser() {
 	if !s.config.JSRendering || s.config.NativeChrome {
 		return
@@ -508,11 +515,7 @@ func (s *crawlSession) setupBrowser() {
 	// proxy so none reaches this computer or its networks.
 	cfg.GuardNetwork = !s.config.SkipSSRF
 	cfg.Device = s.config.Device
-	proxy := s.config.Proxy
-	if s.torManager != nil {
-		proxy = s.torManager.ProxyURL().String() // "tor" is not a URL
-	}
-	s.renderer = browser.NewRenderer(proxy, cfg)
+	s.renderer = browser.NewRenderer(s.browserProxy(), cfg)
 	s.browserSem = make(chan struct{}, 4)
 	features := "max 4 tabs"
 	if cfg.BlockResources {
@@ -532,11 +535,7 @@ func (s *crawlSession) setupNative(ctx context.Context) error {
 		return err
 	}
 	u.Path, u.RawPath, u.RawQuery, u.Fragment = "/robots.txt", "", "", ""
-	proxy := s.config.Proxy
-	if s.torManager != nil {
-		proxy = s.torManager.ProxyURL().String()
-	}
-	cfg := browser.NativeConfig{InitialURL: u.String(), Proxy: proxy, GuardNetwork: !s.config.SkipSSRF, BlockImages: !s.config.DownloadImages,
+	cfg := browser.NativeConfig{InitialURL: u.String(), Proxy: s.browserProxy(), GuardNetwork: !s.config.SkipSSRF, BlockImages: !s.config.DownloadImages,
 		Pace: func(ctx context.Context, u string) func() {
 			if s.hostRL == nil {
 				return func() {}

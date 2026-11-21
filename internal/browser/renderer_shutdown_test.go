@@ -29,7 +29,7 @@ func TestRendererCloseLetsChromeExitNormally(t *testing.T) {
 	}))
 	alloc, allocCancel := chromedp.NewExecAllocator(lifetime, opts...)
 	browser, browserCancel := chromedp.NewContext(alloc)
-	r := &Renderer{browserCtx: browser, browserCancel: browserCancel, lifetimeCancel: lifetimeCancel, allocCancel: allocCancel, startReady: make(chan struct{}), config: RenderConfig{Timeout: 15 * time.Second}}
+	r := &Renderer{rendererProcess: &rendererProcess{browserCtx: browser, browserCancel: browserCancel, lifetimeCancel: lifetimeCancel, allocCancel: allocCancel, startReady: make(chan struct{})}, config: RenderConfig{Timeout: 15 * time.Second}}
 	t.Cleanup(r.Close)
 	if _, err := r.RunSnippet(context.Background(), "about:blank", "", "1", nil); err != nil {
 		if strings.Contains(err.Error(), "executable file not found") {

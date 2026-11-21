@@ -11,6 +11,9 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ### Fixed
 
+- Restart shared headless Chrome after a crash so following pages still render JavaScript, retaining the proxy, network guard and isolated page contexts.
+- Accept successful HTTP 204/205 responses in native Chrome, including an empty `robots.txt`, without reusing the previous page's body.
+- Use the Tor SOCKS proxy for HTML-only preview styles and images as well as the initial HTTP request.
 - JavaScript document requests now keep the host's pacing turn until response headers or a redirect/failure, instead of releasing it when Chrome merely acknowledges continuation. Slow response headers can increase the effective gap; page bodies do not hold the turn.
 - Binary POST request events no longer stop Chrome request interception.
 - Chrome shuts down gracefully before cancellation, allowing its helper processes to exit.

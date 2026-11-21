@@ -20,16 +20,71 @@ import (
 
 func rendererBrowser(t *testing.T, r *Renderer) *chromedp.Browser {
 	t.Helper()
+	r.lifecycleMu.Lock()
+	process := r.rendererProcess
+	r.lifecycleMu.Unlock()
 	select {
-	case <-r.startReady:
+	case <-process.startReady:
 	case <-time.After(5 * time.Second):
 		t.Fatal("shared browser was not initialized")
 	}
-	b := chromedp.FromContext(r.browserCtx).Browser
+	b := chromedp.FromContext(process.browserCtx).Browser
 	if b == nil || b.Process() == nil {
 		t.Fatal("renderer has no shared Chrome process")
 	}
 	return b
+}
+
+func TestRendererRecoversOneSharedProcessAfterCrash(t *testing.T) {
+	r := newTestRenderer(t, RenderConfig{Timeout: 15 * time.Second, GuardNetwork: true})
+	oldBrowser := rendererBrowser(t, r)
+	oldProcess := r.rendererProcess
+	guard := r.guard
+	makeProcess := r.newProcess
+	var replacements atomic.Int32
+	r.newProcess = func() *rendererProcess {
+		replacements.Add(1)
+		return makeProcess()
+	}
+	if guard == nil {
+		t.Fatal("network guard was not created")
+	}
+	if err := oldBrowser.Process().Kill(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-oldProcess.browserCtx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Chrome crash did not cancel its process context")
+	}
+	const callers = 3
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			value, err := r.RunSnippet(context.Background(), "http://public.example/", "", "document.title", &Prefetched{HTML: isolationPage})
+			if err != nil || value != "isolated" {
+				t.Errorf("render after crash: value=%v err=%v", value, err)
+			}
+		}()
+	}
+	wg.Wait()
+	newBrowser := rendererBrowser(t, r)
+	if replacements.Load() != 1 || newBrowser.Process() == oldBrowser.Process() || r.guard != guard {
+		t.Fatal("browser was not replaced or its network guard changed")
+	}
+	if _, err := r.RunSnippet(context.Background(), "about:blank", "", "'still rendering'", nil); err != nil {
+		t.Fatal(err)
+	}
+	if rendererBrowser(t, r).Process() != newBrowser.Process() {
+		t.Fatal("subsequent operation did not reuse the replacement")
+	}
+	assertNoOperationContexts(t, r)
+	r.Close()
+	if _, err := r.RunSnippet(context.Background(), "about:blank", "", "1", nil); err == nil {
+		t.Fatal("Close allowed another process restart")
+	}
 }
 
 func assertNoOperationContexts(t *testing.T, r *Renderer) {

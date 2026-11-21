@@ -8,12 +8,18 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-// startBrowser initializes the lifetime context, never an operation's context.
-// NewContext on an uninitialized allocator would otherwise launch Chrome for
-// each page. A caller cancelling its operation must not own this process.
-func (r *Renderer) startBrowser() {
+func newRendererProcess(opts []chromedp.ExecAllocatorOption) *rendererProcess {
+	lifetime, lifetimeCancel := context.WithCancel(context.Background())
+	allocator, allocCancel := chromedp.NewExecAllocator(lifetime, opts...)
+	browser, browserCancel := chromedp.NewContext(allocator)
+	return &rendererProcess{browserCtx: browser, browserCancel: browserCancel,
+		lifetimeCancel: lifetimeCancel, allocCancel: allocCancel, startReady: make(chan struct{})}
+}
+
+// startBrowser initializes the process lifetime, never a caller's operation.
+func (r *rendererProcess) startBrowser(timeout time.Duration) {
 	expired := make(chan struct{})
-	timer := time.AfterFunc(r.config.Timeout, func() {
+	timer := time.AfterFunc(timeout, func() {
 		r.lifetimeCancel()
 		close(expired)
 	})
@@ -33,7 +39,7 @@ func (r *Renderer) startBrowser() {
 }
 
 // newTask returns an operation bounded by both the request and its timeout.
-// The shared browser starts once, including when first calls arrive together.
+// Each shared process starts once, including when callers recover after a crash.
 // Every tab has its own incognito browser context, disposed when it closes.
 func (r *Renderer) newTask(request context.Context, timeout time.Duration) (context.Context, context.CancelFunc, error) {
 	waiting, waitCancel := context.WithTimeout(request, timeout)
@@ -41,22 +47,43 @@ func (r *Renderer) newTask(request context.Context, timeout time.Duration) (cont
 	if err := waiting.Err(); err != nil {
 		return nil, nil, err
 	}
-	if err := r.browserCtx.Err(); err != nil {
-		return nil, nil, err
+	r.lifecycleMu.Lock()
+	if r.closed || waiting.Err() != nil {
+		r.lifecycleMu.Unlock()
+		if err := waiting.Err(); err != nil {
+			return nil, nil, err
+		}
+		return nil, nil, context.Canceled
 	}
-	r.startOnce.Do(func() { go r.startBrowser() })
+	process := r.rendererProcess
+	if process.browserCtx.Err() != nil && r.newProcess != nil {
+		select {
+		case <-process.startReady:
+			// A browser that started successfully may die independently of its
+			// callers. Reap it before replacing it. Startup/configuration errors
+			// stay visible rather than launching a new broken process per page.
+			if process.startErr == nil {
+				process.close()
+				process = r.newProcess()
+				r.rendererProcess = process
+			}
+		default:
+		}
+	}
+	process.startOnce.Do(func() { go process.startBrowser(r.config.Timeout) })
+	r.lifecycleMu.Unlock()
 	select {
 	case <-waiting.Done():
 		return nil, nil, waiting.Err()
-	case <-r.startReady:
+	case <-process.startReady:
 	}
-	if r.startErr != nil {
-		return nil, nil, fmt.Errorf("start Chrome: %w", r.startErr)
+	if process.startErr != nil {
+		return nil, nil, fmt.Errorf("start Chrome: %w", process.startErr)
 	}
-	if err := r.browserCtx.Err(); err != nil {
+	if err := process.browserCtx.Err(); err != nil {
 		return nil, nil, err
 	}
-	tab, tabCancel := chromedp.NewContext(r.browserCtx, chromedp.WithNewBrowserContext())
+	tab, tabCancel := chromedp.NewContext(process.browserCtx, chromedp.WithNewBrowserContext())
 	deadline, _ := waiting.Deadline()
 	operation, operationCancel := context.WithDeadline(tab, deadline)
 	stop := context.AfterFunc(request, operationCancel)

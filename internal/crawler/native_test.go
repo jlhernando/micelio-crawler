@@ -12,8 +12,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/micelio/micelio/internal/browser"
 	"github.com/micelio/micelio/internal/types"
 )
+
+func TestNativeRobotsAcceptsNoContent(t *testing.T) {
+	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" {
+		t.Skip("native Chrome requires a desktop")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+	native, err := browser.NewNative(context.Background(), browser.NativeConfig{Warmup: time.Millisecond, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(native.Close)
+	rc := &RobotsChecker{SkipSSRF: true, Client: &http.Client{Transport: native}}
+	if err := rc.Init(context.Background(), srv.URL, native.UserAgent()); err != nil {
+		t.Fatal(err)
+	}
+	if rc.IsUnavailable() || rc.StatusCode() != http.StatusNoContent || !rc.IsAllowed(srv.URL+"/page", native.UserAgent()) {
+		t.Fatalf("empty robots policy rejected: unavailable=%v status=%d", rc.IsUnavailable(), rc.StatusCode())
+	}
+}
 
 func TestNativeCrawlRobotsURLAndPacing(t *testing.T) {
 	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" {

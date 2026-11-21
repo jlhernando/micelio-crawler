@@ -224,6 +224,9 @@ does not create or supply API keys.
   redirects hold the site's turn until response headers or failure. The delay
   then starts from that signal, so slow response headers can lower the crawl
   speed further. The turn does not wait for the full body or page load.
+  If shared headless Chrome crashes, following render operations start a new
+  process with the same proxy and isolated page contexts. The operation hit by
+  the crash can still report a rendering warning.
 - **Download images** is off by default. Off: JS rendering blocks image
   requests and links to image files (`<a href="photo.jpg">`) are not
   requested (Crawl coverage lists them as `linked_image`). On: linked images

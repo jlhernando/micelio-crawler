@@ -325,6 +325,7 @@ func (n *Native) Fetch(request context.Context, target string, render bool, foll
 	var chain []types.RedirectHop
 	var blocked bool
 	var aborted error
+	var navigationAborted bool
 	err := chromedp.Do(ctx, chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
 		// Frame ID stays stable for the main tab, unlike the URL shown by JS.
 		tree, err := cdp.Call(ctx, t, page.GetFrameTree, cdp.Empty{})
@@ -433,6 +434,7 @@ func (n *Native) Fetch(request context.Context, target string, render bool, foll
 			return err
 		}
 		if res.ErrorText != "" {
+			navigationAborted = res.ErrorText == "net::ERR_ABORTED"
 			return fmt.Errorf("%s", res.ErrorText)
 		}
 		return nil
@@ -442,7 +444,7 @@ func (n *Native) Fetch(request context.Context, target string, render bool, foll
 	stateMu.Lock()
 	alreadyBlocked := blocked
 	stateMu.Unlock()
-	if err == nil && !alreadyBlocked {
+	if (err == nil || navigationAborted) && !alreadyBlocked {
 		select {
 		case <-responseReady:
 		case <-ctx.Done():
@@ -480,6 +482,13 @@ func (n *Native) Fetch(request context.Context, target string, render bool, foll
 	if outOfScope && r != nil && r.Status >= 300 && r.Status < 400 {
 		err = nil
 	}
+	// Chrome does not commit a document for successful no-content responses.
+	// It reports ERR_ABORTED and no body/LoadingFinished event. Wait for the
+	// HTTP metadata above, then preserve that success instead of the old tab.
+	noContent := r != nil && (r.Status == http.StatusNoContent || r.Status == http.StatusResetContent)
+	if noContent && navigationAborted && ctx.Err() == nil {
+		err = nil
+	}
 	if err == nil && interceptErr != nil {
 		err = interceptErr
 	}
@@ -500,7 +509,7 @@ func (n *Native) Fetch(request context.Context, target string, render bool, foll
 		result.ResponseTimeMs = time.Since(start).Milliseconds()
 		return result
 	}
-	if outOfScope {
+	if outOfScope || noContent {
 		result.ResponseTimeMs = time.Since(start).Milliseconds()
 		return result
 	}

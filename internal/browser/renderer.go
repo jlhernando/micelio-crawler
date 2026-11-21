@@ -84,14 +84,27 @@ type Prefetched struct {
 
 // Renderer manages a headless Chrome instance.
 // Fresh tab contexts are created per render to avoid listener accumulation.
-// A lifetime browser context owns one Chrome process. Each operation uses
-// a separate browser context and tab to isolate cookies and site storage.
+// One shared Chrome process serves operations and is replaced after a crash.
+// Each operation has its own browser context and tab to isolate site storage.
 //
 // Chrome is never given the crawl's cookies or custom headers: they stay in
 // the crawler's fetcher, scoped by credentialsAllowed. Never add them with
 // network.SetExtraHTTPHeaders or an unscoped cookie, which reach every host
 // the page loads from (TestRenderSendsNoCrawlCredentials).
 type Renderer struct {
+	*rendererProcess
+	lifecycleMu sync.Mutex
+	newProcess  func() *rendererProcess
+	closed      bool
+	closeOnce   sync.Once
+	proxy       string
+	config      RenderConfig
+	guard       *netguard.Proxy // retained across process restarts
+}
+
+// Each process has its own startup and cancellation state. Operations keep a
+// reference to their process so cleanup cannot affect a replacement browser.
+type rendererProcess struct {
 	browserCtx     context.Context
 	browserCancel  context.CancelFunc
 	lifetimeCancel context.CancelFunc
@@ -100,9 +113,6 @@ type Renderer struct {
 	startReady     chan struct{}
 	startErr       error // written before startReady closes
 	closeOnce      sync.Once
-	proxy          string
-	config         RenderConfig
-	guard          *netguard.Proxy // set with GuardNetwork
 }
 
 // NewRenderer creates a new browser renderer.
@@ -144,10 +154,6 @@ func NewRenderer(proxy string, cfg ...RenderConfig) *Renderer {
 	} else if proxy != "" {
 		opts = append(opts, chromedp.ProxyServer(proxy))
 	}
-	lifetimeCtx, lifetimeCancel := context.WithCancel(context.Background())
-	allocCtx, allocCancel := chromedp.NewExecAllocator(lifetimeCtx, opts...)
-	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
-
 	rc := RenderConfig{Timeout: defaultTimeout, BlockResources: true}
 	if len(cfg) > 0 {
 		c := cfg[0]
@@ -161,16 +167,8 @@ func NewRenderer(proxy string, cfg ...RenderConfig) *Renderer {
 		rc.Device = c.Device
 	}
 
-	return &Renderer{
-		browserCtx:     browserCtx,
-		browserCancel:  browserCancel,
-		lifetimeCancel: lifetimeCancel,
-		allocCancel:    allocCancel,
-		startReady:     make(chan struct{}),
-		proxy:          proxy,
-		config:         rc,
-		guard:          guard,
-	}
+	newProcess := func() *rendererProcess { return newRendererProcess(opts) }
+	return &Renderer{rendererProcess: newProcess(), newProcess: newProcess, proxy: proxy, config: rc, guard: guard}
 }
 
 // waitForDOMStability polls document.body.innerHTML.length until stable.
@@ -565,6 +563,19 @@ func (r *Renderer) Screenshot(ctx context.Context, pageURL string, width, height
 // Close shuts down the Chrome instance.
 func (r *Renderer) Close() {
 	r.closeOnce.Do(func() {
+		r.lifecycleMu.Lock()
+		r.closed = true
+		process := r.rendererProcess
+		r.lifecycleMu.Unlock()
+		process.close()
+		if r.guard != nil {
+			r.guard.Close()
+		}
+	})
+}
+
+func (r *rendererProcess) close() {
+	r.closeOnce.Do(func() {
 		// Startup can still be allocating Chrome before the allocator's wait
 		// group is populated. Cancel unfinished startup, then join it before
 		// inspecting the browser or waiting for process cleanup.
@@ -588,9 +599,6 @@ func (r *Renderer) Close() {
 		r.lifetimeCancel()
 		r.browserCancel()
 		r.allocCancel()
-		if r.guard != nil {
-			r.guard.Close()
-		}
 	})
 }
 

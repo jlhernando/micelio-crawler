@@ -77,7 +77,7 @@ func PreviewHomepage(ctx context.Context, config types.CrawlConfig) (*browser.Pr
 			mode = "javascript"
 		}
 		if s.renderer == nil {
-			s.renderer = browser.NewRenderer(s.config.Proxy, browser.RenderConfig{
+			s.renderer = browser.NewRenderer(s.browserProxy(), browser.RenderConfig{
 				Timeout: 30 * time.Second, GuardNetwork: !s.config.SkipSSRF, Device: s.config.Device,
 				BlockImages: !s.config.DownloadImages, Pace: s.fetchOpts.Pace,
 			})

@@ -66,9 +66,10 @@ export interface ScheduleState {
 
 const BASE = '';
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const opts: RequestInit = {
     method,
+    signal,
     headers: { 'Content-Type': 'application/json' },
   };
   if (body) opts.body = JSON.stringify(body);
@@ -127,7 +128,23 @@ function getLazyDirTree(id: string, q: DirTreeQuery): Promise<DirTreeResponse> {
   });
 }
 
+export interface BrowserPreviewFrame {
+  jpeg: string;
+  url: string;
+  browserUrl?: string;
+  title: string;
+  statusCode: number;
+  width: number;
+  height: number;
+  mode: 'html' | 'javascript' | 'native';
+  userAgent: string;
+  capturedAt: string;
+}
+
 export const api = {
+  openBrowserPreview: (config: Record<string, unknown>, signal?: AbortSignal) =>
+    request<{ frame: BrowserPreviewFrame }>('POST', '/api/browser-preview', { config }, signal),
+
   // Crawl operations
   startCrawl: (config: Record<string, unknown>) =>
     request<{ id: string; status: string }>('POST', '/api/crawl/start', config),

@@ -162,6 +162,17 @@ func cleanCrawlConfig(m map[string]interface{}, strict bool) (warnings []string,
 		}
 	}
 	w, err := checkCrawlNumbers(m, strict)
+	if err == nil {
+		if native, on := m["nativeChrome"].(bool); on && native {
+			c := configFromMap(m)
+			if nativeErr := c.PrepareNativeChrome(); nativeErr != nil {
+				return append(warnings, w...), nativeErr
+			}
+			m["concurrency"], m["delay"], m["delayMs"] = 1, c.DelayMs, c.DelayMs
+			m["noSoft404Probe"], m["noAgentCheck"] = true, true
+			m["jsRendering"], m["renderBlockResources"] = false, false
+		}
+	}
 	return append(warnings, w...), err
 }
 

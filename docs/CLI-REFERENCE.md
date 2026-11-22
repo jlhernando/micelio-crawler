@@ -126,6 +126,7 @@ failures.
 | `--tor-password <value>` | | Tor control password |
 | `--tor-rotate <n>` | `50` when used | Rotate the Tor circuit every N requests |
 | `--js` | off | Render pages in headless Chrome |
+| `--native-chrome` | off | Spider through visible installed Chrome with its own per-site profile, including robots.txt. Keeps verification between crawls. One tab, minimum 1,000 ms delay; no manual credentials, device overrides, sitemap discovery, page-weight or external-link checks. Requires a desktop session. |
 | `--render-block-resources` | on | Block images, fonts, and analytics while rendering |
 | `--render-timeout <seconds>` | `30` | JS-render timeout |
 | `--download-images` | off | JS rendering loads images and linked image URLs (`<a href="x.jpg">`) are checked with HEAD. Off: Chrome blocks images and linked images are not requested. `--page-weight` sizes images either way |

@@ -213,6 +213,7 @@ func StartUIServerWithOptions(opts ServerOptions, dashboardFS fs.FS) error {
 		<-ctx.Done()
 		log.Println("Shutting down...")
 		manager.StopAllSchedulers()
+		manager.Close()
 		srv.closeAllClients()
 		httpServer.Close()
 		store.Close()

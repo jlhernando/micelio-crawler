@@ -78,6 +78,7 @@ type crawlOptions struct {
 	noRobots            bool
 	showBlockedInternal bool
 	jsRendering         bool
+	nativeChrome        bool
 	ngrams              bool
 	language            string
 	linkIntelligence    bool
@@ -173,6 +174,7 @@ func registerCrawlFlags(cmd *cobra.Command, o *crawlOptions, d crawlDefaults) {
 	f.BoolVar(&o.noRobots, "no-robots", false, "Ignore robots.txt restrictions")
 	f.BoolVar(&o.showBlockedInternal, "show-blocked-internal", false, "Include robots-blocked URLs in output")
 	f.BoolVar(&o.jsRendering, "js", false, "Enable JS rendering with headless Chrome")
+	f.BoolVar(&o.nativeChrome, "native-chrome", false, "Fetch Spider pages with visible native Chrome (one tab, minimum 1000 ms delay; own per-site session)")
 	f.BoolVar(&o.renderBlockRes, "render-block-resources", true, "Block images/fonts/analytics during JS rendering")
 	f.IntVar(&o.renderTimeout, "render-timeout", 0, "JS render timeout in seconds (default 30)")
 	f.BoolVar(&o.downloadImages, "download-images", false, "Load images in JS rendering and check linked image URLs (<a href=x.jpg>). Off: Chrome blocks images and linked images are not requested. Page weight sizes images either way")
@@ -292,6 +294,7 @@ func (o *crawlOptions) buildConfig(cmd *cobra.Command) (types.CrawlConfig, error
 		RespectRobots:       !o.noRobots,
 		ShowBlockedInternal: o.showBlockedInternal,
 		JSRendering:         o.jsRendering,
+		NativeChrome:        o.nativeChrome,
 		RenderBlockRes:      o.renderBlockRes,
 		DownloadImages:      o.downloadImages,
 		RenderTimeoutSec:    o.renderTimeout,
@@ -444,6 +447,9 @@ func (o *crawlOptions) resolveConfig(cmd *cobra.Command) (config types.CrawlConf
 // run applies the checks shared by crawl, list and sitemap and starts the
 // crawl. config already holds the command's mode and target.
 func (o *crawlOptions) run(cmd *cobra.Command, config types.CrawlConfig) error {
+	if err := config.PrepareNativeChrome(); err != nil {
+		return err
+	}
 	if config.CrUXFormFactor != "" {
 		switch config.CrUXFormFactor {
 		case types.FormFactorPhone, types.FormFactorDesktop, types.FormFactorAll:

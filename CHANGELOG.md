@@ -4,6 +4,20 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+### Added
+
+- Preview the crawler's homepage view before starting a Spider crawl. Captures use the current HTTP or JavaScript settings and return a still image, status and request metadata.
+- Native Chrome for Spider crawls, available in New Crawl and with `--native-chrome`. Uses an isolated profile per site, one tab, robots.txt and a minimum one-second delay. Requires a visible desktop session. Manual credentials, device emulation, snippets, sitemap discovery, page weight and external-link checks are unavailable in this mode.
+
+### Fixed
+
+- Restart shared headless Chrome after a crash so following pages still render JavaScript, retaining the proxy, network guard and isolated page contexts.
+- Accept successful HTTP 204/205 responses in native Chrome, including an empty `robots.txt`, without reusing the previous page's body.
+- Use the Tor SOCKS proxy for HTML-only preview styles and images as well as the initial HTTP request.
+- JavaScript document requests now keep the host's pacing turn until response headers or a redirect/failure, instead of releasing it when Chrome merely acknowledges continuation. Slow response headers can increase the effective gap; page bodies do not hold the turn.
+- Binary POST request events no longer stop Chrome request interception.
+- Chrome shuts down gracefully before cancellation, allowing its helper processes to exit.
+
 ## [1.15.2] - 2026-11-13
 
 Less memory right after a dashboard crawl. No new features; crawl output and results are the same.

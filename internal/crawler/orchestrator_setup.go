@@ -48,8 +48,10 @@ type crawlSession struct {
 	sink   *pageSink // single writer for writer + crawlDB while workers run
 
 	// Browser
-	renderer   *browser.Renderer
-	browserSem chan struct{}
+	renderer      *browser.Renderer
+	native        *browser.Native
+	nativeBlocked atomic.Bool
+	browserSem    chan struct{}
 
 	// Integration clients
 	psiClient  *integration.PSIClient
@@ -106,6 +108,9 @@ type crawlSession struct {
 }
 
 func newCrawlSession(ctx context.Context, config types.CrawlConfig, onProgress OnProgress, store []CrawlStore) (_ *crawlSession, err error) {
+	if err := config.PrepareNativeChrome(); err != nil {
+		return nil, err
+	}
 	s := &crawlSession{
 		config:        config,
 		startTime:     time.Now(),
@@ -151,6 +156,11 @@ func newCrawlSession(ctx context.Context, config types.CrawlConfig, onProgress O
 		return nil, fmt.Errorf("store-only crawl requires an output file or crawl database")
 	}
 	s.setupBrowser()
+	if s.config.NativeChrome {
+		if err := s.setupNative(ctx); err != nil {
+			return nil, err
+		}
+	}
 	s.setupIntegrationClients()
 	if !s.config.StoreOnly {
 		s.setupNgrams()
@@ -161,6 +171,9 @@ func newCrawlSession(ctx context.Context, config types.CrawlConfig, onProgress O
 	// news site the sitemaps alone took 111 s before the first page.
 	t0 := time.Now()
 	s.setupRobotsAndDelay(ctx)
+	if s.config.NativeChrome && s.robotsChecker != nil && s.robotsChecker.IsUnavailable() {
+		return nil, fmt.Errorf("native Chrome could not read robots.txt (%s); no HTTP fallback was used", s.native.AuxiliaryError())
+	}
 	fmt.Fprintf(os.Stderr, "  [timing] start: setup %s, robots.txt %s\n",
 		t0.Sub(s.startTime).Round(time.Millisecond), time.Since(t0).Round(time.Millisecond))
 	if err := s.seedSitemapMode(ctx); err != nil {
@@ -274,7 +287,7 @@ func (s *crawlSession) setupQueue() error {
 		EnforceInternal:  true,
 		AllowedDomains:   s.config.AllowedDomains,
 		PathOnlyFilters:  s.config.PathOnlyFilters,
-		SkipLinkedImages: !s.config.DownloadImages,
+		SkipLinkedImages: !s.config.DownloadImages || s.config.NativeChrome,
 	}
 	for _, p := range s.config.IncludePatterns {
 		re, err := compilePattern(p)
@@ -472,8 +485,15 @@ func (s *crawlSession) setupWriter() error {
 	return nil
 }
 
+func (s *crawlSession) browserProxy() string {
+	if s.torManager != nil {
+		return s.torManager.ProxyURL().String()
+	}
+	return s.config.Proxy
+}
+
 func (s *crawlSession) setupBrowser() {
-	if !s.config.JSRendering {
+	if !s.config.JSRendering || s.config.NativeChrome {
 		return
 	}
 	cfg := browser.RenderConfig{
@@ -495,11 +515,7 @@ func (s *crawlSession) setupBrowser() {
 	// proxy so none reaches this computer or its networks.
 	cfg.GuardNetwork = !s.config.SkipSSRF
 	cfg.Device = s.config.Device
-	proxy := s.config.Proxy
-	if s.torManager != nil {
-		proxy = s.torManager.ProxyURL().String() // "tor" is not a URL
-	}
-	s.renderer = browser.NewRenderer(proxy, cfg)
+	s.renderer = browser.NewRenderer(s.browserProxy(), cfg)
 	s.browserSem = make(chan struct{}, 4)
 	features := "max 4 tabs"
 	if cfg.BlockResources {
@@ -511,6 +527,37 @@ func (s *crawlSession) setupBrowser() {
 		features += fmt.Sprintf(", timeout=%v", cfg.Timeout)
 	}
 	fmt.Fprintf(os.Stderr, "  [browser] Headless Chrome enabled for JS rendering (%s)\n", features)
+}
+
+func (s *crawlSession) setupNative(ctx context.Context) error {
+	u, err := url.Parse(s.seedURL)
+	if err != nil {
+		return err
+	}
+	u.Path, u.RawPath, u.RawQuery, u.Fragment = "/robots.txt", "", "", ""
+	cfg := browser.NativeConfig{InitialURL: u.String(), Proxy: s.browserProxy(), GuardNetwork: !s.config.SkipSSRF, BlockImages: !s.config.DownloadImages,
+		Pace: func(ctx context.Context, u string) func() {
+			if s.hostRL == nil {
+				return func() {}
+			}
+			return s.hostRL.Wait(ctx, u)
+		},
+	}
+	if !s.config.SkipSSRF {
+		cfg.ProfileSite = u.Scheme + "://" + u.Host
+	}
+	if s.config.RenderTimeoutSec > 0 {
+		cfg.Timeout = time.Duration(s.config.RenderTimeoutSec) * time.Second
+	}
+	s.native, err = browser.NewNative(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("native Chrome: %w", err)
+	}
+	s.config.UserAgent = s.native.UserAgent()
+	s.fetchOpts.UserAgent = s.config.UserAgent
+	s.fetchOpts.Client = &http.Client{Transport: s.native, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	fmt.Fprintln(os.Stderr, "  [browser] Native Chrome: one tab, isolated profile, browser session shared with robots.txt")
+	return nil
 }
 
 func (s *crawlSession) setupIntegrationClients() {
@@ -867,6 +914,9 @@ func (s *crawlSession) seedSitemapMode(ctx context.Context) error {
 // abortReason says why the crawl must stop early (max errors or time
 // limit reached), or "" to keep going.
 func (s *crawlSession) abortReason() string {
+	if s.nativeBlocked.Load() {
+		return "native Chrome blocked by a verification or rate limit; crawl stopped without HTTP fallback"
+	}
 	if n := int(s.errorCount.Load()); s.config.MaxErrors > 0 && n >= s.config.MaxErrors {
 		return fmt.Sprintf("max errors reached (%d failed pages)", n)
 	}
@@ -889,6 +939,9 @@ func (s *crawlSession) cleanup() {
 	}
 	if s.renderer != nil {
 		s.renderer.Close()
+	}
+	if s.native != nil {
+		s.native.Close()
 	}
 	if s.psiLimiter != nil {
 		s.psiLimiter.Stop()

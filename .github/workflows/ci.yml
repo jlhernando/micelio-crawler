@@ -10,6 +10,28 @@ permissions:
   contents: read
 
 jobs:
+  installation:
+    name: Installation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Unix installer and metrics fixtures
+        if: runner.os != 'Windows'
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+      - name: Windows metrics fixtures
+        if: runner.os == 'Windows'
+        run: python -m unittest discover -s scripts/tests -p 'test_metrics.py' -v
+      - name: Windows installer fixtures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/tests/install-windows.ps1
+
   test:
     runs-on: ubuntu-latest
     steps:

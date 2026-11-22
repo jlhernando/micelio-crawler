@@ -1,0 +1,4 @@
+192.0.2.8 - - [22/Nov/2026:12:00:00 +0000] "GET / HTTP/1.1" 200 1024 "-" "Googlebot/2.1 (+http://www.google.com/bot.html)"
+192.0.2.8 - - [22/Nov/2026:12:00:01 +0000] "GET /retired HTTP/1.1" 404 512 "-" "Googlebot/2.1 (+http://www.google.com/bot.html)"
+198.51.100.23 - - [22/Nov/2026:12:00:02 +0000] "GET /guide HTTP/1.1" 200 2048 "-" "GPTBot/1.4"
+203.0.113.10 - - [22/Nov/2026:12:00:03 +0000] "GET /product HTTP/1.1" 200 4096 "-" "Mozilla/5.0"

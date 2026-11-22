@@ -83,3 +83,6 @@ try {
 } finally {
     Remove-Item -LiteralPath $root -Recurse -Force
 }
+# Negative child-process cases deliberately return 1. Only reach this after
+# every assertion succeeded; do not leak the last expected failure to CI.
+exit 0

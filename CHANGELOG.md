@@ -6,6 +6,9 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ### Added
 
+- Fresh-install scripts for macOS, Linux and Windows, with required SHA-256 verification from a pinned release and no replacement of existing executables.
+- Direct platform downloads, first-audit instructions and a synthetic sample log for trying log analysis.
+- A maintainer script to capture GitHub adoption metrics privately, without app telemetry or scheduled tasks.
 - Preview the crawler's homepage view before starting a Spider crawl. Captures use the current HTTP or JavaScript settings and return a still image, status and request metadata.
 - Native Chrome for Spider crawls, available in New Crawl and with `--native-chrome`. Uses an isolated profile per site, one tab, robots.txt and a minimum one-second delay. Requires a visible desktop session. Manual credentials, device emulation, snippets, sitemap discovery, page weight and external-link checks are unavailable in this mode.
 

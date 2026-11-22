@@ -11,27 +11,9 @@ Both interfaces use the same Go crawler and analysis pipeline.
 
 ## Install and verify
 
-Download the binary for your platform from the
-[releases page](https://github.com/jlhernando/micelio-crawler/releases/latest).
-Builds exist for Linux, macOS (Intel and Apple Silicon) and Windows, each for
-amd64 and arm64. No build tools are needed.
+Follow the [installation guide](INSTALL.md) for macOS, Windows or Linux. Fresh-install scripts choose your processor and verify the binary against the checksum from the same exact release. They install without administrator access and refuse to replace an existing executable. Manual download and SHA-256 verification instructions are included. No build tools are needed.
 
-```bash
-# macOS (Apple Silicon) example
-curl -LO https://github.com/jlhernando/micelio-crawler/releases/latest/download/micelio-darwin-arm64
-chmod +x micelio-darwin-arm64
-mv micelio-darwin-arm64 /usr/local/bin/micelio
-```
-
-The binaries are unsigned. If macOS Gatekeeper blocks the first run, clear the
-quarantine flag: `xattr -d com.apple.quarantine /usr/local/bin/micelio`.
-
-Check a download against the release's `checksums.txt`:
-
-```bash
-curl -LO https://github.com/jlhernando/micelio-crawler/releases/latest/download/checksums.txt
-shasum -a 256 -c checksums.txt --ignore-missing
-```
+macOS downloads are unsigned and not notarized. The installer does not remove quarantine or change system protections.
 
 Once installed, the in-app updater keeps the binary current. It polls GitHub
 releases and verifies the SHA256 checksum before it applies an update (see

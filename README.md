@@ -4,7 +4,15 @@
 
 <h1 align="center">Micelio</h1>
 
-<p align="center">An SEO crawler that audits your site, maps its real link architecture and analyses your server logs. One binary with a web dashboard; your data stays on your machine.</p>
+<p align="center">An open-source SEO crawler with a local web dashboard. Find technical SEO issues, explore internal links and analyse server logs. Connect an AI agent through MCP.</p>
+
+<p align="center">
+  <a href="#download">Download</a> ·
+  <a href="#your-first-crawl">Your first crawl</a> ·
+  <a href="docs/USER-GUIDE.md">User guide</a> ·
+  <a href="docs/MCP.md">Connect an AI agent</a> ·
+  <a href="https://miceliocrawler.com">Website</a>
+</p>
 
 <p align="center">
   <a href="https://github.com/jlhernando/micelio-crawler/releases/latest"><img src="https://img.shields.io/github/v/release/jlhernando/micelio-crawler" alt="Latest release"></a>
@@ -12,6 +20,32 @@
 </p>
 
 <p align="center"><img src="docs/universe.gif" alt="Universe: the link map of a crawled site" width="900"><br><em>Universe: every dot is a page, every line a real internal link.</em></p>
+
+## Download
+
+Choose your operating system and processor. These executables start the web dashboard; they are not desktop installers.
+
+| System | Download |
+|---|---|
+| macOS | [Apple Silicon](https://github.com/jlhernando/micelio-crawler/releases/latest/download/micelio-darwin-arm64) · [Intel](https://github.com/jlhernando/micelio-crawler/releases/latest/download/micelio-darwin-amd64) |
+| Windows | [x64](https://github.com/jlhernando/micelio-crawler/releases/latest/download/micelio-windows-amd64.exe) · [ARM64](https://github.com/jlhernando/micelio-crawler/releases/latest/download/micelio-windows-arm64.exe) |
+| Linux | [x64](https://github.com/jlhernando/micelio-crawler/releases/latest/download/micelio-linux-amd64) · [ARM64](https://github.com/jlhernando/micelio-crawler/releases/latest/download/micelio-linux-arm64) |
+
+Follow the [installation guide](docs/INSTALL.md) for your system, including checksum verification. macOS downloads are unsigned. JavaScript rendering needs Chrome or Chromium.
+
+## Your first crawl
+
+After installation, start the dashboard:
+
+```bash
+micelio ui
+```
+
+Open http://localhost:3100, choose **New Crawl**, enter your site's homepage and set a limit of 100 pages. Start with JavaScript rendering off.
+
+When the crawl finishes, open **Issues**, choose an issue and inspect its affected URLs. Open **Links** to explore the site's link map. A small crawl covers only the pages it reaches within your limits.
+
+No Micelio account is needed. Crawl data stays on your computer. Optional integrations contact their providers when enabled. See the [walkthrough and sample logs](docs/DEMO.md) to try the results.
 
 ## What it does
 
@@ -28,26 +62,24 @@
 
 ## Install
 
-**Download a binary** for Linux, macOS or Windows (amd64 and arm64) from the [releases page](https://github.com/jlhernando/micelio-crawler/releases/latest):
-
-```bash
-# macOS (Apple Silicon)
-curl -LO https://github.com/jlhernando/micelio-crawler/releases/latest/download/micelio-darwin-arm64
-chmod +x micelio-darwin-arm64 && mv micelio-darwin-arm64 /usr/local/bin/micelio
-xattr -d com.apple.quarantine /usr/local/bin/micelio   # binaries are unsigned
-```
+The [installation guide](docs/INSTALL.md) covers macOS, Windows and Linux. Fresh-install scripts select your processor, pin a release and require a matching SHA-256 checksum. They install into your user account without administrator access and refuse to replace an existing file.
 
 **Docker:**
 
 ```bash
 docker build -t micelio .   # add --build-arg WITH_CHROMIUM=true for JS rendering
-docker run -p 3100:3100 -v micelio-data:/home/micelio/.micelio micelio
+export MICELIO_AUTH_TOKEN="$(openssl rand -hex 32)"
+docker run --rm -p 127.0.0.1:3100:3100 -e MICELIO_AUTH_TOKEN \
+  -v micelio-data:/home/micelio/.micelio micelio
 ```
+
+Open http://localhost:3100 and enter the token. The token is required because the dashboard listens on all interfaces inside the container. Do not use native Chrome mode in this headless container.
 
 **From source:**
 
 ```bash
 git clone https://github.com/jlhernando/micelio-crawler.git && cd micelio-crawler
+npm --prefix dashboard ci
 make build-with-dashboard   # or: make install
 ```
 
@@ -60,6 +92,40 @@ micelio ui
 Prerequisites: none for the binary. Building needs Go 1.26+ and Node.js 22.12+. JS rendering needs Chrome or Chromium.
 
 Each release has a `checksums.txt`, and the in-app updater checks it before it installs an update. See the [User Guide](docs/USER-GUIDE.md#install-and-verify).
+
+## Three things to try
+
+Replace `https://your-site.example` with a site you own or have permission to crawl. Run these commands in a folder where Micelio can save reports.
+
+### Find technical issues and inspect internal links
+
+```bash
+micelio crawl https://your-site.example \
+  --max-pages 200 --concurrency 2 --delay 500 \
+  --link-intelligence --discover-sitemaps \
+  --output site-audit.jsonl --html
+```
+
+The HTML report shows issues and their affected pages. Sitemap discovery can reveal pages listed in a sitemap but missing from the crawled link graph. Micelio cannot find orphan pages absent from every supplied source.
+
+### Compare mobile visitors with Googlebot Smartphone
+
+```bash
+micelio crawl https://your-site.example \
+  --max-pages 100 --concurrency 2 --delay 1000 \
+  --device mobile --compare-device googlebot-smartphone --js \
+  --output device-comparison.jsonl --html
+```
+
+Chrome or Chromium must be installed. Device comparison roughly doubles requests. It compares simulated devices and user agents, not Google's actual crawl or indexing decisions.
+
+### See how bots use your site
+
+```bash
+micelio logs access.log --output bot-analysis.json
+```
+
+Use an existing access log. Supported formats include Apache, Nginx, CloudFront, Cloudflare, ALB/ELB and W3C/IIS. The JSON output summarises bot activity and request patterns.
 
 ## Screenshots
 
@@ -103,6 +169,8 @@ Every command and flag is in the [CLI Reference](docs/CLI-REFERENCE.md).
 ## Documentation
 
 - [User Guide](docs/USER-GUIDE.md): every screen of the dashboard, by workflow
+- [Installation](docs/INSTALL.md): user-level installation on macOS, Windows and Linux
+- [Walkthrough and sample logs](docs/DEMO.md): try a first audit or analyse a four-request sample log
 - [CLI Reference](docs/CLI-REFERENCE.md): every command, flag and example
 - [Micelio for AI agents (MCP)](docs/MCP.md): connect Claude Code or Claude Desktop to your crawls
 - [Crawl in the cloud](docs/CLOUD-CRAWLS.md): crawl on a small server, analyse on your computer

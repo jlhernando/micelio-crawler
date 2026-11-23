@@ -88,9 +88,16 @@ def store(snapshot):
         if previous.get("repository") == snapshot["repository"] and previous.get("schema_version") == 1:
             snapshot["comparison"] = compare(previous, snapshot)
             break
-    filename = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ.json")
-    target = directory / filename
-    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    timestamp = dt.datetime.now(dt.timezone.utc)
+    while True:
+        target = directory / timestamp.strftime("%Y%m%dT%H%M%S.%fZ.json")
+        try:
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            break
+        except FileExistsError:
+            # Coarse clocks can return the same instant for successive writes.
+            # Keep exclusive creation and chronological filename ordering.
+            timestamp += dt.timedelta(microseconds=1)
     with os.fdopen(fd, "w") as stream:
         json.dump(snapshot, stream, indent=2)
         stream.write("\n")

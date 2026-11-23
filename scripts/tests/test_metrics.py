@@ -89,5 +89,23 @@ class MetricsTests(unittest.TestCase):
                 self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
 
 
+    def test_same_clock_instant_keeps_each_snapshot_and_latest_comparison(self):
+        fixed = metrics.dt.datetime(2026, 11, 23, tzinfo=metrics.dt.timezone.utc)
+        snapshots = [self.snapshot() for _ in range(3)]
+        for index, snapshot in enumerate(snapshots):
+            snapshot["downloads"]["assets"][0]["download_count"] += index
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(metrics.Path, "home", return_value=Path(temporary)):
+                with patch.object(metrics.dt, "datetime") as clock:
+                    clock.now.return_value = fixed
+                    paths = [metrics.store(snapshot) for snapshot in snapshots]
+            self.assertEqual(len(set(paths)), 3)
+            self.assertEqual(paths, sorted(paths))
+            self.assertEqual(json.loads(paths[0].read_text()), snapshots[0])
+            self.assertEqual(json.loads(paths[2].read_text())["comparison"]["same_asset_download_events"], 1)
+            if os.name == "posix":
+                self.assertTrue(all(path.stat().st_mode & 0o777 == 0o600 for path in paths))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -71,6 +71,8 @@ svg, canvas { max-width: 100%; }
 .header-actions { flex-shrink: 0; }
 .header-actions a, .header-actions button { font-size: 12px; padding: 8px 12px; white-space: nowrap; }
 .workspace-content { flex: 1; min-width: 0; overflow: auto; padding: 34px 36px 56px; scrollbar-gutter: stable; }
+/* Keep the setup action bar against the scroll viewport, without a padding gap. */
+.workspace-content:has(> .workspace-page[data-page="setup"]) { padding-bottom: 0; }
 .workspace-page { max-width: 1360px; margin: auto; }
 .workspace-page > div { max-width: none; }
 .page-heading { margin: 0 0 30px; }

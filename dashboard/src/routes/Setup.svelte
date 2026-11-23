@@ -5,7 +5,7 @@
   import BrowserPreview from '../lib/components/BrowserPreview.svelte';
   import type { DeviceChoice } from '../lib/devices.js';
   import PageHeading from '../lib/components/layout/PageHeading.svelte';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import CollapsibleSection from '../lib/components/ui/CollapsibleSection.svelte';
   import NumberInput from '../lib/components/ui/NumberInput.svelte';
   import { api } from '../lib/api';
@@ -534,6 +534,25 @@
   }
 
   let showSchedule = $state(false);
+  let schedulePanel: HTMLDivElement | undefined = $state();
+  let scheduleToggle: HTMLButtonElement | undefined = $state();
+
+  function closeSchedule() {
+    showSchedule = false;
+    scheduleToggle?.focus({ preventScroll: true });
+  }
+
+  async function toggleSchedule() {
+    if (showSchedule) { closeSchedule(); return; }
+    showSchedule = true;
+    await tick();
+    const content = schedulePanel?.closest<HTMLElement>('.workspace-content');
+    if (content && schedulePanel) {
+      content.scrollTo({ top: content.scrollTop + schedulePanel.getBoundingClientRect().top - content.getBoundingClientRect().top });
+    }
+    schedulePanel?.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true });
+  }
+
   function scheduleConfig() {
     const numErr = numberFieldError();
     if (numErr) throw new Error(numErr);
@@ -1172,6 +1191,13 @@
     </CollapsibleSection>
   </div>
 
+  {#if showSchedule}
+    <div bind:this={schedulePanel} id="setup-schedule-panel" role="region" aria-labelledby="setup-schedule-heading" class="p-4 rounded-lg border border-border bg-surface-2">
+      <h3 id="setup-schedule-heading" class="text-sm font-medium text-fg mb-3">Schedule this crawl</h3>
+      <ScheduleForm config={scheduleConfig} onCreated={() => navigate('/schedules')} onCancel={closeSchedule} />
+    </div>
+  {/if}
+
   <!-- Start Button -->
   <div class="sticky bottom-0 bg-surface/80 backdrop-blur-sm border-t border-border py-4">
     {#if error}
@@ -1180,12 +1206,6 @@
     {#if resumeId}
       <div class="mb-3 px-4 py-2 rounded-lg bg-green-500/10 text-green-400 text-sm">
         Resuming crawl — {resumePageCount.toLocaleString()} pages already crawled will be skipped. Edit settings below if needed.
-      </div>
-    {/if}
-    {#if showSchedule}
-      <div class="mb-3 p-4 rounded-lg border border-border bg-surface-2">
-        <h3 class="text-sm font-medium text-fg mb-3">Schedule this crawl</h3>
-        <ScheduleForm config={scheduleConfig} onCreated={() => navigate('/schedules')} onCancel={() => (showSchedule = false)} />
       </div>
     {/if}
     <div class="flex gap-2">
@@ -1202,7 +1222,7 @@
       {/if}
     </button>
     {#if !resumeId}
-      <button type="button" class="px-5 rounded-lg border border-border text-sm text-fg-1 hover:text-fg cursor-pointer" onclick={() => (showSchedule = !showSchedule)}>
+      <button type="button" class="px-5 rounded-lg border border-border text-sm text-fg-1 hover:text-fg cursor-pointer" bind:this={scheduleToggle} aria-expanded={showSchedule} aria-controls="setup-schedule-panel" onclick={toggleSchedule}>
         {showSchedule ? 'Hide schedule' : 'Schedule…'}
       </button>
     {/if}

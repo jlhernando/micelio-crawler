@@ -37,3 +37,55 @@ for (const viewport of [
     expect(await content.evaluate(el => parseFloat(getComputedStyle(el).paddingBottom))).toBeGreaterThan(0);
   });
 }
+
+for (const viewport of [
+  { width: 1440, height: 900 },
+  { width: 390, height: 844 },
+  { width: 320, height: 568 },
+  { width: 844, height: 390 },
+]) {
+  test(`Schedule form scrolls without hiding actions at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    const writes = await mockApi(page);
+    await page.goto('/#/setup');
+    const start = page.getByRole('button', { name: 'Start Crawl', exact: true });
+    await start.click();
+    await expect(page.getByText('Please enter a URL or file path', { exact: true })).toBeVisible();
+    await page.locator('#url').fill('https://schedule.example');
+    const toggle = page.getByRole('button', { name: 'Schedule…', exact: true });
+    await toggle.click();
+    const region = page.getByRole('region', { name: 'Schedule this crawl' });
+    await expect(region.locator('#sf-name')).toBeFocused();
+    await expect(region.locator('#sf-name')).toBeInViewport();
+    expect(await page.locator('.app-shell').evaluate(el => el.scrollTop)).toBe(0);
+    const hide = page.getByRole('button', { name: 'Hide schedule', exact: true });
+    await expect(hide).toHaveAttribute('aria-expanded', 'true');
+    for (const position of ['top', 'bottom']) {
+      await page.locator('.workspace-content').evaluate((el, position) => {
+        el.scrollTop = position === 'top' ? 0 : el.scrollHeight;
+      }, position);
+      await expect.poll(async () => {
+        const box = await page.locator('.workspace-page .sticky').boundingBox();
+        return Math.abs(viewport.height - box!.y - box!.height);
+      }).toBeLessThan(1);
+      expect(await start.evaluate(el => {
+        const box = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        return hit === el || el.contains(hit);
+      })).toBe(true);
+    }
+    await region.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(region).toHaveCount(0);
+    await expect(toggle).toBeFocused();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await toggle.click();
+    await region.locator('#sf-name').fill('Mobile schedule');
+    await region.getByLabel('When', { exact: true }).selectOption('custom');
+    await region.getByLabel('Cron expression', { exact: true }).fill('30 1 * * *');
+    await region.getByRole('button', { name: 'Create schedule', exact: true }).click();
+    await expect(page).toHaveURL(/#\/schedules$/);
+    expect(writes.find(write => write.path === '/api/schedules')?.body).toMatchObject({
+      name: 'Mobile schedule', cron: '30 1 * * *', config: { seedUrl: 'https://schedule.example' },
+    });
+  });
+}

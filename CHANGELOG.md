@@ -4,13 +4,28 @@ All notable changes to Micelio. Versions follow [semantic versioning](https://se
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-11-26
+
+Lighter analysis reloads. A recorded 100,000-page saved-crawl workflow used 8.0% less CPU time and 6.6% less elapsed time than v1.16.0, with identical output across three paired comparisons. Peak RAM fell 7.7% with 5.9% measured noise. See the [chart and method](docs/benchmarks/release-1.17-reload.md).
+
+### Changed
+
+- Skip unused JSON fields before analysis decoding, reuse anchor/image scratch buffers, and compute image summaries directly from validated JSON.
+- Keep existing saved-crawl formats, report data and JSON error handling. Unusual JSON values use the existing decoder.
+
 ### Added
 
-- Fresh-install scripts for macOS, Linux and Windows, with required SHA-256 verification from a pinned release and no replacement of existing executables.
+- Fresh-install scripts for macOS, Linux and Windows, with SHA-256 verification from a pinned release and no replacement of existing executables.
 - Direct platform downloads, first-audit instructions and a synthetic sample log for trying log analysis.
 - A maintainer script to capture GitHub adoption metrics privately, without app telemetry or scheduled tasks.
+
+## [1.16.0] - 2026-11-22
+
+### Added
+
 - Preview the crawler's homepage view before starting a Spider crawl. Captures use the current HTTP or JavaScript settings and return a still image, status and request metadata.
 - Native Chrome for Spider crawls, available in New Crawl and with `--native-chrome`. Uses an isolated profile per site, one tab, robots.txt and a minimum one-second delay. Requires a visible desktop session. Manual credentials, device emulation, snippets, sitemap discovery, page weight and external-link checks are unavailable in this mode.
+- User-Agent presets for OpenAI, Anthropic and Perplexity crawlers.
 
 ### Fixed
 

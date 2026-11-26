@@ -47,6 +47,10 @@ When the crawl finishes, open **Issues**, choose an issue and inspect its affect
 
 No Micelio account is needed. Crawl data stays on your computer. Optional integrations contact their providers when enabled. See the [walkthrough and sample logs](docs/DEMO.md) to try the results.
 
+## New in v1.17.0
+
+Saved-crawl analysis reloads used **8.0% less CPU time and 6.6% less elapsed time** in a recorded 100,000-page comparison, with identical output. [See the chart, scope and measurements](docs/benchmarks/release-1.17-reload.md).
+
 ## What it does
 
 - **Technical SEO audit.** Crawl a site by following links (spider), from a URL list or from XML sitemaps. Issues are grouped as critical, warning and info, with the affected URLs: titles, canonicals, hreflang, redirects, soft-404 candidates, structured data, security headers and more.

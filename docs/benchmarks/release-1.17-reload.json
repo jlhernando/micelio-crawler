@@ -1,0 +1,246 @@
+{
+  "release": "v1.17.0",
+  "baseline": "v1.16.0",
+  "baseline_source": "fc91e77c4d36288fa9ad3bdc9b0c8b1163700fb4",
+  "candidate_engine_source": "4a796a50bacc2c760602c3413478334e930dd76c",
+  "candidate_source_files_sha256": {
+    "internal/storage/analysis_page.go": "9769619354d404c15393b84c6f5038fe26f6399a11960e0f7e857a384c827077",
+    "internal/storage/crawlstore.go": "9e099844912b7e08d4820c14cd6ac0c23ee4a0d717d7f1d50c85eae29de436bd",
+    "internal/storage/page_filter.go": "5964676d74c4fdb5a9ed48f1e52c3ca1a0f3dfa3d75400117a7602b620e7bf2b",
+    "internal/storage/page_filter_test.go": "5fb3b44bc0bba9c3b8cadf5c9242c739adf796994d94793a87cb09c7557c7b3e",
+    "internal/storage/page_scratch.go": "7536d1ed04f3fa3d5f4050fc3c80102fc9945dc88017993e817bc84f8e32735a",
+    "internal/storage/page_scratch_test.go": "fccace9c110297b5ead96ae0c929ac969fa6f0f46c8acd27dc3c7c6911722ca4",
+    "internal/storage/image_summary_json.go": "2431f8f7dc1744253522202bb3e08144457c3ea74fd6086368b42724d9942247",
+    "internal/storage/image_summary_json_test.go": "3bf3ab575e205993e10deb60fe9fdccda01e2a0571b0b77f1b6b593a03b59e24"
+  },
+  "workload": "Recorded 100,000-page saved-crawl import, analysis and results reload",
+  "pairs": 3,
+  "delta_units": "pct and noise are fractions; 0.01 means 1 percent",
+  "metric_units": {
+    "cpu": "seconds",
+    "wall": "seconds",
+    "ram": "bytes",
+    "retained": "bytes",
+    "disk": "bytes",
+    "written": "bytes",
+    "read": "bytes"
+  },
+  "go_memory_limit_bytes": 4294967296,
+  "cpu_model": "Apple M2 Pro",
+  "reference_noise_pairs": 3,
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "gomaxprocs_per_process": 6,
+  "go_version": "go version go1.26.5 darwin/arm64",
+  "output_identical": true,
+  "normalization_rules": [
+    "strip crawledAt",
+    "strip startedAt",
+    "strip completedAt",
+    "strip checkedAt",
+    "strip alertSummary.timestamp",
+    "strip responseTimeMs",
+    "strip crawlDurationMs",
+    "strip avgResponseMs",
+    "strip avgResponseTime",
+    "strip responseTimeBuckets",
+    "strip responseTimePercentiles",
+    "strip freshness.contentAgeDays",
+    "strip dbPath",
+    "redact micelio-404-check-[0-9a-f]+"
+  ],
+  "floating_point_significant_digits": 12,
+  "minimum_gain_fraction": 0.03,
+  "output_hash": "2c6a0c60962b7b74d4ce56b93bbd24f318d93e2682ce76560dd78fefeb657d40",
+  "deltas": {
+    "ram": {
+      "pct": -0.07665313374103411,
+      "noise": 0.05862825261330996
+    },
+    "cpu": {
+      "pct": -0.08048572152323896,
+      "noise": 0.0030310810551042403
+    },
+    "disk": {
+      "pct": 0.0,
+      "noise": 0.03252845846262436
+    },
+    "written": {
+      "pct": 6.5367594668241935e-06,
+      "noise": 0.0014401747637288298
+    },
+    "read": {
+      "pct": -0.2759620453347391,
+      "noise": 1.338357158607901
+    },
+    "wall": {
+      "pct": -0.0662044219118294,
+      "noise": 0.03478002478836937
+    },
+    "retained": {
+      "pct": 0.010005002501250582,
+      "noise": 0.04702260647707714
+    }
+  },
+  "metrics": {
+    "ref": {
+      "ram": {
+        "median": 2231681024,
+        "min": 2181939200,
+        "max": 2262630400,
+        "spread": 0.03615713855709157,
+        "values": [
+          2231681024,
+          2181939200,
+          2262630400
+        ]
+      },
+      "cpu": {
+        "median": 77.995112,
+        "min": 77.903663,
+        "max": 78.420655,
+        "spread": 0.006628517951227531,
+        "values": [
+          77.995112,
+          78.420655,
+          77.903663
+        ]
+      },
+      "disk": {
+        "median": 902462221,
+        "min": 902462221,
+        "max": 902462222,
+        "spread": 1.1080796256400854e-09,
+        "values": [
+          902462222,
+          902462221,
+          902462221
+        ]
+      },
+      "written": {
+        "median": 1879838720,
+        "min": 1879830528,
+        "max": 1879859200,
+        "spread": 1.5252372288618462e-05,
+        "values": [
+          1879838720,
+          1879859200,
+          1879830528
+        ]
+      },
+      "read": {
+        "median": 15540224,
+        "min": 10465280,
+        "max": 26775552,
+        "spread": 1.0495519240906694,
+        "values": [
+          10465280,
+          26775552,
+          15540224
+        ]
+      },
+      "wall": {
+        "median": 74.186523583,
+        "min": 71.289597541,
+        "max": 74.387329166,
+        "spread": 0.04175598849209112,
+        "values": [
+          71.289597541,
+          74.387329166,
+          74.186523583
+        ]
+      },
+      "retained": {
+        "median": 1211809792,
+        "min": 1192050688,
+        "max": 1220198400,
+        "spread": 0.02322783013128186,
+        "values": [
+          1220198400,
+          1192050688,
+          1211809792
+        ]
+      }
+    },
+    "cand": {
+      "ram": {
+        "median": 2037481472,
+        "min": 1990344704,
+        "max": 2060615680,
+        "spread": 0.03448913620354139,
+        "values": [
+          2060615680,
+          2037481472,
+          1990344704
+        ]
+      },
+      "cpu": {
+        "median": 71.753983,
+        "min": 71.70956100000001,
+        "max": 72.108912,
+        "spread": 0.005565558639441601,
+        "values": [
+          71.70956100000001,
+          72.108912,
+          71.753983
+        ]
+      },
+      "disk": {
+        "median": 902462221,
+        "min": 873106518,
+        "max": 902462223,
+        "spread": 0.03252845860680078,
+        "values": [
+          902462223,
+          873106518,
+          902462221
+        ]
+      },
+      "written": {
+        "median": 1879846912,
+        "min": 1879842816,
+        "max": 1882546176,
+        "spread": 0.0014380745489130553,
+        "values": [
+          1879846912,
+          1882546176,
+          1879842816
+        ]
+      },
+      "read": {
+        "median": 17149952,
+        "min": 11251712,
+        "max": 17932288,
+        "spread": 0.38953904943873896,
+        "values": [
+          17149952,
+          17932288,
+          11251712
+        ]
+      },
+      "wall": {
+        "median": 68.943222958,
+        "min": 68.475891624,
+        "max": 69.462559041,
+        "spread": 0.014311303920344446,
+        "values": [
+          68.475891624,
+          69.462559041,
+          68.943222958
+        ]
+      },
+      "retained": {
+        "median": 1221918720,
+        "min": 1192820736,
+        "max": 1223933952,
+        "spread": 0.025462590506838294,
+        "values": [
+          1192820736,
+          1221918720,
+          1223933952
+        ]
+      }
+    }
+  },
+  "method": "Paired public binaries. Frozen HTTP replay. Timing ends before serialized output comparison. Medians of paired ratios; noise includes a fresh reference floor.",
+  "limitations": "One recorded site and one machine. The recording is not redistributed. Noise is measured spread, not a confidence interval. Live crawl, rendering and network performance can differ."
+}

@@ -116,6 +116,11 @@ type pageLoadOpts struct {
 	// imageSummary folds Images into ImageSummary (Images nil): post-crawl
 	// analysis reads only counts and long alts from them.
 	imageSummary bool
+	// noTrim decodes the whole blob (tests compare it with the trimmed path).
+	noTrim bool
+	// scratch (optional) lends Anchors and Images a reused backing array;
+	// the caller runs scratch.release once the page's hooks are done.
+	scratch *pageScratch
 }
 
 func decodeAnalysisPage(data []byte) (*types.PageData, error) {
@@ -130,6 +135,20 @@ func decodeAnalysisPageOpt(data []byte, o pageLoadOpts) (*types.PageData, error)
 	base := (*analysisPageData)(page)
 	var in, ex stringArrayCount
 	var err error
+	// Drop unread values first (see trimUnreadPageJSON); the shadows below
+	// then see none of those keys and the link counts come from the trim.
+	buf := pageFilterBuf.Get().(*[]byte)
+	defer pageFilterBuf.Put(buf)
+	var fold *imageFold // trim takes images out and keeps their summary
+	if o.imageSummary && !o.cacheOnly {
+		fold = new(imageFold)
+	}
+	trimmed, tin, tex, ok := trimUnreadPageJSON(data, (*buf)[:0], unreadPageKeys(o), fold)
+	ok = ok && !o.noTrim
+	if ok {
+		data, *buf = trimmed, trimmed[:0]
+	}
+	o.scratch.prime(page, o)
 	switch {
 	case o.cacheOnly && o.skipAnchors:
 		p := struct {
@@ -197,9 +216,19 @@ func decodeAnalysisPageOpt(data []byte, o pageLoadOpts) (*types.PageData, error)
 		err = json.Unmarshal(data, &p)
 		in, ex = p.InternalLinks, p.ExternalLinks
 	}
+	if ok {
+		in, ex = tin, tex
+	}
+	o.scratch.settle(page)
 	page.InternalLinkCount, page.ExternalLinkCount = linkCounts(page, in, ex)
 	if err != nil {
 		return nil, err
+	}
+	if ok && fold != nil {
+		page.ImageSummary = fold.sum // images trimmed out: json never saw them
+	} else if o.imageSummary && page.Images != nil {
+		page.ImageSummary = types.SummarizeImages(page.Images)
+		page.Images = nil
 	}
 	return page, nil
 }

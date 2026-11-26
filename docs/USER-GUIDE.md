@@ -613,6 +613,8 @@ also removes its Universe thumbnails.
 For a reliable comparison, keep crawl mode, limits, filters, user agent, rendering,
 and integrations consistent between the baseline and follow-up runs.
 
+Loading analysis from a large saved crawl uses less JSON decoding in v1.17.0. Existing crawl files and report data stay compatible. See the [measured workflow and its limits](benchmarks/release-1.17-reload.md) for the 100,000-page comparison.
+
 ### Schedules
 
 **Schedules** runs crawls on a cron schedule. To schedule a full setup, configure

@@ -490,6 +490,7 @@ func (s *CrawlStore) getAllPages(ctx context.Context, onProgress func(loaded int
 	var pages []*types.PageData
 	loaded := 0
 	intern := newPageInterner()
+	opts.scratch = newPageScratch()
 	err := sqlitex.Execute(s.conn,
 		`SELECT data FROM pages ORDER BY rowid`,
 		&sqlitex.ExecOptions{
@@ -523,13 +524,10 @@ func (s *CrawlStore) getAllPages(ctx context.Context, onProgress func(loaded int
 				// SchemaValidationStats / RenderCompareStats. RunCoreAnalysis
 				// and stripPagesForCache release them after the report.
 				page.CustomExtractions = nil
-				if opts.imageSummary && page.Images != nil {
-					page.ImageSummary = types.SummarizeImages(page.Images)
-					page.Images = nil
-				}
 				if each != nil {
 					each(page)
 				}
+				opts.scratch.release(page)
 				intern.compact(page)
 				pages = append(pages, page)
 				loaded++

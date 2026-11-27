@@ -6,6 +6,7 @@ import (
 	"runtime/debug"
 	"sync"
 	"testing"
+	"time"
 )
 
 // GC off (GOGC=-1) still collects when the heap nears the soft memory
@@ -15,21 +16,51 @@ func TestGCOffMemLimitStillCollects(t *testing.T) {
 	prev := debug.SetMemoryLimit(math.MaxInt64)
 	defer debug.SetMemoryLimit(prev)
 
-	rel := Hold(-1, 64<<20) // 64 MiB
+	const limit = 64 << 20
+	const maxHeap = 256 << 20
+	rel := Hold(-1, limit)
 	defer rel()
+	if got := readGC(); got != -1 {
+		t.Fatalf("GOGC = %d, want -1", got)
+	}
+	if got := debug.SetMemoryLimit(-1); got != limit {
+		t.Fatalf("memory limit = %d, want %d", got, limit)
+	}
+
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	var sink []byte
+	// The runtime may exceed a soft limit during an allocation burst to
+	// avoid spending all CPU time collecting. Apply backpressure between
+	// batches and allow automatic GC to catch up. Do not force a GC here:
+	// the test must fail if the memory limit stops triggering collection.
+	waitForCollection := func() {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			runtime.ReadMemStats(&after)
+			if after.HeapAlloc <= maxHeap {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("heap %d MiB after waiting for automatic GC, want <= %d MiB; GC cycles: %d", after.HeapAlloc>>20, maxHeap>>20, after.NumGC-before.NumGC)
+			}
+			time.Sleep(10 * time.Millisecond)
+			// A small continuing allocation lets the runtime start another
+			// automatic cycle if the last burst's cycle already finished.
+			sink = make([]byte, 1<<20)
+		}
+	}
 	for i := 0; i < 2000; i++ { // 2 GB of garbage
 		sink = make([]byte, 1<<20)
+		if (i+1)%32 == 0 {
+			waitForCollection()
+		}
 	}
-	_ = sink
-	runtime.ReadMemStats(&after)
+	waitForCollection()
+	runtime.KeepAlive(sink)
 	if after.NumGC == before.NumGC {
 		t.Fatal("no GC ran with GOGC=-1 and a memory limit")
-	}
-	if after.HeapAlloc > 256<<20 {
-		t.Fatalf("heap %d MiB, want near the 64 MiB limit", after.HeapAlloc>>20)
 	}
 }
 
